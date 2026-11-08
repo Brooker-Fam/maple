@@ -15,14 +15,17 @@ import {
   feedingPlanOf,
   feedPlanNow,
   feedText,
+  minutesRangeText,
   nightTurns,
   PLAN_LATE_TOP_UP_MS,
   PlanConflict,
   PlanError,
   planLines,
   stepText,
+  type BottleStep,
   type FeedingPlan,
   type FeedPlanNow,
+  type NurseStep,
   type PlanDue,
   type PlanFeed,
   type PlanFeedView,
@@ -330,10 +333,92 @@ function keyedLines(plan: FeedingPlan, target: FeedTarget | null, words: PlanWor
 
 const unbulleted = (line: string) => line.replace(/^• /, "");
 
+/** One plan, its unit and target, as a step's parts are said in it. */
+type Said = { plan: FeedingPlan; target: FeedTarget | null };
+
+/** A bottle step's milk in the plan's words ("formula or breast milk"), as stepText says it; null with none named. */
+const milkSaid = (milk: BottleStep["milk"], s: Said) => (milk ? stepText({ do: "bottle", milk }, s.plan, s.target).split(", ").slice(1).join(", ") : null);
+
+/**
+ * Each part of a step an edit changes, in stepText's words with what it was:
+ * "nurse 10–15 min (was 12–18 min)", "no nipple shield (was with it)", "25 ml
+ * of formula in the SNS (was 20 ml)", "top up 35–45 ml (was 25–35 ml)", "pump
+ * 15 min if needed (was every time)". Null when a change in its words isn't
+ * one of these (the read-back then says the whole step as it was and is).
+ */
+function stepChanges(a: PlanStep, b: PlanStep, was: Said, now: Said, afterNurse: boolean): string[] | null {
+  if (a.do !== b.do) return null;
+  const out: string[] = [];
+  const changed = (x: string | null, y: string | null) => x !== y;
+  const time = (r: Range | undefined) => (r ? minutesRangeText(r) : "no time given");
+  if (a.do === "nurse" && b.do === "nurse") {
+    const length = (s: NurseStep) => `${time(s.minutes)}${s.each_side ? " each side" : ""}`;
+    if (changed(length(a), length(b))) out.push(`nurse ${length(b)} (was ${length(a)})`);
+    const side = (s: NurseStep) => (s.side ? `on the ${s.side === "L" ? "left" : "right"}` : "either side");
+    if (changed(side(a), side(b))) out.push(`${side(b)} (was ${side(a)})`);
+    if (!!a.shield !== !!b.shield) out.push(b.shield ? "with the nipple shield (was without it)" : "no nipple shield (was with it)");
+    // Milk at the breast: stepText's own words for it ("20 ml of formula in the SNS"), each in its plan's unit.
+    const milk = (s: NurseStep, in_: Said) => (s.supplement ? stepText({ do: "nurse", supplement: s.supplement }, in_.plan, in_.target).replace(/^Nurse, /, "") : null);
+    const [x, y] = [milk(a, was), milk(b, now)];
+    if (changed(x, y)) {
+      if (!x) out.push(`${y} (was none)`);
+      else if (!y) out.push(`no milk at the breast (was ${x})`);
+      else {
+        // Only its amount changed: say only the amount it was.
+        const amountOnly = a.supplement!.via === b.supplement!.via && (a.supplement!.milk ?? null) === (b.supplement!.milk ?? null);
+        out.push(`${y} (was ${amountOnly ? amountText(a.supplement!.ml, was.plan.unit) : x})`);
+      }
+    }
+  } else if (a.do === "pump" && b.do === "pump") {
+    if (changed(time(a.minutes), time(b.minutes))) out.push(`pump ${time(b.minutes)} (was ${time(a.minutes)})`);
+    if (!!a.if_needed !== !!b.if_needed) out.push(b.if_needed ? "pump only if needed (was every time)" : "pump every time (was only if needed)");
+  } else if (a.do === "bottle" && b.do === "bottle") {
+    const label = afterNurse ? "top up" : "bottle";
+    // Its amount as stepText says it: its own, else up to the target per feed (so a changed target shows here too).
+    const amount = (s: BottleStep, in_: Said) =>
+      s.ml ? amountText(s.ml, in_.plan.unit) : s.to_target ? (in_.target ? `up to ${amountText(in_.target, in_.plan.unit)}` : "up to the target") : "no amount given";
+    if (changed(amount(a, was), amount(b, now))) out.push(`${label} ${amount(b, now)} (was ${amount(a, was)})`);
+    const [x, y] = [milkSaid(a.milk, was), milkSaid(b.milk, now)];
+    if (changed(x, y)) out.push(`${y ?? "no milk named"} (was ${x ?? "no milk named"})`);
+    if ((a.via === "paced") !== (b.via === "paced")) out.push(b.via === "paced" ? "paced bottle (was not paced)" : "not paced (was a paced bottle)");
+    if (!!a.if_needed !== !!b.if_needed) out.push(b.if_needed ? `${label} only if still hungry (was every time)` : `${label} every time (was only if still hungry)`);
+  } else if (a.do === "note" && b.do === "note") {
+    if (a.text !== b.text) out.push(`note ${JSON.stringify(b.text)} (was ${JSON.stringify(a.text)})`);
+  }
+  return out;
+}
+
+/**
+ * Each part of a feed an edit changes ("no nipple shield (was with it); 20 ml
+ * of formula in the SNS (was 25 ml)"), so a second change in the same feed
+ * (a value a stale copy of the plan puts back) is said on its own beside the
+ * one that was asked for. Null when its steps were added, taken out or moved,
+ * or a change can't be named part by part: the read-back then says the whole
+ * feed as it was and as it would be.
+ */
+function feedChanges(was: PlanFeed, now: PlanFeed, before: Said, after: Said): string[] | null {
+  if (was.steps.length !== now.steps.length || was.steps.some((s, i) => s.do !== now.steps[i].do)) return null;
+  const out: string[] = [];
+  let nursed = false;
+  for (const [i, a] of was.steps.entries()) {
+    const b = now.steps[i];
+    const afterNurse = nursed;
+    if (a.do === "nurse") nursed = true;
+    if (stepText(a, before.plan, before.target, { afterNurse }) === stepText(b, after.plan, after.target, { afterNurse })) continue;
+    const parts = stepChanges(a, b, before, after, afterNurse);
+    if (!parts?.length) return null;
+    // A feed with two steps of a kind says which ("step 3: bottle 40 ml (was 30 ml)").
+    const many = now.steps.filter((s) => s.do === b.do).length > 1;
+    out.push(...parts.map((p) => (many ? `step ${i + 1}: ${p}` : p)));
+  }
+  return out.length ? out : null;
+}
+
 /**
  * What an edit changes on the saved plan, in the read-back's own words: a
  * renamed feed once (feeds pair by id, so the turns and the night that name
- * it read the same), each line that reads differently as it was and as it
+ * it read the same), each part of a feed that changes with what it was
+ * (feedChanges), each other line that reads differently as it was and as it
  * would be, then the lines added and removed. `kept`: how many lines stay as
  * they are.
  */
@@ -353,8 +438,15 @@ export function planChanges(saved: FeedingPlan, savedTarget: FeedTarget | null, 
   for (const [key, line] of after) {
     const was = before.get(key);
     if (was === undefined) lines.push(`Added: ${unbulleted(line)}`);
-    else if (!same(key, was, line)) lines.push(`Was: ${unbulleted(was)}`, `Now: ${unbulleted(line)}`);
-    else kept++;
+    else if (!same(key, was, line)) {
+      // A feed's line: each part that changes, with what it was, when they can be named that way.
+      const id = key.startsWith("feed ") ? key.slice(5) : null;
+      const a = id ? saved.feeds.find((f) => f.id === id) : undefined;
+      const b = id ? plan.feeds.find((f) => f.id === id) : undefined;
+      const parts = a && b ? feedChanges(a, b, { plan: saved, target: savedTarget }, { plan, target }) : null;
+      if (parts) lines.push(`Changed in ${JSON.stringify(b!.name)}: ${parts.join("; ")}.`);
+      else lines.push(`Was: ${unbulleted(was)}`, `Now: ${unbulleted(line)}`);
+    } else kept++;
   }
   for (const [key, line] of before) if (!after.has(key)) lines.push(`Removed: ${unbulleted(line)}`);
   return { lines, kept };
@@ -393,6 +485,51 @@ export function planCautions(plan: FeedingPlan): string[] {
         ? "If it's one of the night's feeds, add it to night.order; if it takes a turn by day, add it to order."
         : "If it's the night's feed, set night.feed to it; if it takes a turn by day, add it to order.";
     out.push(`Ask with it: ${named(f)} isn't in the day's turns${n ? ` or the night's ${atNight.length > 1 ? "turns" : "feed"}` : ""}, so Today only offers it as another choice. ${fix}`);
+  }
+  return out;
+}
+
+/**
+ * Words a feed's name can say about its steps, with what they mean there (the
+ * form's own list, planDraft.ts NAME_WORDS, on the plan as saved): kept in
+ * step with it, so the chat and the form ask about the same names.
+ */
+const NAME_WORDS: { word: RegExp; has: (f: PlanFeed) => boolean; what: string }[] = [
+  { word: /\bshields?\b/i, has: (f) => f.steps.some((s) => s.do === "nurse" && !!s.shield), what: "the nipple shield" },
+  { word: /\bsyringes?\b/i, has: (f) => f.steps.some((s) => s.do === "nurse" && s.supplement?.via === "syringe"), what: "a syringe" },
+  { word: /\bsns\b/i, has: (f) => f.steps.some((s) => s.do === "nurse" && s.supplement?.via === "sns"), what: "an SNS" },
+  { word: /\btop[\s-]?ups?\b/i, has: (f) => f.steps.some((s) => s.do === "bottle"), what: "a top-up" },
+  { word: /\bpump(?:s|ing)?\b/i, has: (f) => f.steps.some((s) => s.do === "pump"), what: "a pump" },
+];
+
+/** The word as the name says it, unless it says it's without it ("no shield", "without SNS"). */
+function nameSays(name: string, word: RegExp): string | null {
+  const m = word.exec(name);
+  if (!m) return null;
+  return /\b(?:no|not|without|w\/o)\s+$/i.test(name.slice(0, m.index)) ? null : m[0];
+}
+
+/**
+ * Questions to ask with an edit's read-back about a feed whose name still
+ * says what the edit takes out of its steps ("Shield, then pump" with the
+ * nipple shield taken out), as the form says it: the feeds paired by id, the
+ * name as it would be saved. Today shows the name as the feed's title, so a
+ * stale one tells the other parent to use what the plan no longer does.
+ */
+export function staleNames(saved: FeedingPlan, plan: FeedingPlan): string[] {
+  const out: string[] = [];
+  for (const f of plan.feeds) {
+    const was = saved.feeds.find((x) => x.id === f.id);
+    if (!was) continue;
+    const stale = NAME_WORDS.flatMap(({ word, has, what }) => {
+      const said = nameSays(f.name, word);
+      return said && has(was) && !has(f) ? [{ said: said === said.toUpperCase() ? said : said.toLowerCase(), what }] : [];
+    });
+    if (!stale.length) continue;
+    const list = (xs: string[], and: string) => (xs.length > 1 ? `${xs.slice(0, -1).join(", ")} ${and} ${xs[xs.length - 1]}` : xs[0]);
+    out.push(
+      `Ask with it: ${named(f)} still says ${list(stale.map((x) => JSON.stringify(x.said)), "and")}, and its steps no longer use ${list(stale.map((x) => x.what), "or")}; Today shows that name as the feed's title. Ask if they'd like to rename it.`
+    );
   }
   return out;
 }
@@ -1071,7 +1208,7 @@ export function registerFeedingPlanTools(server: McpServer, copy: ToolCopy = FAM
     "set_feeding_plan",
     {
       title: "Save the feeding plan",
-      description: `Saves the family's feeding plan from their care team, so Today says which feed is next, its steps and when it's due; or removes it (remove: true). Build it only from what the family wrote or said, copying each value as written: never fill in a number that isn't there, and ask about anything unclear first (which feeds take turns, when night starts and ends). Shorthand is the family's or their consultant's (s&s, EBM, q3h): when it could mean two things (s&s: a shield and syringe, or an SNS), ask; never pick. Everyone in the family reads it, so leave out ${vo.mom}'s own medicines and health (her page keeps those). It saves only after a read-back: call it without confirmed to check the plan, and it gives every line to read back and a read_back token; only after their clear yes, call again with the same plan (and target), confirmed: true and that read_back (good for ${READ_BACK_HOURS} hours). A change sends the whole plan (feeding_plan gives it in this shape) with base_rev, the rev it started from.`,
+      description: `Saves the family's feeding plan from their care team, so Today says which feed is next, its steps and when it's due; or removes it (remove: true). Build it only from what the family wrote or said, copying each value as written: never fill in a number that isn't there, and ask about anything unclear first (which feeds take turns, when night starts and ends). Shorthand is the family's or their consultant's (s&s, EBM, q3h): when it could mean two things (s&s: a shield and syringe, or an SNS), ask; never pick. Everyone in the family reads it, so leave out ${vo.mom}'s own medicines and health (her page keeps those). It saves only after a read-back: call it without confirmed to check the plan, and it gives every line to read back and a read_back token; only after their clear yes, call again with the same plan (and target), confirmed: true and that read_back (good for ${READ_BACK_HOURS} hours). A change sends the whole plan with base_rev, the rev it started from: start it from feeding_plan, or from the last save's answer (the plan as saved, in this shape, with its base_rev), never an older copy.`,
       inputSchema: {
         plan: planShape
           .nullish()
@@ -1164,7 +1301,9 @@ export function registerFeedingPlanTools(server: McpServer, copy: ToolCopy = FAM
       if (same(current) && JSON.stringify(target) === JSON.stringify(savedTarget)) {
         return ok("Nothing to change: that's the feeding plan as it's saved.\nIt reads the same as the saved one, target included, so nothing was saved.", { unchanged: true, rev: current!.rev });
       }
-      const what = ["feeding_plan", "set", stable, target, sets];
+      // Its target is the one it would save (sent, else the saved one), so a yes that leaves out the saved target it was
+      // read back with (or sends it again) is the same plan and target.
+      const what = ["feeding_plan", "set", stable, target];
       // An edit is read back as what it changes on the saved plan (the re-read after a changed resend too, so a slip shows).
       const changes = current ? planChanges(current, savedTarget, plan, target, words) : null;
       if (a.confirmed !== true || !readBackMatches(ctx, what, a.read_back)) {
@@ -1174,7 +1313,8 @@ export function registerFeedingPlanTools(server: McpServer, copy: ToolCopy = FAM
           : [];
         // An edit asks only what it brings: a caution the saved plan already had was asked when it was saved.
         const had = current ? planCautions(current) : [];
-        const cautions = planCautions(plan).filter((c) => !had.includes(c));
+        // And a feed whose name still says what the edit takes out of it ("Shield, then pump" with no shield now).
+        const cautions = [...planCautions(plan).filter((c) => !had.includes(c)), ...(current ? staleNames(current, plan) : [])];
         const yes = `Only if they say yes, call set_feeding_plan again with the same plan${sets ? " and target" : ""}, confirmed: true and read_back: "${token}". To change something first, change it and read the plan back again. ${PLAN_WORDS_JSON}`;
         const body = changes
           ? [
@@ -1207,6 +1347,7 @@ export function registerFeedingPlanTools(server: McpServer, copy: ToolCopy = FAM
       }
       // What Today's Next feed card shows now, from the plan just saved.
       const n = feedPlanNow(plan, await recentLog(ctx), ctx.now, { tz: ctx.tz, target });
+      const saved = planInput(plan, target);
       return ok(
         [
           "Saved the feeding plan.",
@@ -1214,7 +1355,9 @@ export function registerFeedingPlanTools(server: McpServer, copy: ToolCopy = FAM
           // An edit's answer says what it changed, as its read-back did.
           ...(changes?.lines.length ? ["What changed:", ...changes.lines, ...(changes.kept ? ["Everything else stayed as it was."] : [])] : []),
         ].join("\n"),
-        { saved: true, rev: plan.rev, feeds: plan.feeds.map((f) => ({ id: f.id, name: f.name })), family_words: PLAN_WORDS_JSON }
+        // The plan as saved, in this tool's own shape with the rev a later change starts from, so an older copy of it in
+        // the chat is never what the next change is built on.
+        { saved: true, rev: plan.rev, base_rev: plan.rev, plan: saved.plan, ...(saved.target != null ? { target: saved.target } : {}), family_words: PLAN_WORDS_JSON }
       );
     }
   );

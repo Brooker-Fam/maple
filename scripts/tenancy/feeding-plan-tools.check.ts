@@ -246,13 +246,11 @@ async function main() {
       const edit = { ...plan, feeds: plan.feeds.map((f, i) => (i === 1 ? { ...f, steps: [f.steps[0], { do: "bottle", ml: [35, 45], milk: "either", via: "paced" }] } : f)) };
       const two = await save(alpha.member, A, { plan: edit, target: r.json.target, base_rev: 1 });
       ok(two.json.saved === true && two.json.rev === 2, two.text);
-      // The save's answer says what it changed, as its read-back did.
-      ok(
-        two.text.includes(
-          "What changed:\nWas: Nurse, top up: Nurse 8–12 min each side; then top up 25–35 ml, formula or breast milk, paced bottle\nNow: Nurse, top up: Nurse 8–12 min each side; then top up 35–45 ml, formula or breast milk, paced bottle\nEverything else stayed as it was."
-        ),
-        two.text
-      );
+      // The save's answer says what it changed, part by part, as its read-back did.
+      ok(two.text.includes('What changed:\nChanged in "Nurse, top up": top up 35–45 ml (was 25–35 ml).\nEverything else stayed as it was.'), two.text);
+      // And it hands back the plan as saved, in this shape, with the rev a later change starts from.
+      const back = two.json.plan as { feeds: { id: string; steps: unknown[] }[] };
+      eq([two.json.base_rev, back.feeds.map((f) => f.id), back.feeds[1].steps[1], two.json.target], [2, plan.feeds.map((f) => f.id), { do: "bottle", ml: [35, 45], milk: "either", via: "paced" }, [50, 70]], "the save's plan");
       const after = feedingPlanOf(await settings(A))!;
       eq([after.rev, after.feeds.map((f) => f.id), after.feeds[1].steps[1]], [2, plan.feeds.map((f) => f.id), { do: "bottle", ml: { min: 35, max: 45 }, milk: "either", via: "paced" }], "a member's edit, ids kept");
     });
@@ -276,11 +274,19 @@ async function main() {
       const amount = await back(one);
       ok(
         amount.includes(
-          "Read what changes back to them as it is, then ask if that's right:\nWhat changes:\nWas: Nurse + SNS: Nurse 12–18 min, 20 ml of formula in the SNS; then pump 15 min\nNow: Nurse + SNS: Nurse 12–18 min, 25 ml of formula in the SNS; then pump 15 min\nEverything else stays as it is.\nThe whole plan with the change, to read them only if they ask:\nFrom: Feeding clinic"
+          'Read what changes back to them as it is, then ask if that\'s right:\nWhat changes:\nChanged in "Nurse + SNS": 25 ml of formula in the SNS (was 20 ml).\nEverything else stays as it is.\nThe whole plan with the change, to read them only if they ask:\nFrom: Feeding clinic'
         ),
         amount
       );
-      eq((amount.match(/^Was: /gm) ?? []).length, 1, "exactly one change");
+      eq((amount.match(/^(Was|Changed in) /gm) ?? []).length, 1, "exactly one change");
+      // Two changes in one feed (a value an older copy of the plan puts back beside the one asked for): each said on its own.
+      const two = { ...p, feeds: p.feeds.map((f, i) => (i === 0 ? { ...f, steps: [{ ...f.steps[0], minutes: [10, 15], supplement: { via: "sns", ml: 25, milk: "formula" } }, f.steps[1]] } : f)) };
+      const twoBack = await back(two);
+      ok(twoBack.includes('What changes:\nChanged in "Nurse + SNS": nurse 10–15 min (was 12–18 min); 25 ml of formula in the SNS (was 20 ml).\nEverything else stays as it is.'), twoBack);
+      // A step added: the feed as it was and as it would be.
+      const added = { ...p, feeds: p.feeds.map((f, i) => (i === 1 ? { ...f, steps: [...f.steps, { do: "pump", minutes: 10 }] } : f)) };
+      const addedBack = await back(added);
+      ok(addedBack.includes("Was: Nurse, top up: Nurse 8–12 min each side; then top up 35–45 ml, formula or breast milk, paced bottle\nNow: Nurse, top up: Nurse 8–12 min each side; then top up 35–45 ml, formula or breast milk, paced bottle; then pump 10 min"), addedBack);
       // The night left out reads as removed, and its feed, now in no turn, asks with it.
       const night = await back({ ...p, night: null });
       ok(night.includes("What changes:\nRemoved: Night (11 PM–5 AM): every 3 hours, waking her: Pump + bottle\nEverything else stays as it is."), night);
@@ -295,7 +301,7 @@ async function main() {
       const rb = await tool(alpha.owner, A, "set_feeding_plan", { ...base, plan: one });
       const slipped = { ...one, feeds: one.feeds.map((f, i) => (i === 1 ? { ...f, steps: [{ do: "nurse", minutes: [8, 12] }, f.steps[1]] } : f)) };
       const re = await tool(alpha.owner, A, "set_feeding_plan", { ...base, plan: slipped, confirmed: true, read_back: rb.json.read_back });
-      ok(re.json.confirm_needed === true && /That read_back isn't for this plan/.test(re.text) && re.text.includes("Was: Nurse, top up: Nurse 8–12 min each side; then top up 35–45 ml") && re.text.includes("Now: Nurse, top up: Nurse 8–12 min; then top up 35–45 ml"), re.text);
+      ok(re.json.confirm_needed === true && /That read_back isn't for this plan/.test(re.text) && re.text.includes('Changed in "Nurse, top up": nurse 8–12 min (was 8–12 min each side).'), re.text);
       eq(feedingPlanOf(await settings(A))?.rev, 2, "nothing saved");
     });
 
@@ -558,7 +564,11 @@ async function main() {
       await tool(alpha.owner, A, "log_diaper", { diaper: "wet" });
       const plan = (await tool(alpha.owner, A, "feeding_plan")).json;
       const p = plan.plan as Record<string, unknown>;
-      eq((await save(alpha.owner, A, { plan: { ...p, notes: "Weigh on Friday" }, target: plan.target, base_rev: plan.rev })).json.saved, true, "saved");
+      // A yes that leaves out the saved target it was read back with is the same plan and target: it saves.
+      const args = { plan: { ...p, notes: "Weigh on Friday" }, base_rev: plan.rev };
+      const rb = await tool(alpha.owner, A, "set_feeding_plan", { ...args, target: plan.target });
+      const yes = await tool(alpha.owner, A, "set_feeding_plan", { ...args, confirmed: true, read_back: rb.json.read_back });
+      eq(yes.json.saved, true, `saved: ${yes.text}`);
       const undo = await tool(alpha.owner, A, "undo_last");
       ok(undo.error && /^Nothing was removed\. The newest change was the feeding plan, saved at 12:00 PM/.test(undo.text), undo.text);
     });
@@ -591,6 +601,23 @@ async function main() {
       await tool(alpha.owner, A, "log_feed", { method: "breast", left_minutes: 10, right_minutes: 10, first_side: "left", minutes_ago: 80 });
       const own = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 30, unit: "ml", via: "paced" });
       ok(!/still had its/.test(own.text) && !(await sql(`SELECT data ? 'top_up_of' OR data ? 'plan' AS has FROM maple_entries WHERE id = $1`, [Number(own.json.id)]))[0].has, own.text);
+    });
+
+    await test(`${shape}: an edit that takes out what a feed's name says (the shield of "Shield, then pump") asks if they'd like to rename it, as the form does`, async () => {
+      const read = await tool(beta.owner, B, "feeding_plan");
+      const p = read.json.plan as { feeds: { id: string; name: string; steps: Record<string, unknown>[] }[] };
+      const back = async (feeds: unknown) => (await tool(beta.owner, B, "set_feeding_plan", { plan: { ...p, feeds }, base_rev: read.json.rev })).text.split("\n{")[0];
+      const noShield = p.feeds.map((f) => ({ ...f, steps: [{ do: "nurse", minutes: [12, 20] }, f.steps[1]] }));
+      const asked = await back(noShield);
+      ok(asked.includes('Changed in "Shield, then pump": no nipple shield (was with it).'), asked);
+      ok(asked.includes('Ask with it: "Shield, then pump" still says "shield", and its steps no longer use the nipple shield; Today shows that name as the feed\'s title. Ask if they\'d like to rename it.'), asked);
+      // The pump taken out too: both words, in one question.
+      const both = await back(p.feeds.map((f) => ({ ...f, steps: [{ do: "nurse", minutes: [12, 20] }] })));
+      ok(both.includes('Ask with it: "Shield, then pump" still says "shield" and "pump", and its steps no longer use the nipple shield or a pump;'), both);
+      // Renamed in the same edit, or a name that says it's without it: nothing to ask.
+      ok(!/Ask with it/.test(await back(noShield.map((f) => ({ ...f, name: "Nurse, then pump" })))), "renamed");
+      ok(!/Ask with it/.test(await back(noShield.map((f) => ({ ...f, name: "No shield, then pump" })))), "a name that says it's without it");
+      eq(feedingPlanOf(await settings(B))?.feeds[0].steps[0], { do: "nurse", minutes: { min: 12, max: 20 }, shield: true }, "nothing saved");
     });
 
     await test(`${shape}: ounces as the care team wrote them, read back in ounces, and sent back without drift`, async () => {
