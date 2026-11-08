@@ -1445,7 +1445,10 @@ export type StepView = {
   /** Its place in the feed's steps. */
   i: number;
   step: PlanStep;
-  /** done: logged; running: its timer is going; todo: not logged yet; info: a note. */
+  /**
+   * done: logged; running: its timer is going; todo: not logged yet; info: a note, or a step that's only the plan's
+   * words and never owed (she only nursed in the place of a feed with no nursing: PlanFeedView.nursedOnly).
+   */
   status: "done" | "running" | "todo" | "info";
   /** A nursing step's or a pump's minutes so far. */
   minutes: number | null;
@@ -1489,7 +1492,8 @@ export type PlanFeedView = {
   extraNursing: boolean;
   /**
    * Nursing is all that was logged, in a plan feed with no nursing step (she nursed in the night feed's place): what
-   * happened is that she nursed. Its steps aren't owed: never `missed`, and no bottle is joined to it as its step.
+   * happened is that she nursed. Its steps aren't owed: never `missed`, no bottle is joined to it as its step, and
+   * they read "info" (the plan's words), so nothing asks for its bottle. It stays underway a while after (done: false).
    */
   nursedOnly?: boolean;
   /**
@@ -1799,12 +1803,13 @@ function pointsElsewhere(plan: FeedingPlan, g: PlanGroup, feed: PlanFeed): boole
  * Each feed logged is read in turn, oldest first. A bottle the feed before
  * still wants (a late top-up, formula to finish), or nursing again under
  * PLAN_RELATCH_MS after it, is more of that feed: it takes no turn, starts no
- * steps anew and never moves when the next is due. Any other feed is the
- * night's when the card would have said so as it began (the due rule from
- * the feed before it, at its start), else the one its tag, what was logged
- * with it, or the order's turn says. Each feed takes as many pumps as it has
- * pump steps, in order; a pump goes to the feed after it only when that one
- * pumps first.
+ * steps anew and, on a set interval, never moves when the next is due (on
+ * demand, the newest latch is when she last ate: nextAfter). Any other feed
+ * is the night's when the card would have said so as it began (the due rule
+ * from the feed before it, at its start), else the one its tag, what was
+ * logged with it, or the order's turn says (the night's by the clock: the
+ * turn for its start). Each feed takes as many pumps as it has pump steps, in
+ * order; a pump goes to the feed after it only when that one pumps first.
  */
 export function feedPlanNow(
   plan: FeedingPlan,
