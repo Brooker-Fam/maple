@@ -45,7 +45,7 @@ import {
   parseDayKey,
   zonedTimeToUtc,
 } from "@/lib/maple/time";
-import { feedTargetOf, formatTempBoth, formatVolume, formatVolumeRange, formatWeightBoth, formatLengthBoth, mlToOz, ozToMl } from "@/lib/maple/units";
+import { feedTargetOf, formatTempBoth, formatVolume, formatVolumeBoth, formatWeightBoth, formatLengthBoth, mlToOz, ozToMl, volumeRangeIn } from "@/lib/maple/units";
 import type { Entry, EntryOf, MapleState, StoolColor, UnitSystem } from "@/lib/maple/types";
 import type { NavTarget } from "./AppNav";
 import { useCareNav } from "./care/CareNav";
@@ -674,10 +674,11 @@ function Ribbons({
   activity: PatternActivity;
 }) {
   const w = useBabyWords();
-  const rows = useMemo(
-    () => buildRibbon(entries, fromKey, todayKey, mode, tz, now, bornAt, units, knownFrom),
-    [entries, fromKey, todayKey, mode, tz, now, bornAt, units, knownFrom]
-  );
+  const { volumeBoth } = useMaple();
+  const rows = useMemo(() => {
+    void volumeBoth; // its titles say amounts, both ways with this phone's switch on
+    return buildRibbon(entries, fromKey, todayKey, mode, tz, now, bornAt, units, knownFrom);
+  }, [entries, fromKey, todayKey, mode, tz, now, bornAt, units, knownFrom, volumeBoth]);
   const [showAll, setShowAll] = useState(false);
   const [circleLimit, setCircleLimit] = useState(7);
   const [layout, setLayout] = useState<"ribbons" | "circles">("ribbons");
@@ -2056,7 +2057,8 @@ export async function buildVisitSummary(opts: {
   out.push(`From what we logged at home in Maple's Log. Times are ${tz.replace("_", " ")}.`);
   // The family's own number from their care team, as they typed it (never Maple's).
   const target = feedTargetOf(baby.settings);
-  if (target) out.push(`Target per feed from our care team: ${formatVolumeRange(target, "us")} (${formatVolumeRange(target, "metric")}).`);
+  // Both units, as ever (oz first), whichever way this phone shows amounts.
+  if (target) out.push(`Target per feed from our care team: ${volumeRangeIn(target, "us")} (${volumeRangeIn(target, "metric")}).`);
 
   const questions = opts.notes
     .filter((e) => e.kind === "note" && e.data.for_doctor && !e.data.done)
@@ -2078,7 +2080,7 @@ export async function buildVisitSummary(opts: {
     if (d.clusters) feedBits.push(d.clusters === 1 ? "one cluster" : `${d.clusters} clusters`);
     // Bottles on their own are feeds; top-ups were given with nursing feeds (feed.ts), each with its own amount. Milk
     // given at the breast (a syringe or an SNS) went with nursing too, and is said apart: it never went by bottle.
-    const both = (ml: number) => (ml ? `, ${formatVolume(ml, "us")} (${formatVolume(ml, "metric")})` : "");
+    const both = (ml: number) => (ml ? `, ${formatVolumeBoth(ml)}` : "");
     const tops = d.topUps - d.atBreast;
     if (d.bottleFeeds) feedBits.push(`${d.bottleFeeds} bottle${d.bottleFeeds === 1 ? "" : "s"}${both(soloBottleMl(d))}`);
     if (tops) feedBits.push(`${tops} top-up${tops === 1 ? "" : "s"} with nursing${both(Math.max(0, Math.round((d.topUpMl - d.atBreastMl) * 10) / 10))}`);

@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { AT_BREAST_WORDS, PLAN_LIMITS, type AtBreastVia, type PlanBottleVia, type PlanMilk, type Range } from "@/lib/maple/feeding-plan";
+import { amountText, AT_BREAST_WORDS, PLAN_LIMITS, type AtBreastVia, type PlanBottleVia, type PlanMilk, type Range } from "@/lib/maple/feeding-plan";
 import type { Side } from "@/lib/maple/types";
 import { Switch } from "../care/parts";
 import { useBabyWords } from "../familyWords";
+import { useMaple } from "../useMaple";
 import { Icon, type IconName } from "../icons";
 import { GROUP, Toggle } from "../settings/parts";
 import { Label } from "../sheets/parts";
@@ -744,21 +745,31 @@ function NumberRange({ label, word, aria, value, max, onChange, watch, wkey, toS
   );
 }
 
-/** An amount from–to in the plan's unit, kept in ml (so ml ↔ oz never changes it). */
+/**
+ * An amount from–to in the plan's unit, kept in ml (so ml ↔ oz never changes it). With this phone's amounts both ways
+ * on, the other unit live under it ("= 0.85–1.18 oz"): the plan's Amounts in is its ml | oz switch.
+ */
 function AmountRange({ label, aria, value, unit, onChange, watch, wkey }: { label?: string; aria: string; value: RangeDraft; unit: PlanDraft["unit"]; onChange: (r: RangeDraft) => void; watch: Watch; wkey: string }) {
+  const { volumeBoth } = useMaple();
+  const lo = value.min ?? value.max;
+  const hi = value.max ?? value.min;
+  const other = volumeBoth && lo != null && hi != null && lo > 0 ? amountText({ min: Math.min(lo, hi), max: Math.max(lo, hi) }, unit === "ml" ? "oz" : "ml", false) : null;
   return (
-    <NumberRange
-      label={label}
-      word={unit}
-      aria={`${aria}, in ${unit}`}
-      value={value}
-      max={amountMax(unit)}
-      toShown={(ml) => shownAmount(ml, unit)}
-      fromShown={(n) => typedAmount(n, unit)}
-      onChange={onChange}
-      watch={watch}
-      wkey={wkey}
-    />
+    <div>
+      <NumberRange
+        label={label}
+        word={unit}
+        aria={`${aria}, in ${unit}`}
+        value={value}
+        max={amountMax(unit)}
+        toShown={(ml) => shownAmount(ml, unit)}
+        fromShown={(n) => typedAmount(n, unit)}
+        onChange={onChange}
+        watch={watch}
+        wkey={wkey}
+      />
+      {other && <p className={cx(tone.muted, "mt-1.5 text-xs tabular-nums")}>= {other}</p>}
+    </div>
   );
 }
 

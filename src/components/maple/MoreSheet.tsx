@@ -7,7 +7,7 @@ import { JAUNDICE_LABEL, VITAMIN_D_DEFAULT } from "@/lib/maple/guidelines";
 import { isVitaminD } from "@/lib/maple/insights";
 import { DEFAULT_TZ, dayBounds, dayKey, daysBetween, formatDayLabel, formatTime, formatTimeNear, localParts, parseDayKey, zonedTimeToUtc } from "@/lib/maple/time";
 import type { Baby, Entry, EntryKind, EntryOf } from "@/lib/maple/types";
-import { formatTemp, formatVolume, formatWeight } from "@/lib/maple/units";
+import { formatTemp, formatVolumeShort, formatWeight } from "@/lib/maple/units";
 import { careTime } from "@/lib/maple/care";
 import { useCareNav } from "./care/CareNav";
 import { useCare } from "./care/useCare";
@@ -456,7 +456,8 @@ export default function MoreSheet({ open, onClose, earlierDay }: {
             {
               id: "pump",
               label: "Pump",
-              sub: lastPump && (pumped ? `${formatVolume(pumped, units)} · ${when(lastPump.started_at)}` : when(lastPump.started_at)),
+              // Both units with a dot ("3.04 oz · 90 ml"), so a narrow cell wraps between them, never cuts one.
+              sub: lastPump && (pumped ? `${formatVolumeShort(pumped, units)} · ${when(lastPump.started_at)}` : when(lastPump.started_at)),
               icon: "milk" as const,
               color: KIND_COLOR.pump,
               onTap: () => go("pump"),

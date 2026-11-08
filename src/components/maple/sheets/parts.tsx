@@ -526,6 +526,7 @@ export function MiniStepper({
   unit,
   ariaLabel,
   onInvalid,
+  aside,
 }: {
   label: ReactNode;
   value: number | null;
@@ -541,6 +542,8 @@ export function MiniStepper({
   ariaLabel: string;
   /** Called with true while the text isn't a usable number (so the sheet can hold Save). */
   onInvalid?: (invalid: boolean) => void;
+  /** Beside the label, on its right (an amount's ml | oz switch). */
+  aside?: ReactNode;
 }) {
   const { text, setText, invalid } = useTypedNumber(value, max, onInvalid);
   const latest = useRef(value);
@@ -578,7 +581,14 @@ export function MiniStepper({
   );
   return (
     <div className="@container/stepper min-w-0">
-      <span className={cx(tone.label, "mb-1.5 block")}>{label}</span>
+      {aside ? (
+        <div className="mb-1.5 flex items-center justify-between gap-3">
+          <span className={cx(tone.label, "min-w-0")}>{label}</span>
+          {aside}
+        </div>
+      ) : (
+        <span className={cx(tone.label, "mb-1.5 block")}>{label}</span>
+      )}
       {/* Enlarged text needs room for the whole number and unit. On a narrow
           row the four adjustments move below it, keeping their 44px targets. */}
       <div className={cx("items-center", quickStep ? "grid grid-cols-4 justify-items-center gap-x-0.5 gap-y-2 @min-[18rem]/stepper:grid-cols-[44px_44px_minmax(0,1fr)_44px_44px]" : "flex gap-1")}>

@@ -29,7 +29,7 @@
 import { bottleAmount, CLUSTER_GAP_MS, countedFeeds, lastFedAnchor, nursingRuns, runAnchor, type FeedMinutes, type NursingRun } from "./feed";
 import { addDays, dayKey, DEFAULT_TZ, formatDuration, formatTime, localParts, parseDayKey, zonedTimeToUtc } from "./time";
 import type { Entry, EntryOf, Side, StretchSide } from "./types";
-import { ML_PER_FL_OZ, type FeedTarget } from "./units";
+import { ML_PER_FL_OZ, volumesBoth, type FeedTarget } from "./units";
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -544,8 +544,12 @@ export const onDemandAt = (plan: Pick<FeedingPlan, "day" | "night">, night: bool
 
 const trimNum = (n: number, dp = 2) => String(Number(n.toFixed(dp)));
 
-/** "25 ml", "25–35 ml", "1 oz", "1–1.5 oz", in the plan's unit. */
-export function amountText(r: Range, unit: PlanUnit): string {
+/**
+ * "25 ml", "25–35 ml", "1 oz", "1–1.5 oz", in the plan's unit; with this phone's amounts both ways (units.ts
+ * volumesBoth, never on the server), the other after it: "25–35 ml (0.85–1.18 oz)".
+ */
+export function amountText(r: Range, unit: PlanUnit, both = volumesBoth()): string {
+  if (both) return `${amountText(r, unit, false)} (${amountText(r, unit === "oz" ? "ml" : "oz", false)})`;
   if (unit === "oz") {
     const a = trimNum(r.min / ML_PER_FL_OZ);
     const b = trimNum(r.max / ML_PER_FL_OZ);

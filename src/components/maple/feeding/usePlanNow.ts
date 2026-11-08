@@ -305,7 +305,7 @@ let pruned = false;
  * Today's 20-second tick, so the dock's one-second clock doesn't redo it.
  */
 export function usePlanNow(): PlanNow | null {
-  const { state, summary } = useMaple();
+  const { state, summary, volumeBoth } = useMaple();
   const words = useBabyWords();
   const now = useNow(20_000);
   // This phone's memory's version: every reader reads it again when any part of Today changes it.
@@ -361,6 +361,7 @@ export function usePlanNow(): PlanNow | null {
   // The rows, the missed line and what the dock takes, read again when the plan's reading or this phone's memory changes.
   const derived = useMemo(() => {
     void seen;
+    void volumeBoth; // the rows' words say amounts, both ways with this phone's switch on
     if (!fp) return null;
     return planReading(fp, {
       now,
@@ -370,7 +371,7 @@ export function usePlanNow(): PlanNow | null {
       missedAside: missedAt !== null && memoryRead("phone", missedKey(family, missedAt)) === "1",
       choose,
     });
-  }, [fp, family, missedAt, now, tz, seen, words.Hes, choose]);
+  }, [fp, family, missedAt, now, tz, seen, words.Hes, choose, volumeBoth]);
 
   if (!plan || !fp || !base || !derived) return null;
   return { plan, target, tz, family, now, base, fp, chosen: choose, ...derived, missedStart: missedAt, pick, setMissedAside, closeRow };

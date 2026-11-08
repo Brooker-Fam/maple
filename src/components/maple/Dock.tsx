@@ -8,7 +8,7 @@ import { atBreastOf } from "@/lib/maple/describe";
 import { STOOL_COLOR_INFO } from "@/lib/maple/guidelines";
 import { bottleAmount, countedFeeds, isTracked, other, staleFeed } from "@/lib/maple/feed";
 import { formatRelative, formatTime, formatTimeNear, DEFAULT_TZ } from "@/lib/maple/time";
-import { formatVolume } from "@/lib/maple/units";
+import { volumeLines } from "@/lib/maple/units";
 import type { DiaperData, Entry, FeedData, Side, StoolColor, StretchSide } from "@/lib/maple/types";
 import { usePlanNow } from "./feeding/usePlanNow";
 import { SleepStrip } from "./sleep/SleepStrip";
@@ -398,7 +398,9 @@ export default function Dock() {
 
   const holdFeed = (side: Side) => open({ kind: "feed", preset: { method: "breast", first_side: side, started_at: earlierAt() } });
 
-  const lastBottleLabel = lastBottleMl ? `${formatVolume(lastBottleMl, units)} last` : undefined;
+  // "2 oz last" (a bottle feed's later bottles added in); with amounts both ways, the other unit on a line of its own
+  // under it (one line at 320px holds one).
+  const lastBottleLabel = lastBottleMl ? volumeLines(lastBottleMl, units, " last") : undefined;
   const bottleSub = planBottle ? planBottle.word : lastBottleLabel;
   const bottleAria = planBottle ? `Bottle: ${planBottle.aria}` : undefined;
   const openBottle = () => open({ kind: "feed", preset: planBottle ? planBottle.preset : { method: "bottle" } });
@@ -838,9 +840,11 @@ function Tile({
             )}
             {sub && (
               // 11px needs ink-2 (ink-3 is 3:1 at night); on a filled tile it's full strength (85% was 4.39:1 on "to Left").
+              // Two lines (an amount both ways) sit a touch closer, so the tile keeps the row's 64px.
               <span
                 className={cx(
-                  "text-[11px] leading-tight tabular-nums",
+                  "text-[11px] whitespace-pre-line tabular-nums",
+                  sub.includes("\n") ? "leading-[1.1]" : "leading-tight",
                   filled ? "opacity-100" : next ? "font-semibold text-mp-accent-fg" : "text-mp-ink-2"
                 )}
               >

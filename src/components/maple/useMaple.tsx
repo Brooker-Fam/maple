@@ -30,6 +30,7 @@ import {
 } from "@/lib/maple/feed";
 import { memberLabel as labelOf, summarize, memberName as nameOf, type Summary } from "@/lib/maple/insights";
 import { formatTime, localParts } from "@/lib/maple/time";
+import { setVolumesBoth } from "@/lib/maple/units";
 import { ApiError, createMapleRequests } from "@/lib/maple/client-request";
 import { keepConfirmed, stampOutbox } from "@/lib/maple/client-state";
 import { FAMILY_MOVED_EVENT, setShownFamily } from "./shownFamily";
@@ -157,6 +158,12 @@ export type MapleContextValue = {
   isNight: () => boolean;
   units: UnitSystem;
   setUnits: (u: UnitSystem) => void;
+  /**
+   * This phone's "Amounts in ml and oz": every amount said both ways, the units first ("2 oz (59.1 ml)"), and an ml |
+   * oz switch on each amount field. Off by default; kept on this phone like the units (units.ts setVolumesBoth).
+   */
+  volumeBoth: boolean;
+  setVolumeBoth: (on: boolean) => void;
   refresh: () => Promise<void>;
   /** Entries saved on this phone, waiting for a connection. */
   pending: number;
@@ -294,6 +301,8 @@ export function useNow(intervalMs = 1000): Date {
 }
 
 const UNITS_KEY = "maple-units";
+/** "1" while this phone shows amounts in ml and oz both (anything else, or nothing, is off). */
+const VOLUME_BOTH_KEY = "maple-volume-both";
 const OUTBOX_KEY = "maple-outbox-v1";
 const POLL_MS = 10_000;
 /** Back after this long → refresh "While you slept" from the server. */
@@ -496,6 +505,8 @@ export function MapleProvider({ children }: { children: ReactNode }) {
   const [auth, setAuth] = useState<AuthInfo | null>(null);
   const [state, setState] = useState<MapleState | null>(null);
   const [units, setUnitsState] = useState<UnitSystem>("us");
+  // Off until the phone's own choice is read after mount (as the units), so the first render matches the server's.
+  const [volumeBoth, setVolumeBothState] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [tick, setTick] = useState(0);
   const [outbox, setOutbox] = useState<OutboxItem[]>([]);
@@ -533,6 +544,14 @@ export function MapleProvider({ children }: { children: ReactNode }) {
     } catch {
       // storage blocked
     }
+    try {
+      if (localStorage.getItem(VOLUME_BOTH_KEY) === "1") {
+        setVolumesBoth(true);
+        setVolumeBothState(true);
+      }
+    } catch {
+      // storage blocked: off, unless turned on for this visit
+    }
     const queued = readOutbox();
     setOutbox(queued);
     // Queued entries keep their temporary (negative) ids across reloads; new
@@ -549,6 +568,19 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       // storage blocked
     }
   }, []);
+
+  // The formatters read the phone's choice (units.ts volumesBoth): it's set before the render it changes, and put back
+  // to off when the app goes, so a later first render matches the server's again.
+  const setVolumeBoth = useCallback((on: boolean) => {
+    setVolumesBoth(on);
+    setVolumeBothState(on);
+    try {
+      localStorage.setItem(VOLUME_BOTH_KEY, on ? "1" : "0");
+    } catch {
+      // storage blocked: kept for this visit only
+    }
+  }, []);
+  useEffect(() => () => setVolumesBoth(false), []);
 
   const now = useCallback(() => new Date(Date.now() + offsetRef.current), []);
   const isNight = useCallback(() => {
@@ -1493,6 +1525,8 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       isNight,
       units,
       setUnits,
+      volumeBoth,
+      setVolumeBoth,
       refresh: forceRefresh,
       pending: outbox.filter((i) => ownedBy(i, state)).length,
       online,
@@ -1518,7 +1552,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       care,
       sleep,
     }),
-    [status, error, auth, state, summary, now, isNight, units, setUnits, forceRefresh, outbox, online, seenAt, log, update, remove, restore, timerCall, timer, timerBusy, api, toasts, toast, dismissToast, dismissTimerToast, holdTimerToasts, memberName, memberLabel, whoDiscarded, member, readOnly, care, sleep]
+    [status, error, auth, state, summary, now, isNight, units, setUnits, volumeBoth, setVolumeBoth, forceRefresh, outbox, online, seenAt, log, update, remove, restore, timerCall, timer, timerBusy, api, toasts, toast, dismissToast, dismissTimerToast, holdTimerToasts, memberName, memberLabel, whoDiscarded, member, readOnly, care, sleep]
   );
 
   return <MapleContext.Provider value={value}>{children}</MapleContext.Provider>;

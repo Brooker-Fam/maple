@@ -8,7 +8,7 @@ import { AT_BREAST_VIAS, AT_BREAST_WORDS, feedingPlanOf, type AtBreastVia } from
 import { JAUNDICE_LABEL, STOOL_COLOR_INFO } from "./guidelines";
 import { milestoneLabel, NEUTRAL_MILESTONE_WORDS, type MilestoneWords } from "./milestones";
 import { formatDuration } from "./time";
-import { formatLength, formatTemp, formatVolume, formatWeight } from "./units";
+import { formatLength, formatTemp, formatVolume, formatWeight, volumeIn } from "./units";
 import type { Entry, EntryKind, EntryOf, FeedData, UnitSystem } from "./types";
 
 export const KIND_LABELS: Record<EntryKind, string> = {
@@ -93,7 +93,7 @@ export function atBreastOf(d: FeedData): AtBreastVia | null {
  * syringe") and the rest of the app alike.
  */
 export function partVolume(ml: number, units: UnitSystem, planUnits?: UnitSystem | null): string {
-  return planUnits && planUnits !== units ? `${formatVolume(ml, planUnits)} (${formatVolume(ml, units)})` : formatVolume(ml, units);
+  return planUnits && planUnits !== units ? `${volumeIn(ml, planUnits)} (${volumeIn(ml, units)})` : formatVolume(ml, units);
 }
 
 /**
