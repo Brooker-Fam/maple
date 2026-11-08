@@ -11,6 +11,8 @@ import { nursingRuns, openSegment, staleFeed } from "@/lib/maple/feed";
 import { LABEL_NOT_WHILE_NURSING, MOM_HELP, MOM_TIER_LABEL, TIER_LABEL, VITAMIN_D_DEFAULT } from "@/lib/maple/guidelines";
 import { memberName, summarize } from "@/lib/maple/insights";
 import { lastFedSpeak } from "@/lib/maple/mcp-tools";
+import { feedingPlanOf, feedPlanNow } from "@/lib/maple/feeding-plan";
+import { planSpeak } from "@/lib/maple/feeding-plan-mcp";
 import {
   activeTimers,
   createEntryOnce,
@@ -25,7 +27,7 @@ import {
 } from "@/lib/maple/store";
 import { formatTime } from "@/lib/maple/time";
 import { voiceFor } from "@/lib/maple/voice";
-import { ozToMl } from "@/lib/maple/units";
+import { feedTargetOf, ozToMl } from "@/lib/maple/units";
 import type { Baby, Entry, FeedData, Member } from "@/lib/maple/types";
 import { runningTry } from "@/lib/maple/sleep/store";
 import { captureServerException } from "@/lib/posthog-server";
@@ -334,6 +336,9 @@ export async function POST(request: NextRequest) {
           // The cluster line after a cluster, else when she last ate and the side to start on (insights' lastFed and next).
           bits.push(lastFedSpeak(s, name, tz, vo));
         }
+        // The care team's feeding plan, for a family that saved one: its next feed, or the one underway and what's left.
+        const plan = s.born ? feedingPlanOf(baby.settings) : null;
+        if (plan) bits.push(planSpeak(feedPlanNow(plan, entries, now, { tz, target: feedTargetOf(baby.settings) }), { now, tz, vo }));
         // The sleep plan's one line: a try running, else who's holding her, else this adult's check-in when it's due.
         const sleep = await sleepStatusLine({ fam, baby, me, members, vo, name, now });
         if (sleep.line) bits.push(sleep.line);

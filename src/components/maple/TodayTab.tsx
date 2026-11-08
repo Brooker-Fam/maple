@@ -2,7 +2,9 @@
 
 import { AnimatePresence } from "framer-motion";
 import { useEffect, useRef } from "react";
-import { nursingRuns, topUpIds } from "@/lib/maple/feed";
+import { nursingRuns } from "@/lib/maple/feed";
+import { feedRowParts, recentRows } from "@/lib/maple/feed-rows";
+import { feedingPlanOf } from "@/lib/maple/feeding-plan";
 import { dayKey, formatClock, formatDuration } from "@/lib/maple/time";
 import AlertStack from "./AlertCard";
 import AccountMenu from "./AccountMenu";
@@ -13,6 +15,7 @@ import { AskChatButton } from "./chat/AskChat";
 import Dock from "./Dock";
 import DailyDiscovery from "./development/DailyDiscovery";
 import EntryRow, { entryEditPreset, photoUrl } from "./EntryRow";
+import NextFeedCard from "./feeding/NextFeedCard";
 import { HelpFooter } from "./HelpSheet";
 import Hero from "./Hero";
 import { SleepNow, useFoldedSleepId } from "./sleep/SleepCards";
@@ -41,12 +44,15 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
 
   const born = !!state.baby.born_at;
   const nothingYet = state.entries.length === 0;
-  const recent = state.entries.filter((e) => !e.active).slice(0, 3);
-  // A bottle given with a feed reads "Top-up" (feed.ts), worked out from every loaded entry.
-  const topUps = recent.some((e) => e.kind === "feed" && e.data.method === "bottle") ? topUpIds(nursingRuns(state.entries, now)) : null;
+  // The feeds as counted, from every loaded entry: a feed's parts (its milk at the breast, its top-ups) ride on its row
+  // (feed-rows.ts), so one feed is one of the three rows. A part of the feed still going is on that feed's card.
+  const rowParts = feedRowParts(nursingRuns(state.entries, now));
+  const recent = recentRows(state.entries, rowParts, 3);
   const timing = summary.active.length > 0;
   // A bassinet try or someone holding her awake: shown on every family phone, in Right now.
   const sleepNow = !!state.sleep && (state.sleep.tries.some((t) => !t.ended_at) || state.sleep.shifts.some((x) => !x.ended_at));
+  // The care team's feeding plan: its Next feed card is in Right now from the first feed on, before anything is logged.
+  const feedPlan = born && state.me.role !== "photos" && !!feedingPlanOf(state.baby.settings);
 
   return (
     // data-today-page: what tapShield holds for a moment after the page moves under the thumb (a try card appearing).
@@ -70,7 +76,7 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
       {readOnly && <LatestMoment />}
       <AlertStack tiers={["emergency", "now"]} onNavigate={onNavigate} />
 
-      {(!nothingYet || timing || sleepNow) && (
+      {(!nothingYet || timing || sleepNow || feedPlan) && (
         <section aria-labelledby="right-now">
           <h2 id="right-now" className="sr-only">
             Right now
@@ -84,6 +90,11 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
               ))}
             </AnimatePresence>
             <SleepNow />
+            {/*
+              What to do at the next feed by the care team's plan (feeding/NextFeedCard). Before Last fed, so its one big
+              action (Start Left, Log bottle) clears the dock at 375x667 without scrolling; Last fed and the next side follow.
+            */}
+            <NextFeedCard />
             <StatusCard />
           </div>
         </section>
@@ -126,7 +137,16 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
               </div>
               <div className={cx(tone.card, tone.divide, "overflow-hidden")}>
                 {recent.map((e) => (
-                  <EntryRow key={e.id} entry={e} now={now} showRelative quietAction topUp={!!topUps?.has(e.id)} onClick={() => open({ kind: e.kind, entry: e, preset: entryEditPreset(e, readOnly) })} />
+                  <EntryRow
+                    key={e.id}
+                    entry={e}
+                    now={now}
+                    showRelative
+                    quietAction
+                    parts={rowParts.byRow.get(e.id)}
+                    onOpenPart={(b) => open({ kind: b.kind, entry: b })}
+                    onClick={() => open({ kind: e.kind, entry: e, preset: entryEditPreset(e, readOnly) })}
+                  />
                 ))}
               </div>
             </section>

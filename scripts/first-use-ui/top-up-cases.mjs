@@ -1,8 +1,8 @@
 /**
  * A bottle given with nursing is that feed's top-up (feed.ts topUpRunFor): the bottle form says so before it's
  * saved, Today keeps "Last fed" at the nursing start and adds the top-up to its line, and Today's recent rows and the
- * Timeline read it as "Top-up", the day counting one feed. Made-up times on the fixture's clock (9:30 AM in the
- * family's zone).
+ * Timeline show it on that feed's row ("+ 35 ml top-up", feed-parts-cases.mjs), the day counting one feed. Made-up
+ * times on the fixture's clock (9:30 AM in the family's zone).
  */
 export function topUpCases({ fixture, freshState, record, writes, assert }) {
   const nursing = (id, start, mid, end) =>
@@ -58,13 +58,13 @@ export function topUpCases({ fixture, freshState, record, writes, assert }) {
         // "Last feed started" stays at the nursing start (45 minutes ago, not the top-up's 10), with the top-up on its line.
         assert.match(today, /Last feed started\s*45m ago/);
         assert.match(today, /\+ 35 ml top-up/);
-        assert(await f.page.getByRole("button", { name: /^Edit: Top-up, /, exact: false }).first().isVisible(), "Today's recent row reads Top-up");
+        assert(await f.page.getByRole("button", { name: /^Edit: \+ 35 ml top-up · breast milk, /, exact: false }).first().isVisible(), "Today's recent row for the feed carries its top-up");
         await f.page.goto("https://first-use.example.test/#log");
         const day = f.page.locator("#maple-day-2026-10-28");
         await day.waitFor();
         assert.match(await day.textContent(), /1 feed ·/);
         assert.match(await day.textContent(), /35 ml bottle \(1 top-up\)/);
-        assert(await day.getByRole("button", { name: /^Edit: Top-up, / }).isVisible(), "The Timeline row reads Top-up");
+        assert(await day.getByRole("button", { name: /^Edit: \+ 35 ml top-up · breast milk, / }).isVisible(), "The Timeline's row for the feed carries its top-up");
         assert.deepEqual(f.errors, []);
       } finally { await f.close(); }
     }],

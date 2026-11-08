@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { describeEntry } from "@/lib/maple/describe";
+import { atBreastOf, describeEntry, feedPartWords, milkWords } from "@/lib/maple/describe";
+import { feedRowParts } from "@/lib/maple/feed-rows";
+import { AT_BREAST_WORDS, type AtBreastVia } from "@/lib/maple/feeding-plan";
 import {
   addPart,
   edgeBounds,
@@ -49,10 +51,12 @@ import {
   SheetFooter,
   SideLabel,
   presetStart,
+  pbool,
   pnum,
   pstr,
   useNumberChecks,
   useOpenCount,
+  useOpenSheet,
   useSheetBase,
   useTouched,
 } from "./parts";
@@ -82,13 +86,22 @@ import {
  * Bottle: the amount (oz or ml, per the units setting) starts at the last
  * bottle's amount and milk, so the primary button reads "Log 2 oz now". With
  * Bottles off (Family → On Today) a new feed has no Breast/Bottle choice;
- * a bottle already logged still opens as one.
+ * a bottle already logged still opens as one. Opened for milk at the breast
+ * (a via preset of syringe or SNS), it starts at the last milk given that way.
+ *
+ * A nursing feed's parts: "Nipple shield" (data.shield, on the feed itself;
+ * an edit sends it against the version shown, as the other fields), and milk
+ * at the breast, its own bottle entry (so every milk total counts it). A new
+ * feed logged afterwards can say it with the feed ("Milk at the breast": the
+ * amount, syringe or SNS, which milk; saved as a bottle at the feed's start
+ * naming the feed, top_up_of); a saved feed lists what was given with it, each
+ * opening its own form, and offers to add milk at the breast if none was.
  */
 
 type Milk = NonNullable<FeedData["milk"]>;
 const MILK_LABEL: Record<Milk, string> = { breastmilk: "Breast milk", formula: "Formula", mixed: "Mixed" };
 /** How the milk was given (FeedData.via). */
-const VIA_LABEL: Record<BottleVia, string> = { bottle: "Bottle", paced: "Paced bottle", sns: "SNS at the breast" };
+const VIA_LABEL: Record<BottleVia, string> = { bottle: "Bottle", paced: "Paced bottle", sns: "SNS at the breast", syringe: "Syringe" };
 const MIN = 60_000;
 /** The id of a feed being logged, not saved yet (its toast is worded from it). */
 const DRAFT_ID = Number.MIN_SAFE_INTEGER;
@@ -141,6 +154,7 @@ export default function FeedSheet(props: SheetProps) {
 function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const base = useSheetBase();
   const { tz, units, state, summary, log, update, remove, clock, now, ageDays, age, api, refresh, toast, memberLabel, readOnly } = base;
+  const openSheet = useOpenSheet();
   const w = useBabyWords();
   const voice = useVoice();
   const bottlesOn = logSwitches(state?.baby).bottles;
@@ -149,8 +163,16 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   // A finished timed session: its times are its parts (the Times section), not a start and an end.
   const timed = !!e && !running && e.data.method === "breast" && !!e.data.segments?.length;
 
+  // Opened for milk at the breast (a via preset of syringe or SNS: the nursing card's chip, a plan's step), "last time"
+  // is the last milk given that way, never a bottle's 90 ml.
+  const [forBreast] = useState(() => !e && (pstr(preset, "via") === "sns" || pstr(preset, "via") === "syringe"));
   const lastBottle = useMemo(
-    () => state?.entries.find((x): x is EntryOf<"feed"> => x.kind === "feed" && x.data.method === "bottle" && x.id !== e?.id) ?? null,
+    () => state?.entries.find((x): x is EntryOf<"feed"> => x.kind === "feed" && x.data.method === "bottle" && x.id !== e?.id && (!forBreast || !!atBreastOf(x.data))) ?? null,
+    [state, e?.id, forBreast]
+  );
+  // The newest milk given at the breast, for a nursing feed's own "Milk at the breast" (how it went in, how much).
+  const lastAtBreast = useMemo(
+    () => state?.entries.find((x): x is EntryOf<"feed"> => x.kind === "feed" && x.data.method === "bottle" && x.id !== e?.id && !!atBreastOf(x.data)) ?? null,
     [state, e?.id]
   );
 
@@ -220,6 +242,20 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     if (s === "L" || s === "R") return s;
     return summary?.nextSide ?? "L";
   });
+  // The nipple shield: said on the feed itself (a new one can start with it from a preset, the plan's feed).
+  const origShield = e?.data.method === "breast" && !!e.data.shield;
+  const [shield, setShield] = useState<boolean>(() => (e ? origShield : pbool(preset, "shield") === true));
+  const shieldChanged = !!e && e.data.method === "breast" && shield !== origShield;
+  // A new feed's milk at the breast: its own bottle entry, saved with the feed. Off until it's turned on, then as last
+  // time (how it went in, how much, which milk); a syringe the first time.
+  const [milkOn, setMilkOn] = useState(false);
+  const [milkVia, setMilkVia] = useState<AtBreastVia>(() => (lastAtBreast && atBreastOf(lastAtBreast.data)) || "syringe");
+  const [milkAmount, setMilkAmount] = useState<number | null>(() => {
+    const ml = lastAtBreast?.data.amount_ml;
+    if (ml == null) return null;
+    return units === "metric" ? ml : Number(mlToOz(ml).toFixed(2));
+  });
+  const [milkKind, setMilkKind] = useState<Milk | undefined>(() => lastAtBreast?.data.milk);
   const origRange = (): [Date, Date] => {
     if (e) {
       const s = new Date(e.started_at);
@@ -239,7 +275,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   });
   // Typed minutes on a timed session replace its parts ("Type minutes instead").
   const [minutesTyped, setMinutesTyped] = useState(false);
-  const savedEntry = e && !running && (!timed || minutesTyped || first !== origFirst) ? e : undefined;
+  const savedEntry = e && !running && (!timed || minutesTyped || first !== origFirst || shieldChanged) ? e : undefined;
   const { changed: savedChanged, onConflict, notice: savedNotice } = useSavedEntryConflict(savedEntry);
 
   // ── Times (a finished timed session) ──
@@ -356,7 +392,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const [breastPart, setBreastPart] = useState<number | null>(() => (e?.data.method === "bottle" ? shownMl(e.data.breastmilk_ml) : null));
   const [formulaPart, setFormulaPart] = useState<number | null>(() => (e?.data.method === "bottle" ? shownMl(e.data.formula_ml) : null));
   const [when, setWhen] = useState<Date | null>(() => (e ? new Date(e.started_at) : fromPreset));
-  const fieldsDirty = useDraftChanged({ manualTimeInvalid, method, when, note: notePatch.note, amount, milk, via, breastPart, formulaPart, left, right, both, first, range, invalid: checks.invalid });
+  const fieldsDirty = useDraftChanged({ manualTimeInvalid, method, when, note: notePatch.note, amount, milk, via, breastPart, formulaPart, left, right, both, first, range, shield, milkOn, milkVia, milkAmount, milkKind, invalid: checks.invalid });
   const amountMl = !touched.amount ? initialAmountMl : amount == null ? undefined : Math.round((units === "metric" ? amount : ozToMl(amount)) * 10) / 10;
   const partMl = (v: number | null) => (v == null ? undefined : Math.round((units === "metric" ? v : ozToMl(v)) * 10) / 10);
   const hadSplit = e?.data.method === "bottle" && (e.data.breastmilk_ml != null || e.data.formula_ml != null);
@@ -400,13 +436,28 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `now` is a clock; the feeds and this entry decide it.
     [method, state?.entries, e?.id]
   );
-  const topUpOf = method === "bottle" ? topUpRunFor(otherRuns, (when ?? now()).getTime(), now()) : null;
+  // From the feeding plan's card: the feed this bottle tops up, even late (data.top_up_of), and the plan feed it's for.
+  const [linkTo] = useState(() => (e ? undefined : pnum(preset, "top_up_of")));
+  const [planFeed] = useState(() => (e ? undefined : pstr(preset, "plan")));
+  const topUpOf = method === "bottle" ? topUpRunFor(otherRuns, (when ?? now()).getTime(), now(), linkTo) : null;
   const bottleWord = topUpOf ? "top-up" : "bottle";
   const target = feedTargetOf(state?.baby.settings);
+  // Milk given at the breast, by this bottle form: it reads as what it is ("20 ml in the SNS"), part of the feed.
+  const breastVia = method === "bottle" && (via === "sns" || via === "syringe") ? via : null;
+  // A new nursing feed's own milk at the breast, in ml (blank: given, the amount not said).
+  const milkMl = milkAmount == null ? undefined : Math.round((units === "metric" ? milkAmount : ozToMl(milkAmount)) * 10) / 10;
+  const zeroMilk = method === "breast" && !e && milkOn && milkMl === 0;
+
+  // A saved nursing feed's parts, as its row shows them (feed-rows.ts): its milk at the breast, its top-ups.
+  const feedPartsHere = useMemo(
+    () => (e && e.data.method === "breast" && state ? feedRowParts(nursingRuns(state.entries, now())).byRow.get(e.id) ?? [] : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `now` is a clock; the feeds and this entry decide it.
+    [state?.entries, e?.id]
+  );
 
   // ── Save ──
   const save = async () => {
-    if (busy || manualTimeInvalid || timeInvalid || addBlocked || savedChanged || zeroBottle || amountOverLimit || partOver || (!running && checks.invalid)) return;
+    if (busy || manualTimeInvalid || timeInvalid || addBlocked || savedChanged || zeroBottle || zeroMilk || amountOverLimit || partOver || (!running && checks.invalid)) return;
     if (e) {
       const patch = editPatch();
       // Nothing changed: close without a write (a bare write would bump the version under the other phone's edit).
@@ -427,8 +478,24 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       try {
         const split = splitShown ? { breastmilk_ml: partMl(breastPart), formula_ml: partMl(formulaPart) } : {};
         const saved = await log(
-          { kind: "feed", started_at: when?.toISOString(), data: { method: "bottle", amount_ml: amountMl, milk, via, ...split }, note: note.trim() || null },
-          { toast: `${amountLabel ? `${amountLabel} ${bottleWord}` : topUpOf ? "Top-up" : "Bottle"} · ${clock(at)}` }
+          {
+            kind: "feed",
+            started_at: when?.toISOString(),
+            data: {
+              method: "bottle",
+              amount_ml: amountMl,
+              milk,
+              via,
+              ...split,
+              // Only while it still tops up that feed (a time moved past the next feed drops the link).
+              ...(linkTo && topUpOf?.entries.some((x) => x.id === linkTo) ? { top_up_of: linkTo } : {}),
+              ...(planFeed ? { plan: planFeed } : {}),
+            },
+            note: note.trim() || null,
+          },
+          {
+            toast: `${breastVia ? `${amountLabel ?? "Milk"} ${AT_BREAST_WORDS[breastVia].inThe}` : amountLabel ? `${amountLabel} ${bottleWord}` : topUpOf ? "Top-up" : "Bottle"} · ${clock(at)}`,
+          }
         );
         if (saved) onClose();
       } finally {
@@ -444,7 +511,15 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     const r = (right ?? 0) + (spanMin && first === "R" ? spanMin : 0);
     const b = both ?? 0;
     const sides = sideFields(l, r, first, b);
-    const data: FeedData = { method: "breast", left_sec: l * 60, right_sec: r * 60, ...(b > 0 ? { both_sec: b * 60 } : {}), ...sides };
+    const data: FeedData = {
+      method: "breast",
+      left_sec: l * 60,
+      right_sec: r * 60,
+      ...(b > 0 ? { both_sec: b * 60 } : {}),
+      ...sides,
+      ...(shield ? { shield: true } : {}),
+      ...(planFeed ? { plan: planFeed } : {}),
+    };
     const endedAt = en.getTime() > s.getTime() ? en.toISOString() : undefined;
     // The next side as the card and the dock will show it once this is in the log (the Done toast's words): within
     // 30 minutes of its end, the other side from the one she ended on ("Left if she wants more"); else the
@@ -476,12 +551,35 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
           data,
           note: note.trim() || null,
         },
-        { toast: toastText }
+        milkOn ? { silent: true } : { toast: toastText }
       );
+      if (saved && milkOn) await saveMilkWith(saved, s, toastText, next);
       if (saved) onClose();
     } finally {
       setBusy(false);
     }
+  };
+
+  /**
+   * A new feed's milk at the breast, once the feed is saved: its own bottle entry at the feed's start, naming the feed
+   * (top_up_of; a feed still waiting offline has no id yet, and its start is inside the feed anyway). One toast says
+   * both ("Nursed 15m (L 10 · R 5) + 20 ml in the SNS · Right next time"), its Undo taking back both.
+   */
+  const saveMilkWith = async (feed: Entry, at: Date, feedText: string, next: string) => {
+    const milkData: FeedData = { method: "bottle", via: milkVia, ...(milkMl != null ? { amount_ml: milkMl } : {}), ...(milkKind ? { milk: milkKind } : {}), ...(feed.id > 0 ? { top_up_of: feed.id } : {}) };
+    const given = await log({ kind: "feed", started_at: at.toISOString(), data: milkData }, { silent: true });
+    if (!given || given.kind !== "feed") {
+      toast("The feed is saved, but its milk at the breast wasn't. Open the feed to add it.", { tone: "error" });
+      return;
+    }
+    // The side words go last, as on the Done toast.
+    const tail = next ? ` · ${next}` : "";
+    const head = tail && feedText.endsWith(tail) ? feedText.slice(0, -tail.length) : feedText;
+    toast(`${head} ${feedPartWords(given, units)}${head === feedText ? "" : tail}`, {
+      undo: () => {
+        void remove(given.id, { toast: "Undone" }).then((ok) => ok && remove(feed.id, { toast: "Undone" }));
+      },
+    });
   };
 
   const editPatch = (): UpdateEntryInput => {
@@ -520,6 +618,8 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     } else if (first !== origFirst) {
       data.first_side = first;
     }
+    // The shield, on or off (null takes it off the feed).
+    if (shieldChanged) data.shield = shield ? true : null;
     const hasData = Object.keys(data).length > 0;
     // The store otherwise infers a manual feed's end after any start or data edit.
     const keepEnd = endMoved || minutesChanged || (!timed && (startMoved || hasData));
@@ -586,6 +686,8 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     const data: Record<string, unknown> = { segments: draft.data.segments };
     // PATCH merges data: a flag the engine dropped (the end moved off the pause, a side added after it) has to be cleared by name.
     if (liveFeed.data.paused_at_stop && !draft.data.paused_at_stop) data.paused_at_stop = null;
+    // The shield switched too: it goes in the same save.
+    if (shieldChanged) data.shield = shield ? true : null;
     // A newer version with the same times (not a conflict) is the one this saves on top of.
     const expect = liveKey === draft.baseKey ? liveFeed.updated_at : draft.base;
     const patch: UpdateEntryInput = { data, started_at: draft.startedAt, ended_at: draft.endedAt, expect_updated_at: expect, ...notePatch };
@@ -668,6 +770,118 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     </div>
   );
 
+  // Another entry's form (a part of this feed) replaces this one: unsaved changes here ask first.
+  const leaveFor = (go: () => void) => {
+    if ((fieldsDirty || dirty || addBlocked || timeInvalid) && !readOnly && !window.confirm("Leave and discard your unsaved changes?")) return;
+    go();
+  };
+  const lastVia = (lastAtBreast && atBreastOf(lastAtBreast.data)) || "syringe";
+  // A saved feed's milk at the breast, added afterwards: a bottle at the feed's start that names it, as last time.
+  const addMilkTo = (f: Entry) =>
+    leaveFor(() =>
+      openSheet({
+        kind: "feed",
+        preset: {
+          method: "bottle",
+          via: lastVia,
+          ...(lastAtBreast?.data.amount_ml != null ? { amount_ml: lastAtBreast.data.amount_ml } : {}),
+          ...(lastAtBreast?.data.milk ? { milk: lastAtBreast.data.milk } : {}),
+          started_at: f.started_at,
+          top_up_of: f.id,
+        },
+      })
+    );
+  const allAtBreast = feedPartsHere.length > 0 && feedPartsHere.every((b) => !!atBreastOf(b.data));
+  // The feed's own parts: its shield, and its milk at the breast (a new feed's to say here; a saved one's to open).
+  const feedOwnParts = (
+    <>
+      <div className="flex min-h-[44px] items-center justify-between gap-4">
+        <Label className="mb-0">Nipple shield</Label>
+        <FormSwitch checked={shield} onChange={setShield} label="Nipple shield" disabled={readOnly} />
+      </div>
+      {!e ? (
+        <section aria-label="Milk at the breast">
+          <div className="flex min-h-[44px] items-center justify-between gap-4">
+            <span className="min-w-0">
+              <Label className="mb-0">Milk at the breast</Label>
+              {!milkOn && <span className={cx(tone.muted, "block text-[13px] leading-snug")}>By syringe or SNS while {w.he} nursed</span>}
+            </span>
+            <FormSwitch checked={milkOn} onChange={setMilkOn} label="Milk at the breast" disabled={readOnly} />
+          </div>
+          {milkOn && (
+            <div className="mt-3 space-y-4">
+              <div role="group" aria-label="Which milk" className="flex flex-wrap gap-2">
+                {(Object.keys(MILK_LABEL) as Milk[]).map((m) => (
+                  <Chip key={m} selected={milkKind === m} onClick={() => setMilkKind(milkKind === m ? undefined : m)}>
+                    {MILK_LABEL[m]}
+                  </Chip>
+                ))}
+              </div>
+              <div>
+                <MiniStepper
+                  key="milk-amount"
+                  label="Amount"
+                  unit={units === "metric" ? "ml" : "oz"}
+                  ariaLabel={`milk at the breast, ${units === "metric" ? "millilitres" : "ounces"}`}
+                  value={milkAmount}
+                  onChange={setMilkAmount}
+                  onInvalid={checks.watch("milk-amount")}
+                  step={units === "metric" ? 5 : 0.25}
+                  decimals={units === "metric" ? 1 : 3}
+                  max={bottleLimit}
+                />
+                {zeroMilk && <p role="alert" className="mt-1.5 text-[13px] text-mp-danger">{ZERO_BOTTLE_HINT}</p>}
+              </div>
+              <Segmented<AtBreastVia>
+                aria-label="How it was given"
+                value={milkVia}
+                onChange={setMilkVia}
+                options={[
+                  { value: "syringe", label: AT_BREAST_WORDS.syringe.name },
+                  { value: "sns", label: AT_BREAST_WORDS.sns.name },
+                ]}
+              />
+              <p className={cx(tone.muted, "text-[13px] leading-snug")}>Saved with this feed: part of it, not a feed of its own.</p>
+            </div>
+          )}
+        </section>
+      ) : (
+        (feedPartsHere.length > 0 || !readOnly) && (
+          <section aria-label={feedPartsHere.length && !allAtBreast ? "With this feed" : "Milk at the breast"}>
+            <Label>{feedPartsHere.length && !allAtBreast ? "With this feed" : "Milk at the breast"}</Label>
+            <div className={cx(tone.card, tone.divide, "overflow-hidden")}>
+              {feedPartsHere.map((b) => {
+                const part = feedPartWords(b, units).slice(2);
+                const more = [milkWords(b.data, units), b.data.via === "paced" ? "paced bottle" : null, clock(b.started_at)].filter(Boolean).join(" · ");
+                return (
+                  <button
+                    key={b.id}
+                    type="button"
+                    onClick={() => leaveFor(() => openSheet({ kind: "feed", entry: b }))}
+                    aria-label={`${readOnly ? "" : "Edit: "}${part}, ${more}`}
+                    className={cx(tone.row, "min-h-[52px] py-2")}
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className={cx(tone.body, "block text-[15px] font-medium")}>{part.charAt(0).toUpperCase() + part.slice(1)}</span>
+                      <span className={cx(tone.muted, "block text-[13px]")}>{more}</span>
+                    </span>
+                    <Icon name="chevron-right" size={18} className="shrink-0 text-mp-ink-3" />
+                  </button>
+                );
+              })}
+              {!readOnly && !feedPartsHere.some((b) => !!atBreastOf(b.data)) && (
+                <button type="button" onClick={() => addMilkTo(e)} className={cx(tone.row, "min-h-[48px] py-2 text-[15px] font-medium text-mp-accent-fg")}>
+                  <Icon name="plus" size={18} className="shrink-0" />
+                  <span className="min-w-0 flex-1">Add milk at the breast</span>
+                </button>
+              )}
+            </div>
+          </section>
+        )
+      )}
+    </>
+  );
+
   return (
     <Sheet
       open={open}
@@ -702,13 +916,13 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
               onPrimary={() => void (conflict ? startOver() : dirty ? saveTimes() : save())}
               label={conflict ? "Start over" : primary}
               busy={busy}
-              disabled={savedChanged || manualTimeInvalid || gone || (!!e && e.id < 0) || (!running && checks.invalid) || (!conflict && (addBlocked || timeInvalid)) || empty || addOnly || zeroBottle || amountOverLimit || partOver}
+              disabled={savedChanged || manualTimeInvalid || gone || (!!e && e.id < 0) || (!running && checks.invalid) || (!conflict && (addBlocked || timeInvalid)) || empty || addOnly || zeroBottle || zeroMilk || amountOverLimit || partOver}
               hint={
                 gone
                   ? "Nothing to save: it's gone."
                   : !running && (checks.invalid || amountOverLimit)
                   ? CHECK_NUMBER_HINT
-                  : zeroBottle
+                  : zeroBottle || zeroMilk
                     ? ZERO_BOTTLE_HINT
                   : partOver
                     ? PART_OVER_HINT
@@ -796,6 +1010,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                       {startedOn}
                     </MoreDetails>
                   )}
+                  {!preset?.editTime && feedOwnParts}
                 </>
               )
             ) : (
@@ -818,6 +1033,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                     setRange([s, en]);
                   }}
                 />
+                {feedOwnParts}
               </>
             )
           ) : (
@@ -886,7 +1102,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                 </div>
                 {lastBottle?.data.amount_ml != null && !e && (
                   <p className={cx(tone.muted, "mt-1.5 text-xs")}>
-                    Last bottle: {formatVolume(lastBottle.data.amount_ml, units)}
+                    {forBreast ? "Last at the breast" : "Last bottle"}: {formatVolume(lastBottle.data.amount_ml, units)}
                     {lastBottle.data.milk ? ` of ${MILK_LABEL[lastBottle.data.milk].toLowerCase()}` : ""} at {clock(lastBottle.started_at)}
                   </p>
                 )}
@@ -894,7 +1110,9 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
               <WhenField value={when} onChange={setWhen} onInvalidChange={setManualTimeInvalid} tz={tz} />
               {topUpOf && (
                 <p className={cx(tone.muted, "-mt-2 text-[13px] leading-snug")}>
-                  A top-up for the {clock(new Date(topUpOf.start).toISOString())} feed: part of that feed, not a feed of its own.
+                  {breastVia
+                    ? `Milk at the breast with the ${clock(new Date(topUpOf.start).toISOString())} feed: part of that feed, not a feed of its own.`
+                    : `A top-up for the ${clock(new Date(topUpOf.start).toISOString())} feed: part of that feed, not a feed of its own.`}
                 </p>
               )}
               <section aria-label="How it was given">
@@ -935,6 +1153,35 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       <NoteField value={note} onChange={setNote} readOnly={readOnly} />
       </fieldset>
     </Sheet>
+  );
+}
+
+/** An iOS-style switch (Family's): a 44px target around the 51×31 track; at night on is filled and off is hollow. */
+function FormSwitch({ checked, onChange, label, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className="-my-1.5 flex h-11 shrink-0 items-center disabled:opacity-40"
+    >
+      <span
+        className={cx(
+          "relative block h-[31px] w-[51px] rounded-full transition-colors",
+          checked ? "bg-mp-accent [.maple-night_&]:bg-[rgb(224_169_59/0.3)]" : "bg-mp-sunken ring-1 ring-mp-line ring-inset [.maple-night_&]:bg-transparent"
+        )}
+      >
+        <span
+          className={cx(
+            "absolute top-[2px] left-[2px] h-[27px] w-[27px] rounded-full bg-white shadow-[0_2px_5px_rgba(0,0,0,0.18)] transition-transform",
+            checked ? "translate-x-5 [.maple-night_&]:bg-mp-on-accent" : "[.maple-night_&]:bg-transparent [.maple-night_&]:shadow-[inset_0_0_0_2px_rgb(224_169_59/0.5)]"
+          )}
+        />
+      </span>
+    </button>
   );
 }
 

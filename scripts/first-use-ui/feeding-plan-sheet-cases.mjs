@@ -1,0 +1,438 @@
+/**
+ * The feeding plan's sheet (src/components/maple/feeding/FeedingPlanSheet.tsx): the plan laid out to read, the empty
+ * state's two ways to add one, the form (the exact PATCH it sends, only what changed), a refusal shown at the top,
+ * another phone's change loaded, removing it, a new plan from a starting shape, ounces sent as ml, and a viewer who
+ * only reads it. The ways in are Settings (Doctor & care plan; Baby details for a viewer) and More.
+ *
+ * An invented plan, never any family's (scripts/maple-feeding-plan-check.ts's): by day every 2.5 to 3.5 hours, taking
+ * turns between "Nurse + SNS" (12–18 min with a nipple shield, 20 ml of formula in the SNS, then pump 15) and "Nurse,
+ * top up" (8–12 min each side, then a 25–35 ml paced top-up); at night (11 PM–5 AM) every 3 hours, waking, "Pump +
+ * bottle"; a target of 50–70 ml from a "Feeding clinic".
+ */
+export function feedingPlanSheetCases({ fixture, freshState, assert }) {
+  const PLAN = {
+    v: 1,
+    from: "Feeding clinic",
+    check_in: "2026-10-30",
+    unit: "ml",
+    day: { every: { min: 150, max: 210 } },
+    night: { from: "23:00", to: "05:00", every: { min: 180, max: 180 }, wake: true, feed: "p1f3" },
+    feeds: [
+      { id: "p1f1", name: "Nurse + SNS", steps: [{ do: "nurse", minutes: { min: 12, max: 18 }, shield: true, supplement: { via: "sns", ml: { min: 20, max: 20 }, milk: "formula" } }, { do: "pump", minutes: { min: 15, max: 15 } }] },
+      { id: "p1f2", name: "Nurse, top up", steps: [{ do: "nurse", minutes: { min: 8, max: 12 }, each_side: true }, { do: "bottle", ml: { min: 25, max: 35 }, milk: "either", via: "paced" }] },
+      { id: "p1f3", name: "Pump + bottle", steps: [{ do: "pump", minutes: { min: 20, max: 20 } }, { do: "bottle", milk: "breastmilk_first", to_target: true }, { do: "note", text: "Burp halfway" }] },
+    ],
+    order: ["p1f1", "p1f2"],
+    notes: "Weigh at the clinic on Friday.",
+    rev: 3,
+    updated_at: "2026-10-27T12:00:00.000Z",
+  };
+  /** The plan as this sheet sends it back untouched (amounts in ml, feeds by their place). */
+  const SENT = {
+    from: "Feeding clinic",
+    check_in: "2026-10-30",
+    unit: "ml",
+    day: { every: { min: 150, max: 210 } },
+    feeds: [
+      { id: "p1f1", name: "Nurse + SNS", steps: [{ do: "nurse", minutes: { min: 12, max: 18 }, shield: true, supplement: { via: "sns", ml: { min: 20, max: 20 }, milk: "formula" } }, { do: "pump", minutes: { min: 15, max: 15 } }] },
+      { id: "p1f2", name: "Nurse, top up", steps: [{ do: "nurse", minutes: { min: 8, max: 12 }, each_side: true }, { do: "bottle", ml: { min: 25, max: 35 }, milk: "either", via: "paced" }] },
+      { id: "p1f3", name: "Pump + bottle", steps: [{ do: "pump", minutes: { min: 20, max: 20 } }, { do: "bottle", to_target: true, milk: "breastmilk_first" }, { do: "note", text: "Burp halfway" }] },
+    ],
+    order: [1, 2],
+    notes: "Weigh at the clinic on Friday.",
+    night: { from: "23:00", to: "05:00", every: { min: 180, max: 180 }, wake: true, feed: 3 },
+  };
+  const planned = ({ plan = PLAN, target = { min: 50, max: 70 }, role } = {}) => {
+    const state = freshState();
+    state.baby.settings = { show_alerts: false, ...(plan ? { feeding_plan: structuredClone(plan) } : {}), ...(target ? { feed_target_ml: target } : {}) };
+    if (role) {
+      state.me = { ...state.me, role };
+      state.members = [state.me];
+    }
+    return state;
+  };
+  const metric = (f) => f.page.addInitScript(() => localStorage.setItem("maple-units", "metric"));
+  /**
+   * PATCH /api/maple/baby as the server answers it: the settings merged (null removes), the plan a new revision,
+   * the state's rev moved so the next read brings it. `reply(body, n)` answers the nth PATCH some other way.
+   */
+  const server = (reply) => {
+    const patches = [];
+    return {
+      patches,
+      apiResponse: ({ route, req, url, state }) => {
+        if (url.pathname === "/api/maple/chat" && req.method() === "GET") return route.fulfill({ json: { current: null, items: [], more: false } });
+        if (url.pathname !== "/api/maple/baby" || req.method() !== "PATCH") return route.fulfill({ status: 500, json: { error: "Unexpected synthetic endpoint" } });
+        const body = req.postDataJSON();
+        patches.push(body);
+        const custom = reply?.(body, patches.length, state);
+        if (custom) return route.fulfill(custom);
+        const settings = { ...state.baby.settings };
+        for (const [k, v] of Object.entries(body.settings)) {
+          if (k === "feeding_plan_base_rev") continue;
+          if (v === null) delete settings[k];
+          else if (k === "feeding_plan") {
+            const { base_rev: _base, ...plan } = v;
+            settings[k] = { v: 1, ...plan, rev: (state.baby.settings.feeding_plan?.rev ?? 0) + 1, updated_at: "2026-10-28T13:30:00.000Z" };
+          } else settings[k] = v;
+        }
+        state.baby = { ...state.baby, settings };
+        state.rev = `plan-${patches.length}`;
+        return route.fulfill({ json: { baby: state.baby } });
+      },
+    };
+  };
+  const waitFor = async (f, fn, what) => {
+    for (let i = 0; i < 40; i++) {
+      if (fn()) return;
+      await f.page.waitForTimeout(50);
+    }
+    assert.fail(`timed out waiting for ${what}`);
+  };
+  const dialog = (f, name) => f.page.getByRole("dialog", { name, exact: true });
+  /** More → Feeding plan. */
+  const fromMore = async (f) => {
+    await f.page.goto("https://first-use.example.test/#today");
+    await f.page.getByRole("button", { name: "More", exact: true }).click();
+    await dialog(f, "More to log").getByRole("button", { name: /^Feeding plan/ }).click();
+    const sheet = dialog(f, "Feeding plan");
+    await sheet.waitFor();
+    return sheet;
+  };
+  /** Settings → a page → Feeding plan. */
+  const fromSettings = async (f, page) => {
+    await f.page.goto(`https://first-use.example.test/#family/${page}`);
+    await f.page.getByRole("button", { name: /^Feeding plan/ }).click();
+    const sheet = dialog(f, "Feeding plan");
+    await sheet.waitFor();
+    return sheet;
+  };
+  const edit = async (f, sheet) => {
+    await sheet.getByRole("button", { name: "Edit the plan", exact: true }).click();
+    const form = dialog(f, "Edit the feeding plan");
+    await form.waitFor();
+    return form;
+  };
+  const box = (form, name) => form.getByRole("textbox", { name, exact: true });
+  /** A saved feed starts folded to one line: open it to change it. */
+  const unfold = (form, name) => form.getByRole("button", { name: new RegExp(`^${name.replace(/[+]/g, "\\+")}`), expanded: false }).click();
+
+  return [
+    ["Feeding plan sheet: the plan reads as its care team wrote it, its feeds in the order they take turns", async () => {
+      const f = await fixture({ state: planned(), apiResponse: server().apiResponse });
+      try {
+        await metric(f);
+        const sheet = await fromMore(f);
+        const text = (await sheet.innerText()).replace(/\s+/g, " ");
+        assert.match(text, /From Feeding clinic · Check-in Fri, Oct 30/);
+        assert.match(text, /Target per feed 50–70 ml/);
+        assert.match(text, /By day Every 2\.5–3\.5 hours From the start of one feed to the next/);
+        assert.match(text, /Taking turns by day 1 Nurse \+ SNS 2 Nurse, top up/);
+        // No sex set: the baby's name stands in for "her".
+        assert.match(text, /At night 11 PM to 5 AM · Pump \+ bottle Every 3 hours · wake River to feed by the end/);
+        assert.deepEqual(await sheet.getByRole("article").evaluateAll((list) => list.map((a) => a.getAttribute("aria-label"))), ["Nurse + SNS", "Nurse, top up", "Pump + bottle"]);
+        const steps = async (name) => (await sheet.getByRole("article", { name, exact: true }).getByRole("listitem").allTextContents()).map((s) => s.replace(/\s+/g, " ").trim());
+        assert.deepEqual(await steps("Nurse + SNS"), ["1Step 1: Nurse 12–18 min with the nipple shield, 20 ml of formula in the SNS", "2Step 2: Pump 15 min"]);
+        assert.deepEqual(await steps("Nurse, top up"), ["1Step 1: Nurse 8–12 min each side", "2Step 2: Top up 25–35 ml, formula or breast milk, paced bottle"]);
+        assert.deepEqual(await steps("Pump + bottle"), ["1Step 1: Pump 20 min", "2Step 2: Bottle up to 50–70 ml, pumped milk first, then formula to finish", "Burp halfway"]);
+        assert.match(await sheet.getByRole("article", { name: "Nurse + SNS", exact: true }).textContent(), /Turn 1/);
+        assert.match(await sheet.getByRole("article", { name: "Pump + bottle", exact: true }).textContent(), /At night/);
+        assert.match(text, /Notes Weigh at the clinic on Friday\./);
+        for (const name of ["Edit the plan", "Change it in the chat", "Remove plan"]) assert(await sheet.getByRole("button", { name, exact: true }).isVisible(), `${name} is offered`);
+        assert.equal(await f.page.evaluate(() => document.documentElement.scrollWidth), 390, "nothing scrolls sideways");
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["Feeding plan sheet: with no plan, what it does, Add a plan, or a photo of the plan to the chat", async () => {
+      const s = server();
+      const f = await fixture({ state: planned({ plan: null, target: null }), apiResponse: s.apiResponse });
+      try {
+        await f.page.goto("https://first-use.example.test/#today");
+        await f.page.getByRole("button", { name: "More", exact: true }).click();
+        const row = dialog(f, "More to log").getByRole("button", { name: /^Feeding plan/ });
+        assert.match(await row.textContent(), /Add your care team's plan/);
+        await row.click();
+        const sheet = dialog(f, "Feeding plan");
+        await sheet.waitFor();
+        assert.match(await sheet.textContent(), /A plan from your care team.*Today then shows which feed is next, when it's due and its steps, one tap each\./);
+        assert(await sheet.getByRole("button", { name: "Add a plan", exact: true }).isVisible());
+        await sheet.getByRole("button", { name: "Send a photo of your plan to the chat", exact: true }).click();
+        await sheet.waitFor({ state: "hidden" });
+        const message = f.page.getByRole("textbox", { name: "Message", exact: true });
+        await message.waitFor();
+        for (let i = 0; i < 40 && !(await message.inputValue()); i++) await f.page.waitForTimeout(50);
+        assert.equal(await message.inputValue(), "Please add our feeding plan from this photo, and read it back to me before saving it.");
+        assert.equal(s.patches.length, 0);
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["Feeding plan sheet: an edit sends the whole plan in ml with the revision it began from, and the target that changed", async () => {
+      const s = server();
+      const f = await fixture({ state: planned(), apiResponse: s.apiResponse });
+      try {
+        await metric(f);
+        // Settings → Doctor & care plan → Feeding plan, beside the target per feed.
+        await f.page.goto("https://first-use.example.test/#family/doctor");
+        const row = f.page.getByRole("button", { name: /^Feeding plan/ });
+        assert.match(await row.textContent(), /From Feeding clinic · 3 feeds/);
+        await row.click();
+        const form = await edit(f, dialog(f, "Feeding plan"));
+        // Saved feeds start folded to their steps in the plan's words.
+        const folded = form.getByRole("button", { name: /^Pump \+ bottle/, expanded: false });
+        assert.match((await folded.innerText()).replace(/\s+/g, " "), /Pump \+ bottle Pump 20 min; then bottle up to 50–70 ml, pumped milk first, then formula to finish; then burp halfway Change/);
+        await unfold(form, "Nurse + SNS");
+        await unfold(form, "Nurse, top up");
+        // One number reads as one box: "15 to [ ] min".
+        assert.equal(await box(form, "Nurse + SNS, step 2, pump minutes, from").inputValue(), "15");
+        assert.equal(await box(form, "Nurse + SNS, step 2, pump minutes, up to").inputValue(), "");
+        await box(form, "Nurse, top up, step 1, nursing minutes, up to").fill("15");
+        await box(form, "target per feed, in ml, up to").fill("75");
+        await form.getByRole("button", { name: "Save the plan", exact: true }).click();
+        await waitFor(f, () => s.patches.length > 0, "the save");
+        const sent = structuredClone(SENT);
+        sent.feeds[1].steps[0].minutes = { min: 8, max: 15 };
+        assert.deepEqual(s.patches[0], { settings: { feeding_plan: { ...sent, base_rev: 3 }, feed_target_ml: { min: 50, max: 75 } } });
+        // Back to the plan, as saved.
+        const sheet = dialog(f, "Feeding plan");
+        await sheet.waitFor();
+        const text = (await sheet.innerText()).replace(/\s+/g, " ");
+        assert.match(text, /Nurse 8–15 min each side/);
+        assert.match(text, /Target per feed 50–75 ml/);
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["Feeding plan sheet: Save sends only what changed: nothing for an untouched plan, the target alone when only it changed", async () => {
+      const s = server();
+      const f = await fixture({ state: planned(), apiResponse: s.apiResponse });
+      try {
+        await metric(f);
+        let form = await edit(f, await fromMore(f));
+        await form.getByRole("button", { name: "Save the plan", exact: true }).click();
+        await dialog(f, "Feeding plan").waitFor();
+        assert.equal(s.patches.length, 0, "an untouched plan isn't saved again");
+        form = await edit(f, dialog(f, "Feeding plan"));
+        await box(form, "target per feed, in ml, from").fill("55");
+        await form.getByRole("button", { name: "Save the plan", exact: true }).click();
+        await waitFor(f, () => s.patches.length > 0, "the save");
+        assert.deepEqual(s.patches[0], { settings: { feed_target_ml: { min: 55, max: 70 } } });
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["Feeding plan sheet: a plan that can't be saved says why at the top, by the feed it's about; the server's refusal shows there too", async () => {
+      const s = server((body, n) => (n === 1 ? { status: 400, json: { error: "Synthetic refusal from the server" } } : null));
+      const f = await fixture({ state: planned(), apiResponse: s.apiResponse });
+      try {
+        await metric(f);
+        const form = await edit(f, await fromMore(f));
+        // Checked here first, in the server's words: nothing is sent.
+        await unfold(form, "Nurse, top up");
+        await box(form, "Feed 2 name").fill("");
+        await form.getByRole("button", { name: "Save the plan", exact: true }).click();
+        const alerts = form.getByRole("alert");
+        await alerts.first().waitFor();
+        assert.deepEqual((await alerts.allTextContents()).map((t) => t.trim()), ["Feed 2's name is needed", "Feed 2's name is needed"], "at the top and by the feed");
+        assert.equal(s.patches.length, 0);
+        // A night without its hours.
+        await box(form, "Feed 2 name").fill("Nurse, top up");
+        await form.getByLabel("Night starts", { exact: true }).fill("");
+        await form.getByRole("button", { name: "Save the plan", exact: true }).click();
+        assert.match(await form.getByRole("alert").first().textContent(), /Say when the night starts and ends/);
+        assert.equal(s.patches.length, 0);
+        // The server's own refusal, word for word.
+        await form.getByLabel("Night starts", { exact: true }).fill("23:00");
+        await form.getByRole("textbox", { name: "Notes", exact: true }).fill("Weigh at the clinic on Thursday.");
+        await form.getByRole("button", { name: "Save the plan", exact: true }).click();
+        await waitFor(f, () => s.patches.length > 0, "the save");
+        await form.getByText("Synthetic refusal from the server", { exact: true }).waitFor();
+        assert(await dialog(f, "Edit the feeding plan").isVisible(), "the form stays open with the changes");
+        assert.equal(await form.getByRole("textbox", { name: "Notes", exact: true }).inputValue(), "Weigh at the clinic on Thursday.");
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["Feeding plan sheet: changed on another phone meanwhile, nothing is saved, and the latest loads to change again", async () => {
+      const latest = structuredClone(PLAN);
+      latest.feeds[1].name = "Nurse both sides, top up";
+      latest.rev = 4;
+      const s = server((body, n, state) => {
+        if (n !== 1) return null;
+        state.baby = { ...state.baby, settings: { ...state.baby.settings, feeding_plan: latest } };
+        state.rev = "plan-elsewhere";
+        return { status: 409, json: { error: "The feeding plan was changed on another phone. Here's the latest; make your change again.", reason: "plan_changed", feeding_plan: latest } };
+      });
+      const f = await fixture({ state: planned(), apiResponse: s.apiResponse });
+      try {
+        await metric(f);
+        const form = await edit(f, await fromMore(f));
+        await form.getByRole("textbox", { name: "Notes", exact: true }).fill("Weigh on Friday.");
+        await form.getByRole("button", { name: "Save the plan", exact: true }).click();
+        await waitFor(f, () => s.patches.length > 0, "the save");
+        const alert = form.getByRole("alert").filter({ hasText: "another phone" });
+        await alert.waitFor();
+        assert.match(await alert.textContent(), /The feeding plan was changed on another phone just now, so this wasn't saved\./);
+        await alert.getByRole("button", { name: "Load the latest", exact: true }).click();
+        await unfold(form, "Nurse both sides, top up");
+        assert.equal(await box(form, "Feed 2 name").inputValue(), "Nurse both sides, top up");
+        assert.equal(await form.getByRole("textbox", { name: "Notes", exact: true }).inputValue(), "Weigh at the clinic on Friday.");
+        await form.getByRole("textbox", { name: "Notes", exact: true }).fill("Weigh on Friday.");
+        await form.getByRole("button", { name: "Save the plan", exact: true }).click();
+        await waitFor(f, () => s.patches.length > 1, "the second save");
+        const again = s.patches[1].settings.feeding_plan;
+        assert.equal(again.base_rev, 4, "the second save names the latest revision");
+        assert.equal(again.feeds[1].name, "Nurse both sides, top up");
+        assert.equal(again.notes, "Weigh on Friday.");
+        assert.equal("feed_target_ml" in s.patches[1].settings, false);
+        await dialog(f, "Feeding plan").waitFor();
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["Feeding plan sheet: Remove asks first, then removes only the plan this phone saw", async () => {
+      const s = server();
+      const f = await fixture({ state: planned(), apiResponse: s.apiResponse });
+      try {
+        await metric(f);
+        const sheet = await fromMore(f);
+        await sheet.getByRole("button", { name: "Remove plan", exact: true }).click();
+        const confirm = dialog(f, "Remove the feeding plan?");
+        await confirm.waitFor();
+        assert.match(await confirm.textContent(), /Today stops showing the next feed from it\. Feeds already logged stay as they are\./);
+        await confirm.getByRole("button", { name: "Remove plan", exact: true }).click();
+        await waitFor(f, () => s.patches.length > 0, "the removal");
+        assert.deepEqual(s.patches[0], { settings: { feeding_plan: null, feeding_plan_base_rev: 3 } });
+        await confirm.waitFor({ state: "hidden" });
+        await sheet.getByRole("button", { name: "Add a plan", exact: true }).waitFor();
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["Feeding plan sheet: a new plan starts from a shape, the kinds of step without numbers, and saves as typed", async () => {
+      const s = server();
+      const f = await fixture({ state: planned({ plan: null, target: null }), apiResponse: s.apiResponse });
+      try {
+        await metric(f);
+        const sheet = await fromMore(f);
+        await sheet.getByRole("button", { name: "Add a plan", exact: true }).click();
+        const shapes = dialog(f, "New feeding plan");
+        await shapes.getByRole("button", { name: /^Two feeds taking turns/ }).click();
+        const form = dialog(f, "New feeding plan");
+        await box(form, "Feed 1 name").waitFor();
+        assert.equal(await box(form, "Feed 1 name").inputValue(), "Nurse, then pump");
+        assert.equal(await box(form, "Feed 2 name").inputValue(), "Nurse, then top up");
+        // No numbers made up: every amount and minute is empty until typed.
+        for (const name of ["Nurse, then pump, step 1, nursing minutes, from", "Nurse, then pump, step 2, pump minutes, from", "Nurse, then top up, step 2, amount, in ml, from"]) assert.equal(await box(form, name).inputValue(), "");
+        await box(form, "Nurse, then pump, step 1, nursing minutes, from").fill("10");
+        await box(form, "Nurse, then pump, step 1, nursing minutes, up to").fill("15");
+        await box(form, "Nurse, then pump, step 2, pump minutes, from").fill("15");
+        await box(form, "Nurse, then top up, step 1, nursing minutes, from").fill("10");
+        await form.getByRole("group", { name: "Nurse, then top up, step 1: how", exact: true }).getByRole("button", { name: "Each side", exact: true }).click();
+        await box(form, "Nurse, then top up, step 2, amount, in ml, from").fill("25");
+        await box(form, "Nurse, then top up, step 2, amount, in ml, up to").fill("35");
+        await form.getByRole("button", { name: "Half an hour more, hours between feeds by day, from", exact: true }).click();
+        await box(form, "hours between feeds by day, from").fill("2.5");
+        await form.getByRole("button", { name: "Half an hour more, hours between feeds by day, to", exact: true }).click();
+        assert.equal(await box(form, "hours between feeds by day, to").inputValue(), "3", "an empty To goes on from From");
+        await form.getByRole("button", { name: "Save the plan", exact: true }).click();
+        await waitFor(f, () => s.patches.length > 0, "the save");
+        assert.deepEqual(s.patches[0], {
+          settings: {
+            feeding_plan: {
+              unit: "ml",
+              day: { every: { min: 150, max: 180 } },
+              feeds: [
+                { name: "Nurse, then pump", steps: [{ do: "nurse", minutes: { min: 10, max: 15 } }, { do: "pump", minutes: { min: 15, max: 15 } }] },
+                { name: "Nurse, then top up", steps: [{ do: "nurse", minutes: { min: 10, max: 10 }, each_side: true }, { do: "bottle", ml: { min: 25, max: 35 } }] },
+              ],
+              order: [1, 2],
+            },
+          },
+        });
+        await dialog(f, "Feeding plan").waitFor();
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["Feeding plan sheet: a plan written in ounces keeps oz and sends its amounts as ml", async () => {
+      const s = server();
+      // US units on this phone: a new plan starts in oz.
+      const f = await fixture({ state: planned({ plan: null, target: null }), apiResponse: s.apiResponse });
+      try {
+        const sheet = await fromMore(f);
+        await sheet.getByRole("button", { name: "Add a plan", exact: true }).click();
+        await dialog(f, "New feeding plan").getByRole("button", { name: /^Pump and bottle/ }).click();
+        const form = dialog(f, "New feeding plan");
+        await box(form, "Pump and bottle, step 2, amount, in oz, from").fill("1");
+        await box(form, "Pump and bottle, step 2, amount, in oz, up to").fill("1.5");
+        await box(form, "target per feed, in oz, from").fill("2");
+        // Switching the unit shows the same amounts in ml, never different ones.
+        await form.getByRole("radio", { name: "ml", exact: true }).click();
+        assert.equal(await box(form, "Pump and bottle, step 2, amount, in ml, from").inputValue(), "29.6");
+        await form.getByRole("radio", { name: "oz", exact: true }).click();
+        assert.equal(await box(form, "Pump and bottle, step 2, amount, in oz, from").inputValue(), "1");
+        await form.getByRole("button", { name: "Save the plan", exact: true }).click();
+        await waitFor(f, () => s.patches.length > 0, "the save");
+        assert.deepEqual(s.patches[0], {
+          settings: {
+            feeding_plan: { unit: "oz", day: {}, feeds: [{ name: "Pump and bottle", steps: [{ do: "pump" }, { do: "bottle", ml: { min: 29.6, max: 44.4 } }] }], order: [1] },
+            feed_target_ml: { min: 59.1, max: 59.1 },
+          },
+        });
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["Feeding plan sheet: closing an edited plan asks before the changes go", async () => {
+      const s = server();
+      const f = await fixture({ state: planned(), apiResponse: s.apiResponse });
+      try {
+        await metric(f);
+        const form = await edit(f, await fromMore(f));
+        await form.getByRole("textbox", { name: "Notes", exact: true }).fill("Weigh on Thursday.");
+        await form.getByRole("button", { name: "Close", exact: true }).first().click();
+        const ask = dialog(f, "Discard unsaved changes?");
+        await ask.waitFor();
+        await ask.getByRole("button", { name: "Keep editing", exact: true }).click();
+        assert.equal(await form.getByRole("textbox", { name: "Notes", exact: true }).inputValue(), "Weigh on Thursday.");
+        // Cancel asks too, then the plan shows as it was.
+        await form.getByRole("button", { name: "Cancel", exact: true }).click();
+        await dialog(f, "Discard unsaved changes?").getByRole("button", { name: "Discard changes", exact: true }).click();
+        const sheet = dialog(f, "Feeding plan");
+        await sheet.waitFor();
+        assert.match(await sheet.textContent(), /Weigh at the clinic on Friday\./);
+        assert.equal(s.patches.length, 0);
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["Feeding plan sheet: a feed taken out can be put back as it was, and a feed holding a typo can't fold away", async () => {
+      const s = server();
+      const f = await fixture({ state: planned(), apiResponse: s.apiResponse });
+      try {
+        await metric(f);
+        const form = await edit(f, await fromMore(f));
+        await unfold(form, "Nurse, top up");
+        await form.getByRole("button", { name: "Take out Nurse, top up", exact: true }).click();
+        assert.equal(await form.getByRole("group", { name: "Feed 3", exact: true }).count(), 0, "two feeds left");
+        await f.page.getByRole("button", { name: "Put it back", exact: true }).click();
+        await form.getByRole("button", { name: /^Nurse, top up/, expanded: false }).waitFor();
+        assert.deepEqual(await form.getByRole("list", { name: "Taking turns by day", exact: true }).getByRole("listitem").allInnerTexts().then((rows) => rows.map((r) => r.replace(/\s+/g, " ").trim())), ["1 Nurse + SNS", "2 Nurse, top up"]);
+        // A typo holds the feed open (folding would hide it) and holds Save.
+        await unfold(form, "Nurse + SNS");
+        await box(form, "Nurse + SNS, step 1, nursing minutes, from").fill("1..2");
+        assert(await form.getByRole("button", { name: "Fold Nurse + SNS to one line", exact: true }).isDisabled());
+        assert(await form.getByRole("button", { name: "Save the plan", exact: true }).isDisabled());
+        await box(form, "Nurse + SNS, step 1, nursing minutes, from").fill("12");
+        assert(await form.getByRole("button", { name: "Fold Nurse + SNS to one line", exact: true }).isEnabled());
+        // Put back as it was: nothing to save.
+        await form.getByRole("button", { name: "Save the plan", exact: true }).click();
+        await dialog(f, "Feeding plan").waitFor();
+        assert.equal(s.patches.length, 0);
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["Feeding plan sheet: a viewer reads the plan from Baby details, with nothing to change", async () => {
+      const f = await fixture({ state: planned({ role: "viewer" }), apiResponse: server().apiResponse });
+      try {
+        await metric(f);
+        const sheet = await fromSettings(f, "baby");
+        assert.match(await sheet.textContent(), /Nurse 12–18 min with the nipple shield/);
+        for (const name of ["Edit the plan", "Change it in the chat", "Remove plan", "Add a plan"]) assert.equal(await sheet.getByRole("button", { name, exact: true }).count(), 0, `a viewer has no ${name}`);
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+  ];
+}

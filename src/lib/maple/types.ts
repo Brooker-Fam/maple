@@ -44,8 +44,12 @@ export type TimerKind = (typeof TIMER_KINDS)[number];
 
 export type Segment = { side: StretchSide; start: string; end: string | null };
 
-/** How a bottle's milk was given: a bottle, a paced bottle, or an SNS (supplementer) at the breast. */
-export const BOTTLE_VIAS = ["bottle", "paced", "sns"] as const;
+/**
+ * How a bottle's milk was given: a bottle, a paced bottle, or at the breast
+ * while she nursed, by an SNS (supplementer) or a syringe. Milk at the breast
+ * reads as part of that nursing feed (feed.ts top-ups, describe.ts).
+ */
+export const BOTTLE_VIAS = ["bottle", "paced", "sns", "syringe"] as const;
 export type BottleVia = (typeof BOTTLE_VIAS)[number];
 
 /** Names one stretch on a side by its side and start, matched within ±1.5 s so it survives re-saves. */
@@ -71,8 +75,18 @@ export type FeedData = {
    */
   breastmilk_ml?: number;
   formula_ml?: number;
-  /** How the milk was given (BOTTLE_VIAS): a bottle, a paced bottle, or an SNS at the breast. Absent: not said. */
+  /** How the milk was given (BOTTLE_VIAS): a bottle, a paced bottle, or at the breast (an SNS, a syringe). Absent: not said. */
   via?: BottleVia;
+  /**
+   * A bottle given late for a feed that ended a while ago (the top-up the plan
+   * asked for): the id of a nursing entry of that feed, so it's that feed's
+   * top-up and not a feed of its own (feed.ts topUpRunFor, TOP_UP_LINK_MS).
+   */
+  top_up_of?: number;
+  /** Nursing: with a nipple shield. */
+  shield?: boolean;
+  /** The feeding plan's feed it was started under (settings.feeding_plan feeds[].id), on a nursing feed or a bottle. */
+  plan?: string;
   /**
    * Stopped while paused: the feed ended when she came off (ended_at = the
    * last segment's end), and reopening brings it back paused. Feeds stopped
@@ -390,6 +404,9 @@ export type Lifetime = {
   week?: { before: string; counts: { by: string | null; diapers: number; night: number }[] };
 };
 
+/** A nursing feed's start: a nipple shield, and the feeding plan's feed it follows. */
+export type StartWith = { shield?: boolean; plan?: string };
+
 /** POST /api/maple/timer */
 export type TimerInput = {
   action: TimerAction;
@@ -404,6 +421,12 @@ export type TimerInput = {
   side?: StretchSide;
   /** start (feeds): she's going back and forth from the start; `side` is still where she started. */
   back_and_forth?: boolean;
+  /**
+   * start (feeds): what the new feed carries from the start: a nipple shield,
+   * and the feeding plan's feed it follows (settings.feeding_plan). Only a new
+   * feed takes them; one already running (a switch) keeps its own.
+   */
+  with?: StartWith;
   /** switch/pause/resume/stop/discard/adjust/reopen/retime: which entry. */
   id?: number;
   /**

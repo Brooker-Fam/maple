@@ -159,6 +159,12 @@ export const CLUSTER_MIN_FEEDS = 3;
  * SAME_FEED_MS, not guidance.
  */
 export const TOP_UP_AFTER_MS = 30 * MIN;
+/**
+ * A bottle that names its feed (data.top_up_of: the feeding plan's top-up,
+ * given late) is that feed's top-up up to this long after it ended, unless
+ * another feed began first.
+ */
+export const TOP_UP_LINK_MS = 3 * HOUR;
 export const TOP_UP_BEFORE_MS = SAME_FEED_MS;
 
 export const other = (s: Side): Side => (s === "L" ? "R" : "L");
@@ -1599,7 +1605,7 @@ export function nursingRuns(entries: readonly Entry[], now: Date): NursingRun[] 
   flush();
   // Top-ups: each bottle given with a feed rides along with it.
   const bottles = entries.filter(isBottleFeed).sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at) || a.id - b.id);
-  for (const b of bottles) topUpRunFor(runs, Date.parse(b.started_at), now)?.topUps.push(b);
+  for (const b of bottles) topUpRunFor(runs, Date.parse(b.started_at), now, b.data.top_up_of)?.topUps.push(b);
   return runs;
 }
 
@@ -1609,10 +1615,18 @@ export function nursingRuns(entries: readonly Entry[], now: Date): NursingRun[] 
  * then, else the latest that ended less than TOP_UP_AFTER_MS before it, else
  * one that began less than TOP_UP_BEFORE_MS after it. A running feed reaches
  * `now`. The bottle form asks it before saving, so it says how a bottle will
- * count.
+ * count. `link` (data.top_up_of, a nursing entry's id): the feed it names, if
+ * the bottle came after it began, under TOP_UP_LINK_MS after it ended, and
+ * before the next feed; else the time rule.
  */
-export function topUpRunFor(runs: readonly NursingRun[], at: number, now: Date): NursingRun | null {
+export function topUpRunFor(runs: readonly NursingRun[], at: number, now: Date, link?: number | null): NursingRun | null {
   if (!Number.isFinite(at)) return null;
+  if (link != null) {
+    const i = runs.findIndex((r) => r.entries.some((e) => e.id === link));
+    const r = runs[i];
+    const next = runs[i + 1];
+    if (r && at >= r.start && (r.end === null || at - r.end <= TOP_UP_LINK_MS) && (!next || next.start > at)) return r;
+  }
   let after: NursingRun | null = null;
   for (const r of runs) {
     if (at >= r.start && at <= (r.end ?? now.getTime())) return r;

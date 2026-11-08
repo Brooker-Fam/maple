@@ -77,7 +77,8 @@ import { previewParts, rowIndex } from "../src/components/maple/sheets/FeedSheet
 import { backOnPresets, earlierPresets, finishPresets, fitPresets, PRESET_LIMIT, usualBreakMin, usualSideMin } from "../src/lib/maple/presets";
 import { sidesLabel } from "../src/components/maple/StatusCard";
 import { daySummaryParts } from "../src/components/maple/LogTab";
-import { describeEntry } from "../src/lib/maple/describe";
+import { describeEntry, feedPartsSummary, feedPartWords } from "../src/lib/maple/describe";
+import { feedRowParts, partsShown, recentRows } from "../src/lib/maple/feed-rows";
 import { dailyStats, memberLabel, statsFor, summarize as summarizeWith } from "../src/lib/maple/insights";
 import { makeVoice } from "../src/lib/maple/voice";
 
@@ -88,7 +89,7 @@ import { CLUSTER_CALL, clusterCall, clusterCallOnToday } from "../src/lib/maple/
 import { checkFeedTarget, cleanData } from "../src/lib/maple/validate";
 import { feedTargetFrom, feedTargetOf, formatVolumeRange, formatVolumeRangeBoth } from "../src/lib/maple/units";
 import { formatClock, formatMinutes, formatRange, formatTimeNear, localParts, zonedTimeToUtc } from "../src/lib/maple/time";
-import type { Baby, EntryOf, FeedData, Member, Segment, Side, StretchSide } from "../src/lib/maple/types";
+import type { Baby, Entry, EntryOf, FeedData, Member, Segment, Side, StretchSide } from "../src/lib/maple/types";
 
 const TZ = "America/New_York";
 
@@ -2027,12 +2028,102 @@ check("describeEntry: back and forth reads as such", () => {
   check("describeEntry: how a bottle was given and a Mixed bottle's split", () => {
     const of = (data: Partial<FeedData>, topUp = false) => describeEntry({ ...given("10:30"), data: { method: "bottle", ...data } }, { units: "metric", topUp }).text;
     eq(of({ amount_ml: 30, milk: "formula", via: "sns" }), "SNS · 30 ml · formula");
-    eq(of({ amount_ml: 30, milk: "formula", via: "sns" }, true), "Top-up · 30 ml · formula · SNS");
+    // Milk at the breast with a feed is part of that nursing, not a top-up by bottle.
+    eq(of({ amount_ml: 30, milk: "formula", via: "sns" }, true), "SNS at the breast · 30 ml · formula");
     eq(of({ amount_ml: 35, milk: "breastmilk", via: "paced" }, true), "Top-up · 35 ml · breast milk · paced bottle");
     eq(of({ amount_ml: 50, milk: "mixed", breastmilk_ml: 30, formula_ml: 20, via: "bottle" }), "Bottle · 50 ml · 30 ml breast milk + 20 ml formula");
     eq(of({ amount_ml: 50, milk: "mixed", breastmilk_ml: 30, formula_ml: 20, via: "bottle" }, true), "Top-up · 50 ml · 30 ml breast milk + 20 ml formula · bottle");
     eq(of({ milk: "mixed", formula_ml: 20 }), "Bottle · mixed, 20 ml formula");
     eq(of({ amount_ml: 50, milk: "mixed" }), "Bottle · 50 ml · mixed");
+  });
+  check("describeEntry: milk at the breast reads as what it is, and with a feed as part of it; a nursing feed says its shield", () => {
+    const of = (data: Partial<FeedData>, topUp = false) => describeEntry({ ...given("10:30"), data: { method: "bottle", ...data } }, { units: "metric", topUp }).text;
+    eq(of({ amount_ml: 20, milk: "formula", via: "syringe" }), "Syringe · 20 ml · formula");
+    eq(of({ amount_ml: 20, milk: "formula", via: "syringe" }, true), "Syringe at the breast · 20 ml · formula");
+    eq(of({ amount_ml: 20, via: "sns" }, true), "SNS at the breast · 20 ml");
+    eq(of({ via: "syringe" }, true), "Syringe at the breast");
+    const nursed = (d: FeedData) => describeEntry(entryOf(d, done("18:00", "16:20")), { now: D("18:00") }).detail;
+    eq(nursed(feed("L 16:00-16:12, R 16:12-16:20", { first_side: "L", shield: true })), "L 12m, R 8m · started left · shield");
+    eq(nursed(feed("B 16:00-16:20", { first_side: "R", shield: true })), "20m · back and forth, started right · shield");
+    eq(nursed(feed("L 16:00-16:12, R 16:12-16:20", { first_side: "L" })), "L 12m, R 8m · started left", "no shield, no word");
+  });
+  check("a feed's parts in words: milk at the breast in the SNS or the syringe, a top-up by bottle", () => {
+    const b = (data: Partial<FeedData>) => ({ ...given("10:30"), data: { method: "bottle", ...data } }) as EntryOf<"feed">;
+    eq([feedPartWords(b({ amount_ml: 20, via: "sns", milk: "formula" }), "metric"), feedPartWords(b({ amount_ml: 20, via: "syringe" }), "metric"), feedPartWords(b({ via: "sns" }), "metric")], [
+      "+ 20 ml in the SNS",
+      "+ 20 ml in the syringe",
+      "+ milk in the SNS",
+    ]);
+    eq([feedPartWords(b({ amount_ml: 30, via: "paced" }), "metric"), feedPartWords(b({}), "metric"), feedPartWords(b({ milk: "mixed", formula_ml: 20 }), "metric")], ["+ 30 ml top-up", "+ top-up", "+ 20 ml top-up"]);
+    eq(feedPartWords(b({ amount_ml: 29.6, via: "sns" }), "us"), "+ 1 oz in the SNS");
+    eq(
+      [feedPartsSummary([], "metric"), feedPartsSummary([b({ amount_ml: 20, via: "sns" })], "metric"), feedPartsSummary([b({ amount_ml: 20, via: "sns" }), b({ amount_ml: 30 })], "metric"), feedPartsSummary([b({}), b({})], "metric")],
+      [null, "+ 20 ml in the SNS", "+ 50 ml in 2 top-ups", "+ 2 top-ups"]
+    );
+  });
+  {
+    const sns = (at: string, ml = 20, extra: Partial<FeedData> = {}): EntryOf<"feed"> => ({ ...given(at, ml), data: { method: "bottle", amount_ml: ml, via: "sns", ...extra } });
+    const diaper = (at: string): Entry => ({ ...given(at), kind: "diaper", data: { pee: true } }) as Entry;
+    const newest = (list: Entry[]) => [...list].sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at) || b.id - a.id);
+    check("a feed's parts ride on its row: milk readied before she latched on its first, milk during a side on that side's, a top-up after on its last", () => {
+      const first = fe("L 09:00-09:15");
+      // Back on 5 minutes after Done: the same feed, a second row.
+      const again = fe("R 09:20-09:30");
+      const readied = sns("08:55");
+      const during = sns("09:10");
+      const after = given("09:40", 30);
+      const solo = given("13:00", 60);
+      const parts = feedRowParts(nursingRuns([solo, after, again, first, during, readied], D("13:10")));
+      eq([...parts.byRow].map(([id, list]) => [id, list.map((x) => x.id)]), [[first.id, [readied.id, during.id]], [again.id, [after.id]]]);
+      eq([parts.rowOf.get(after.id), parts.rowOf.has(solo.id)], [again.id, false], "a bottle on its own is a row of its own");
+    });
+    check("Today's three rows: a feed with its milk at the breast and its top-up is one row where the feed began; a running feed's milk is on its card", () => {
+      const fed = fe("L 09:00-09:20");
+      const log = newest([diaper("08:30"), diaper("08:00"), fed, sns("09:10"), given("09:30", 30), diaper("09:40")]);
+      const parts = feedRowParts(nursingRuns(log, D("10:00")));
+      eq(recentRows(log, parts, 3).map((e) => clock(e.started_at)), ["09:40", "09:00", "08:30"], "never three rows of one feed");
+      eq(parts.byRow.get(fed.id)?.map((x) => clock(x.started_at)), ["09:10", "09:30"]);
+      // She's on the breast: the SNS logged a minute ago is the running feed's, so it isn't a row.
+      const on = fe("R 11:00-", { active: true });
+      const now = newest([...log, on, sns("11:05")]);
+      eq(recentRows(now, feedRowParts(nursingRuns(now, D("11:06"))), 3).map((e) => clock(e.started_at)), ["09:40", "09:00", "08:30"]);
+      // A bottle on its own long after: a row, a feed of its own.
+      const later = newest([...log, given("12:30", 60)]);
+      eq(recentRows(later, feedRowParts(nursingRuns(later, D("12:40"))), 3).map((e) => clock(e.started_at)), ["12:30", "09:40", "09:00"]);
+    });
+    check("the Timeline: a part shows on its feed's row only where that row is listed (the same day); across midnight it keeps a row", () => {
+      const late = fe("L 23:40-23:55");
+      const topUp = given("00:10", 30, { day: 1 });
+      const parts = feedRowParts(nursingRuns([topUp, late], new Date(Date.parse(topUp.started_at) + 3_600_000)));
+      eq(parts.rowOf.get(topUp.id), late.id, "it's the feed's top-up");
+      eq([partsShown(parts, late.id, new Set([late.id])).length, partsShown(parts, late.id, new Set([late.id, topUp.id])).length], [0, 1], "on the feed's day only if it's listed there too");
+    });
+  }
+  check("a nursing feed's shield and plan feed ride through every timer write: taps, Done, Fix times, a side added, undo, the form's new start", () => {
+    const keep = (d: FeedData, what: string) => eq([d.shield, d.plan], [true, "p1f2"], what);
+    let d: FeedData = { ...startBreast("L", D("10:00")), shield: true, plan: "p1f2" };
+    d = switchTo(d, "R", D("10:10")).data;
+    keep(d, "switch");
+    d = pause(d, D("10:20")).data;
+    keep(d, "pause");
+    d = switchTo(d, "R", D("10:22")).data;
+    keep(d, "back on");
+    d = switchTo(d, "B", D("10:30")).data;
+    keep(d, "back and forth");
+    d = switchTo(d, "L", D("10:35")).data;
+    keep(d, "tracking sides again");
+    keep(moveEdge(d, { edge: "start", to: D("09:58") }, live("10:40")).data, "Fix times while it runs");
+    keep(undoLastTap(d, { side: "L", start: T("10:35"), end: null }, { active: true }).data, "undo the latest tap");
+    const stopped = stopBreast(d, undefined, D("10:45"));
+    keep(stopped.data, "Done");
+    keep(stopBreast(pause(d, D("10:40")).data, undefined, D("10:45")).data, "Done on a break");
+    keep(finalizeBreast(d, D("10:45")), "a stop");
+    const after: FeedCtx = { now: D("11:00"), active: false, endedAt: stopped.endedAt };
+    keep(moveEdge(stopped.data, { edge: "end", to: D("10:44") }, after).data, "Fix times after");
+    keep(setSide(stopped.data, ref("R", "10:22"), "L", after).data, "that side was the other one");
+    keep(addPart(stopped.data, { side: "R", start: T("10:50"), end: T("10:55") }, after).data, "a side added");
+    keep(retimeBreast(stopped.data, { start: D("09:59"), prevEnd: new Date(stopped.endedAt) }), "a new start from the form");
+    keep(cleanData("feed", stopped.data) as FeedData, "and the server's check keeps them");
   });
   check("milk by bottle: formula and breast milk from each bottle's milk and a Mixed one's parts", () => {
     const d = (x: Partial<FeedData>): FeedData => ({ method: "bottle", ...x });

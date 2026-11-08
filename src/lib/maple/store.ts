@@ -37,6 +37,7 @@ import type {
   Segment,
   Side,
   Source,
+  StartWith,
   StretchSide,
   TimerKind,
   TimerResponse,
@@ -164,7 +165,28 @@ export type BabyPatch = Partial<
   settings?: Record<string, unknown>;
   /** Alert acknowledgements to add ({ alertId: isoTime }), merged in SQL. */
   acks?: Record<string, string>;
+  /**
+   * Save only if the stored feeding plan is still the one this change began
+   * from: its stored `rev` (null for no plan). Checked in the UPDATE itself,
+   * so two phones saving from the same revision can't both win; the second
+   * gets SettingsChanged with the baby as it is now.
+   */
+  expect?: { planRev: number | string | null };
 };
+
+/** A settings save refused because the stored feeding plan changed since it was read (BabyPatch.expect). */
+export class SettingsChanged extends Error {
+  constructor(readonly baby: Baby) {
+    super("The feeding plan was changed meanwhile");
+  }
+}
+
+/** The stored feeding plan's revision as BabyPatch.expect takes it: its raw `rev`, or null with no plan. */
+export function storedPlanRev(settings: Record<string, unknown> | null | undefined): number | string | null {
+  const plan = settings?.feeding_plan;
+  const rev = plan && typeof plan === "object" && !Array.isArray(plan) ? (plan as { rev?: unknown }).rev : undefined;
+  return typeof rev === "number" || typeof rev === "string" ? rev : null;
+}
 
 const BABY_FIELDS = [
   "name",
@@ -207,12 +229,24 @@ export async function updateBaby(fam: FamilyRef, id: number, patch: BabyPatch): 
     }
     sets.push(`settings = ${expr}`);
   }
+  let guard = "";
+  if (patch.expect) {
+    // The plan's revision as stored (->> reads a JSON number as its text, "3"); no plan matches only no plan.
+    params.push(patch.expect.planRev == null ? null : String(patch.expect.planRev));
+    guard = ` AND (settings->'feeding_plan'->>'rev') IS NOT DISTINCT FROM $${params.length}::text`;
+  }
   const rows = await q(
     `UPDATE maple_babies SET ${[...sets, "updated_at = NOW()"].join(", ")}
-     WHERE id = $1 AND family_id = $2 RETURNING ${BABY_COLS}`,
+     WHERE id = $1 AND family_id = $2${guard} RETURNING ${BABY_COLS}`,
     params
   );
-  if (!rows.length) throw new NotFound("Baby not found");
+  if (!rows.length) {
+    if (guard) {
+      const now = await q(`SELECT ${BABY_COLS} FROM maple_babies WHERE id = $1 AND family_id = $2`, [id, famId(fam)]);
+      if (now.length) throw new SettingsChanged(rowToBaby(now[0]));
+    }
+    throw new NotFound("Baby not found");
+  }
   return rowToBaby(rows[0]);
 }
 
@@ -770,6 +804,8 @@ export async function startTimer(fam: FamilyRef, opts: {
   kind: TimerKind;
   side?: Side;
   backAndForth?: boolean;
+  /** A new feed's nipple shield and plan feed (only a new one: a running feed keeps its own). */
+  with?: StartWith;
   at: Date;
   createdBy: string;
   source: Source;
@@ -792,7 +828,7 @@ export async function startTimer(fam: FamilyRef, opts: {
   const found = await existing();
   if (found) return found;
   const data: EntryDataByKind[TimerKind] =
-    opts.kind === "feed" ? startBreast(opts.side ?? "L", opts.at, { both }) : {};
+    opts.kind === "feed" ? { ...startBreast(opts.side ?? "L", opts.at, { both }), ...startWithData(opts.with) } : {};
   try {
     const { entry, deduped } = await createEntryOnce(fam, {
       babyId: opts.babyId,
@@ -813,6 +849,11 @@ export async function startTimer(fam: FamilyRef, opts: {
     if (raced) return raced;
     throw err;
   }
+}
+
+/** A feed's start extras as data keys (cleanData keeps them): only what's set. */
+export function startWithData(w: StartWith | undefined): Pick<FeedData, "shield" | "plan"> {
+  return { ...(w?.shield ? { shield: true } : {}), ...(w?.plan ? { plan: w.plan } : {}) };
 }
 
 /**

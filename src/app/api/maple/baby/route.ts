@@ -1,7 +1,8 @@
 import { BadRequest, familyName, Forbidden, json, readJson, withMember } from "@/lib/maple/api";
 import { FAMILY_ONE } from "@/lib/maple/family";
-import { getBaby, updateBaby, type BabyPatch } from "@/lib/maple/store";
+import { getBaby, SettingsChanged, storedPlanRev, updateBaby, type BabyPatch } from "@/lib/maple/store";
 import { isDayKey } from "@/lib/maple/time";
+import { checkFeedingPlan, feedingPlanOf, PlanConflict, PlanError } from "@/lib/maple/feeding-plan";
 import { checkFeedTarget, checkLogSwitches } from "@/lib/maple/validate";
 
 export const dynamic = "force-dynamic";
@@ -74,7 +75,11 @@ export const PATCH = withMember("PATCH /api/maple/baby", async (request, me, ctx
     try {
       checkLogSwitches(incoming);
       checkFeedTarget(incoming);
+      // The feeding plan (feeding-plan.ts): parsed into a new revision; an edit begun from an older one is refused.
+      checkFeedingPlan(incoming, baby.settings, new Date());
     } catch (e) {
+      if (e instanceof PlanConflict) return json({ error: e.message, reason: "plan_changed", feeding_plan: e.current }, 409);
+      if (e instanceof PlanError) throw new BadRequest(e.message);
       throw new BadRequest(e instanceof Error ? e.message : "settings look off");
     }
     if ("admin_as" in incoming) {
@@ -88,7 +93,16 @@ export const PATCH = withMember("PATCH /api/maple/baby", async (request, me, ctx
     void _acks;
     if (JSON.stringify(rest).length > 8000) throw new BadRequest("settings too large");
     patch.settings = incoming;
+    // A plan change saves only over the plan it was checked against, so another phone's save in between is a 409 too.
+    if ("feeding_plan" in incoming) patch.expect = { planRev: storedPlanRev(baby.settings) };
   }
 
-  return json({ baby: await updateBaby(ctx, baby.id, patch) });
+  try {
+    return json({ baby: await updateBaby(ctx, baby.id, patch) });
+  } catch (e) {
+    if (e instanceof SettingsChanged) {
+      return json({ error: "The feeding plan was changed on another phone", reason: "plan_changed", feeding_plan: feedingPlanOf(e.baby.settings) }, 409);
+    }
+    throw e;
+  }
 }, { write: true });

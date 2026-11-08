@@ -31,11 +31,13 @@ export const TOOL_GROUPS = {
   core: [
     "maple_status", "log_feed", "log_diaper", "log_sleep", "start_timer", "stop_timer", "switch_side", "pause_nursing", "fix_nursing_time", "reopen_timer",
     "log_many", "update_entry", "delete_entry", "restore_entry", "undo_last", "list_entries", "daily_summary", "record_birth",
-    "ask_user", "show_help", "recall_memories", "save_memory", LOAD_TOOLS,
+    "ask_user", "show_help", "recall_memories", "save_memory", "feeding_plan", LOAD_TOOLS,
   ],
   mom: ["mom_status", "log_mom_medicine", "log_mom_temperature", "add_mom_question", "fix_mom_entry", "log_mom_food", "log_mom_drink", "mom_nutrition"],
   health: ["log_growth", "log_medicine", "log_temperature", "log_vitals", "add_doctor_question", "list_doctor_questions"],
   sleep: ["sleep_plan", "set_sleep_plan", "bassinet_try", "holding", "sleep_goal"],
+  // The care team's feeding plan: reading it is core (what's next, every turn), saving or changing it comes when it's talked about.
+  feeding: ["set_feeding_plan"],
   log_more: ["log_pump", "log_note", "log_activity", "log_moment", "get_moments"],
   app: ["search_entries", "show_chart", "get_settings", "propose_setting", "open_screen", "web_search"],
   people: ["list_people", "invite_person", "change_access", "remove_person", "cancel_invite"],
@@ -131,6 +133,12 @@ const GROUP_WORDS: Record<ToolGroup, RegExp[]> = {
     /\b(do|does|doing|take|takes|taking|cover|covers|covering) (the )?\d{1,2}(:\d{2})? ?(am|pm)\b|\b(take|takes|has|have) (her|him|them|the baby) (from )?\d{1,2}(:\d{2})? ?(am|pm)? ?(to|till|until) \d{1,2}\b|\b(has|have) (her|him|them|the baby) (till|until) \d{1,2}\b|\bwho (does|takes|gets up|covers)\b/i,
     // Sleep places and gear parents ask about.
     /\b(stroller|pram|car ?seat|dock[\s-]?a[\s-]?tot|boppy|lounger|snuggle ?me|bouncer|mama ?roo|baby ?carrier|sling|pacifier|binky|dummy)\b/i,
+  ],
+  feeding: [
+    // The care team's plan and who it's from (a photo of the plan sheet comes with words like these); a sleep or bassinet plan is the sleep group's.
+    /\b(?<!\b(?:sleep|bassinet|nap|birth|back[- ]to[- ]work)\s)plans?\b|\b(lactation|consultants?|lc|ibclc|feeding (clinic|team|specialist|routine)|schedule|regimen)\b/i,
+    // What such a plan holds.
+    /\b(nipple )?shields?\b|\bsyringes?\b|\bsns\b|\bsupplement\w*|\btop[- ]?ups?\b|\btopping (her|him|them) up\b|\btriple[- ]feed\w*|\bpower[- ]pump\w*/i,
   ],
   log_more: [
     /\b(pump\w*|expressed|expressing|haakaa|let-?down|freezer stash|milk stash)\b/i,
@@ -356,6 +364,7 @@ function groupWords(vo: Voice): Record<ToolGroup, string> {
     mom: `${vo.mom}'s page: her medicines and doses, temperature, food and drinks, questions for her OB`,
     health: `${vo.name}'s growth, medicine, vitals and temperature, doctor questions`,
     sleep: "the sleep plan, bassinet tries, holding turns, sleep goals and check-ins",
+    feeding: "saving or changing the care team's feeding plan",
     log_more: "pumping, notes, tummy time and baths, moments",
     app: "finding entries, charts, settings, opening a screen, web search",
     people: "who's in the family, invites and access",

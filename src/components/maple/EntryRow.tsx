@@ -1,6 +1,6 @@
 "use client";
 
-import { describeEntry } from "@/lib/maple/describe";
+import { describeEntry, feedPartsSummary, feedPartWords, milkWords } from "@/lib/maple/describe";
 import { minutesShort, nursingRuns, sideMinutesText, spanText, type NursingRun } from "@/lib/maple/feed";
 import { dayKey, formatDayLabel, formatRelative, formatTime } from "@/lib/maple/time";
 import type { Entry, EntryOf } from "@/lib/maple/types";
@@ -25,10 +25,18 @@ const VIA: Record<string, string> = {
 
 export { photoUrl } from "./moments/photo";
 
+/** The Timeline's hairline between badges (36px, inset 16px), stopping short of each. */
+const THREAD = "pointer-events-none absolute left-[33.25px] w-[1.5px] bg-mp-line";
+
 /**
  * One line in a list of entries: the kind's icon, what happened, when, and
  * who logged it (only when it wasn't you). Tap to edit. Lists put these in a
  * card with hairline dividers (tone.divide), or a thread (the Timeline).
+ *
+ * A nursing feed's parts (`parts`: the bottles given with it, its milk at the
+ * breast and its top-up, feed-rows.ts) sit under its row as small pills, "+ 20
+ * ml in the SNS" "+ 30 ml top-up", so the row tells the whole feed; each pill
+ * opens that bottle to edit or delete (`onOpenPart`).
  */
 export default function EntryRow({
   entry,
@@ -37,6 +45,10 @@ export default function EntryRow({
   quietAction = false,
   topUp = false,
   now,
+  parts,
+  onOpenPart,
+  thread,
+  glow,
 }: {
   entry: Entry;
   onClick?: () => void;
@@ -47,9 +59,19 @@ export default function EntryRow({
    * the title's line. The whole row is still the tap, and its accessible name still says what the tap does.
    */
   quietAction?: boolean;
-  /** A bottle given with a nursing feed (feed.ts topUpIds): it reads "Top-up". The list works it out from its own entries. */
+  /**
+   * A bottle given with a nursing feed (feed.ts topUpIds), shown on its own row (its feed isn't in this list): it reads
+   * as part of that feed ("Top-up", "SNS at the breast"). The list works it out from its own entries.
+   */
   topUp?: boolean;
   now: Date;
+  /** A nursing feed's parts, oldest first: pills under its row. */
+  parts?: readonly EntryOf<"feed">[];
+  onOpenPart?: (e: EntryOf<"feed">) => void;
+  /** On the Timeline, for a row with parts: the thread up to its badge, and down past its parts to the next row. */
+  thread?: { up: boolean; down: boolean };
+  /** Parts that just arrived from another phone (they glow, as rows do). */
+  glow?: ReadonlySet<number>;
 }) {
   const { units, state, member, readOnly } = useMaple();
   const words = useMilestoneWords();
@@ -65,7 +87,7 @@ export default function EntryRow({
   // A date-only clinical observation has an internal day anchor, not a known clock time.
   const entryWhen = entry.source === "epic" ? formatDayLabel(entryDay, today) : `${formatDayLabel(entryDay, today)} at ${formatTime(entry.started_at, tz)}`;
 
-  return (
+  const row = (
     <button
       type="button"
       onClick={onClick}
@@ -105,6 +127,80 @@ export default function EntryRow({
       </span>
     </button>
   );
+  if (!parts?.length) return row;
+  return (
+    <div>
+      <div className="relative">
+        {thread?.up && <span aria-hidden className={cx(THREAD, "top-0 h-[calc(50%-22px)]")} />}
+        {thread?.down && <span aria-hidden className={cx(THREAD, "bottom-0 h-[calc(50%-22px)]")} />}
+        {row}
+      </div>
+      <FeedPartsLine parts={parts} now={now} onOpen={onOpenPart} glow={glow} thread={!!thread?.down} />
+    </div>
+  );
+}
+
+/**
+ * A nursing row's parts, under its words: "+ 20 ml in the SNS", "+ 30 ml
+ * top-up", one pill each, lighter than the row (they're part of it). Each is a
+ * bottle entry of its own, so a tap opens it to edit or delete; its name says
+ * what it is in full ("Edit: + 20 ml in the SNS · formula, Today at 9:52 AM").
+ * Overlaps the row's bottom padding, letting taps there through to the row.
+ */
+export function FeedPartsLine({
+  parts,
+  now,
+  onOpen,
+  glow,
+  thread,
+}: {
+  parts: readonly EntryOf<"feed">[];
+  now: Date;
+  onOpen?: (e: EntryOf<"feed">) => void;
+  glow?: ReadonlySet<number>;
+  /** The Timeline's thread runs on past the parts to the next row. */
+  thread?: boolean;
+}) {
+  const { units, state, readOnly } = useMaple();
+  const tz = state?.baby.timezone ?? "America/New_York";
+  const today = dayKey(now, tz);
+  return (
+    <div className="pointer-events-none relative -mt-2.5 pb-1.5 @container/parts">
+      {thread && <span aria-hidden className={cx(THREAD, "top-0 bottom-0")} />}
+      {/* In line with the row's words (past the badge), or under it on a narrow row, as EntryRow lays them out: its
+          18rem is measured inside the row's 1rem padding on each side, so here, across the whole row, it's 20rem. */}
+      <div className="flex flex-wrap gap-x-1.5 pr-4 pl-4 @min-[20rem]/parts:pl-16">
+        {parts.map((b) => {
+          const words = feedPartWords(b, units);
+          // Its name holds what the pill says (what a voice-control user says to tap it), then the rest of it.
+          const more = [milkWords(b.data, units), b.data.via === "paced" ? "paced bottle" : null].filter(Boolean).join(" · ");
+          const day = dayKey(new Date(b.started_at), tz);
+          const when = `${formatDayLabel(day, today)} at ${formatTime(b.started_at, tz)}`;
+          return (
+            <button
+              key={b.id}
+              type="button"
+              data-entry-id={b.id}
+              onClick={onOpen ? () => onOpen(b) : undefined}
+              aria-label={`${!readOnly && b.id > 0 ? "Edit: " : ""}${words}${more ? ` · ${more}` : ""}, ${when}`}
+              className="group pointer-events-auto flex min-h-[44px] items-center"
+            >
+              <span
+                className={cx(
+                  "inline-flex min-h-[30px] items-center gap-1 rounded-full bg-mp-sunken px-2.5 text-[13px] font-medium text-mp-ink-2 transition group-active:scale-[0.97] in-[.bg-mp-sunken]:bg-mp-raised",
+                  glow?.has(b.id) && "ring-2 ring-mp-focus/50"
+                )}
+              >
+                {b.id < 0 && <Icon name="refresh-cw" size={11} label="Not synced yet" className="text-mp-ink-3" />}
+                {words}
+                {!readOnly && <Icon name="chevron-right" size={13} className="-mr-0.5 shrink-0 text-mp-ink-3" />}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 /** Editors get quick corrections; viewers retain the complete read-only record. */
@@ -123,6 +219,9 @@ export function entryEditPreset(entry: Entry, readOnly = false): Record<string, 
  * cluster's own feeds (worked out from the whole log) that have one of those
  * entries, so the count and span are the cluster's, never recounted from a
  * subset (a feed's first half before a long pause isn't part of it).
+ * `parts`: each feed's parts listed with it that day (its milk at the breast,
+ * its top-ups): summed in the line under the count ("+ 60 ml in 2 top-ups"),
+ * and pills under each feed once it's open.
  */
 export function ClusterRow({
   entries,
@@ -133,6 +232,7 @@ export function ClusterRow({
   onOpenEntry,
   onInfo,
   glow,
+  parts,
 }: {
   entries: EntryOf<"feed">[];
   runs?: readonly NursingRun[];
@@ -142,9 +242,12 @@ export function ClusterRow({
   onOpenEntry: (e: Entry) => void;
   onInfo: () => void;
   glow?: Set<number>;
+  parts?: ReadonlyMap<number, readonly EntryOf<"feed">[]>;
 }) {
-  const { state } = useMaple();
+  const { state, units } = useMaple();
   const tz = state?.baby.timezone ?? "America/New_York";
+  const allParts = entries.flatMap((e) => parts?.get(e.id) ?? []);
+  const partsLine = feedPartsSummary(allParts, units);
   const runs = given?.length ? given : nursingRuns(entries, now);
   const start = runs[0]?.start ?? Date.parse(entries[entries.length - 1].started_at);
   const last = runs[runs.length - 1];
@@ -187,6 +290,12 @@ export function ClusterRow({
                 <span className="whitespace-nowrap">({sides})</span>
               </>
             )}
+            {partsLine && (
+              <>
+                {" "}
+                <span className="whitespace-nowrap">· {partsLine}</span>
+              </>
+            )}
           </span>
         </span>
       </button>
@@ -195,7 +304,7 @@ export function ClusterRow({
           <div className={tone.divide}>
             {entries.map((e) => (
               <div key={e.id} data-entry-id={e.id} className={cx("transition-colors duration-700", glow?.has(e.id) && "bg-mp-focus/20")}>
-                <EntryRow entry={e} now={now} onClick={() => onOpenEntry(e)} />
+                <EntryRow entry={e} now={now} onClick={() => onOpenEntry(e)} parts={parts?.get(e.id)} onOpenPart={onOpenEntry} glow={glow} />
               </div>
             ))}
             <button type="button" onClick={onInfo} className={cx(tone.row, "min-h-[48px] py-2 text-[14px] text-mp-ink-2")}>

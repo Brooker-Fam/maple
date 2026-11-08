@@ -19,6 +19,9 @@ import { useTimerActions } from "./TimerCard";
 import { Sheet, cx, tone } from "./ui";
 import { babyFirstName, useVoice } from "./familyWords";
 import { STAGE_INFO } from "@/lib/maple/sleep/words";
+import { feedingPlanOf } from "@/lib/maple/feeding-plan";
+import { useFeedingPlanNav } from "./feeding/FeedingPlanNav";
+import { planShortLine } from "./feeding/planDraft";
 import { useSleepMaybe } from "./sleep/useSleep";
 import { useMaple } from "./useMaple";
 
@@ -175,6 +178,7 @@ export default function MoreSheet({ open, onClose, earlierDay }: {
   const careNav = useCareNav();
   const actions = useTimerActions();
   const sleepPlan = useSleepMaybe();
+  const plans = useFeedingPlanNav();
   const voice = useVoice();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const questions = useOpenQuestions(open);
@@ -569,6 +573,8 @@ export default function MoreSheet({ open, onClose, earlierDay }: {
             bottles
               ? { id: "bottle", label: "Bottle", sub: "Formula or breast milk", icon: "bottle" as const, color: KIND_COLOR.feed, onTap: () => go("feed", { method: "bottle" }) }
               : { id: "bottles-on", label: "Bottle", sub: turningOn ? "Turning on…" : "Turn on bottles: formula or breast milk", icon: "bottle" as const, color: KIND_COLOR.feed, onTap: () => void bottlesOn() },
+            // The care team's feeding plan: what Today's Next feed card follows, or the way to add one.
+            { id: "feeding-plan", label: "Feeding plan", sub: planShortLine(feedingPlanOf(state?.baby.settings)), icon: "list", color: KIND_COLOR.feed, onTap: () => later(() => plans.openPlan()) },
           ]} />
           <section aria-label={baby} className="space-y-3 pb-1">
             {mom.length > 0 && <GroupHeading>{baby}</GroupHeading>}

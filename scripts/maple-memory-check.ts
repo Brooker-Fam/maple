@@ -130,7 +130,8 @@ check("the chat's block: records as data, the switches spelled out, nothing when
 check("the rules speak in the family's words and never name another family", () => {
   const vo = makeVoice({ name: "Ro", pronoun: "he", mom: null });
   const rules = memoryRules(vo, "mcp");
-  assert(rules.includes("Ro's feeding plan") && rules.includes("his mom's own health"));
+  assert(rules.includes("how Ro is fed") && rules.includes("his mom's own health"));
+  assert(rules.includes("their care team's feeding plan itself goes in set_feeding_plan, not a memory"), "the care team's plan is the plan's, not a memory");
   assert(rules.includes("maple_status returns the current ones as family_memories"));
   assert(memoryRules(vo, "chat").includes("The newest message's [App] lines list the current ones as family_memories"));
   assert(!/\bMaple\b(?!'s Log| chat)/.test(rules), "the app's name never reads as a baby's");

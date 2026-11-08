@@ -92,6 +92,16 @@ export default function Privacy() {
         that sleep is counted once.
       </p>
       <p>
+        If your family adds a feeding plan from your care team, Maple keeps it as you enter it: who it&rsquo;s from and the
+        next check-in, the target per feed, how often to feed by day and at night (the night&rsquo;s hours, and whether to
+        wake the baby), each kind of feed and its steps (nursing, with a nipple shield or milk given at the breast; pumping; a
+        bottle or top-up, its amount, milk and how it&rsquo;s given; short notes), the order day feeds take turns in, and a
+        short note. A feed you log can also say it used a nipple shield and which of the plan&rsquo;s feeds it followed, and a
+        top-up can name the feed it was given for. Maple shows the plan to everyone in your family who can see the log and
+        works out what&rsquo;s next from the log. The plan changes only when an owner or member saves it: by hand, or by saying
+        yes after Maple&rsquo;s chat or a connected assistant reads it back to them. Removing the plan deletes it.
+      </p>
+      <p>
         If your family sets sleep goals, Maple keeps each goal: its title and why it matters, a target date, what it measures,
         its weekly steps and who marked each one done, a night roster of protected sleep windows for the adults (and, if you
         say, how the baby&rsquo;s feeds are covered during each: nursing, a bottle of expressed milk, or none planned), and the
@@ -185,7 +195,7 @@ export default function Privacy() {
       <h3>Family memories</h3>
       <p>
         When you ask Maple&rsquo;s chat or a connected assistant to remember something about your baby or your family&rsquo;s
-        routine, such as the feeding plan or who does the night feeds, it is saved as a family memory, with who said it, where,
+        routine, such as how your baby is fed or who does the night feeds, it is saved as a family memory, with who said it, where,
         when, any dates you gave, and a short note or your own words. You can also add memories yourself in Settings &rarr;
         Memories. Memories belong to the family: everyone in it except photos-only guests can read them there, and owners and
         members can add, edit, resolve, archive or forget them. The chat and assistants are told not to save mom&rsquo;s own
@@ -357,7 +367,7 @@ export default function Privacy() {
       <h2>The AI features</h2>
       <h3>Maple&rsquo;s chat</h3>
       <p>
-        When you use the chat, your message and attached photos, answers to question cards, the recent conversation, your family&rsquo;s memories, and the log, supported family settings or list of people in the family it reads to answer are sent to
+        When you use the chat, your message and attached photos, answers to question cards, the recent conversation, your family&rsquo;s memories and feeding plan, and the log, supported family settings or list of people in the family it reads to answer are sent to
         an AI model chosen by Maple, through Vercel AI Gateway. That list has each person&rsquo;s name and access; when an owner asks,
         it also has each person&rsquo;s email address and the invites still waiting, and an owner&rsquo;s request to invite someone
         sends the address they typed. Only after mom turns on chat access herself, members who can
@@ -378,7 +388,8 @@ export default function Privacy() {
       <h3>Claude, ChatGPT, Muse and Grok</h3>
       <p>
         You can connect Maple to your own Claude, ChatGPT, Muse or Grok account. Connected assistants can read and change your
-        family&rsquo;s memories too, unless they&rsquo;re turned off in Settings &rarr; Memories. What those assistants read from your log or add to it goes
+        family&rsquo;s memories too, unless they&rsquo;re turned off in Settings &rarr; Memories, and its feeding plan, which
+        they save only after reading it back to you. What those assistants read from your log or add to it goes
         through your account with Anthropic, OpenAI, Meta or xAI, under their terms and your privacy settings there; Maple doesn&rsquo;t
         control what they keep. You can disconnect at any time.
       </p>
