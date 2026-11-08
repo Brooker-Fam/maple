@@ -78,7 +78,7 @@ export default function WhileYouSlept() {
     .map((f) => f.start)
     .sort((a, b) => b - a);
   const nursing = fresh.find((e) => e.kind === "feed" && e.active);
-  // What was given with the feed still going ("20 ml in the syringe"), in the plan's unit when one is saved.
+  // What was given with the feed still going ("20 ml in the syringe"), the plan's unit beside the app's when they differ.
   const nursingParts = nursing ? feedPartsList(counted.find((f) => f.run?.live && f.run.entries.some((e) => e.id === nursing.id))?.run?.topUps ?? [], units, planUnitsOf(state.baby.settings)) : [];
   const diapers = fresh.filter((e) => e.kind === "diaper").sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
   const wet = diapers.filter((e) => e.kind === "diaper" && e.data.pee).length;
