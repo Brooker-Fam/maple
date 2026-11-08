@@ -21,7 +21,7 @@ import "./clock";
 import { z } from "zod";
 import { NextRequest } from "next/server";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { setClock } from "./clock";
+import { atClock, localInstant, setClock } from "./clock";
 import { done, eq, freshDb, ok, seedFamilies, sql, test, type Seed, type Shape } from "./harness";
 
 process.env.MCP_SECRET = "made-up-feeding-plan-tools-secret";
@@ -447,11 +447,69 @@ async function main() {
       const spoken = await siri(alpha.token, { action: "bottle", amount_oz: 1 });
       ok(spoken.speak === "Logged a 1 ounce bottle at 12:00 PM, a top-up for the 10:40 AM feed.", spoken.speak ?? "");
       eq((await sql(`SELECT (data->>'top_up_of')::int AS of FROM maple_entries WHERE family_id = $1 AND deleted_at IS NULL AND data->>'method' = 'bottle'`, [A]))[0]?.of, nursingId, "Siri's too");
-      // Over 90 minutes after the nursing ended, a bottle is a feed of its own.
+      // Over 90 minutes after the nursing ended, a bottle is a feed of its own, and by day (the day's feeds all nurse) no plan feed's.
       await wipe();
       await tool(alpha.owner, A, "log_feed", { method: "breast", left_minutes: 10, right_minutes: 10, first_side: "left", plan: "Nurse, top up", minutes_ago: 115 });
       const later = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 30, unit: "ml", via: "paced" });
-      ok(!/still had its/.test(later.text) && !/Counted as a top-up/.test(later.text), later.text);
+      ok(!/still had its/.test(later.text) && !/Counted as a top-up/.test(later.text) && !/feeding plan/.test(later.text), later.text);
+      eq((await sql(`SELECT data ? 'plan' AS has FROM maple_entries WHERE id = $1`, [Number(later.json.id)]))[0].has, false, "no plan feed by day");
+      await wipe();
+    });
+
+    await test(`${shape}: the night's pump, then its bottle and formula to finish, logged with no feed named (log_feed, log_many, Siri): saved with the plan feed, one feed, Last fed at the first bottle`, async () => {
+      const wipe = () => sql(`UPDATE maple_entries SET deleted_at = NOW() WHERE family_id = $1 AND deleted_at IS NULL`, [A]);
+      const night = feedingPlanOf(await settings(A))!.feeds.find((f) => f.name === "Pump + bottle")!.id;
+      const planOf = async (id: unknown) => (await sql(`SELECT data->>'plan' AS plan FROM maple_entries WHERE id = $1`, [Number(id)]))[0].plan;
+      const lastFed = async () => (await tool(alpha.owner, A, "maple_status")).text.split("\n").find((l) => l.startsWith("Last feed:")) ?? "";
+      const tz = "America/Chicago";
+      // The chat: the pump, then 35 ml of pumped milk, then 20 ml of formula to finish, as a model logs them.
+      await atClock(localInstant(tz, "01:40", "2026-11-05"), async () => {
+        await wipe();
+        await tool(alpha.owner, A, "log_pump", { duration_minutes: 20, at: "1:00am" });
+        const milk = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 35, unit: "ml", milk: "breastmilk", at: "1:25am" });
+        ok(milk.text.includes(`The feeding plan's "Pump + bottle" was underway (its pump logged), so this was saved as that feed's bottle. If it wasn't, update_entry it with details {plan: null}.`), milk.text);
+        const formula = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 20, unit: "ml", milk: "formula", at: "1:35am" });
+        ok(formula.text.includes(`The feeding plan's 1:25 AM feed ("Pump + bottle") still had its formula to finish to give, so this was saved with that feed: part of it, not a feed of its own.`) && /^Feeds today: 1\b/m.test(formula.text), formula.text);
+        eq([await planOf(milk.json.id), await planOf(formula.json.id)], [night, night], "both saved with the night feed");
+        ok(/^Last feed: 1\.18 oz \(35 ml\) bottle of breast milk at 1:25 AM today/.test(await lastFed()), await lastFed());
+        // The same sent again (a retry) is the same save, read as the first was.
+        const again = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 20, unit: "ml", milk: "formula", at: "1:35am" });
+        ok(again.json.deduped === true || again.json.created === false, again.text);
+        // log_many: the same night in one message.
+        await wipe();
+        const many = await tool(alpha.owner, A, "log_many", {
+          entries: [
+            { kind: "pump", at: "1:00am", duration_minutes: 20 },
+            { kind: "bottle", at: "1:25am", amount: 35, unit: "ml", milk: "breastmilk" },
+            { kind: "bottle", at: "1:35am", amount: 20, unit: "ml", milk: "formula" },
+          ],
+        });
+        ok(/^3 of 3 saved/.test(many.text) && many.text.includes("still had its formula to finish to give, so this was saved with that feed: part of it") && /^Feeds today: 1\b/m.test(many.text), many.text);
+        ok(/ at 1:25 AM today/.test(await lastFed()), await lastFed());
+      });
+      // Siri: the pump, then "log a bottle" twice.
+      await atClock(localInstant(tz, "01:25", "2026-11-05"), async () => {
+        await wipe();
+        await tool(alpha.owner, A, "log_pump", { duration_minutes: 20, at: "1:00am" });
+        eq((await siri(alpha.token, { action: "bottle", amount_oz: 1.2 })).speak, "Logged a 1.2 ounce bottle at 1:25 AM, for the feeding plan's Pump + bottle.");
+      });
+      await atClock(localInstant(tz, "01:35", "2026-11-05"), async () => {
+        eq((await siri(alpha.token, { action: "bottle", amount_oz: 0.7 })).speak, "Logged a 0.7 ounce bottle at 1:35 AM, for the 1:25 AM feed.");
+        const rows = await sql(`SELECT data->>'plan' AS plan FROM maple_entries WHERE family_id = $1 AND deleted_at IS NULL AND kind = 'feed' ORDER BY started_at`, [A]);
+        eq(rows.map((r) => r.plan), [night, night], "Siri's too");
+        ok(/ at 1:25 AM today/.test(await lastFed()) && /^Today so far: 1 feed\b/m.test((await tool(alpha.owner, A, "maple_status")).text), await lastFed());
+      });
+      // The night's next feed begun with its bottle (no pump yet): that feed's. A bottle after its full bottle isn't one it still wants.
+      await atClock(localInstant(tz, "04:30", "2026-11-05"), async () => {
+        const next = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 60, unit: "ml", milk: "breastmilk" });
+        ok(next.text.includes(`The feeding plan reads this as its next feed, "Pump + bottle", so it was saved as that feed.`), next.text);
+        eq(await planOf(next.json.id), night, "the next night feed");
+      });
+      await atClock(localInstant(tz, "04:45", "2026-11-05"), async () => {
+        const more = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 15, unit: "ml", milk: "formula" });
+        ok(!more.error && !/feeding plan/.test(more.text), more.text);
+        eq(await planOf(more.json.id), null, "not owed: no plan feed");
+      });
       await wipe();
     });
 
@@ -517,7 +575,7 @@ async function main() {
       // With no plan saved, no plan links a bottle to the feed before it (how the log itself counts one is feed.ts's rule).
       await tool(alpha.owner, A, "log_feed", { method: "breast", left_minutes: 10, right_minutes: 10, first_side: "left", minutes_ago: 80 });
       const own = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 30, unit: "ml", via: "paced" });
-      ok(!/still had its/.test(own.text) && !(await sql(`SELECT data ? 'top_up_of' AS has FROM maple_entries WHERE id = $1`, [Number(own.json.id)]))[0].has, own.text);
+      ok(!/still had its/.test(own.text) && !(await sql(`SELECT data ? 'top_up_of' OR data ? 'plan' AS has FROM maple_entries WHERE id = $1`, [Number(own.json.id)]))[0].has, own.text);
     });
 
     await test(`${shape}: ounces as the care team wrote them, read back in ounces, and sent back without drift`, async () => {
@@ -622,6 +680,8 @@ async function main() {
   }
 
   done("feeding-plan-tools");
+  // The check's clock moved (atClock), and the in-memory Postgres can hold a timer it set by that clock: exit once done.
+  process.exit(0);
 }
 
 main().catch((error) => {

@@ -73,7 +73,7 @@ import { momSameMedicine, momStatus, momSummary, registerCareTools } from "./car
 import { registerMemoryTools, statusMemories } from "./memory/mcp";
 import { memoryRules } from "./memory/policy";
 import { registerPeopleTools } from "./people-mcp";
-import { feedingPlanStatus, owedPartLine, planFeedArg, planOwedPart, planShield, registerFeedingPlanTools, type OwedPart, type PlanSide } from "./feeding-plan-mcp";
+import { feedingPlanStatus, ledBottleLine, namedAt, owedPartLine, planBottleFor, planFeedArg, planShield, registerFeedingPlanTools, type OwedPart, type PlanSide } from "./feeding-plan-mcp";
 import { AT_BREAST_WORDS, feedingPlanOf } from "./feeding-plan";
 import { registerSleepTools, sleepStatus, tryRef, undoableGoalWrite, undoableSleep, undoAsk } from "./sleep/mcp";
 import { deleteShift, deleteTry, endArmsSleepForFeed, getTry as getSleepTry } from "./sleep/store";
@@ -1667,13 +1667,45 @@ async function toppedUpFeed(ctx: Ctx, e: Entry): Promise<NursingRun | null> {
 }
 
 /**
+ * The bottle feed a saved bottle is more of (a feeding plan's formula to finish: feed.ts sameFeedBottleIds), from the
+ * feeds and pumps around it; null for a bottle that's a feed of its own.
+ */
+async function sameBottleFeed(ctx: Ctx, e: Entry): Promise<{ start: number; bottle: FeedEntry } | null> {
+  if (e.kind !== "feed" || e.data.method !== "bottle") return null;
+  const at = ts(e);
+  const near = await listEntries(ctx.fam, { babyId: ctx.baby.id, kinds: ["feed", "pump"], from: new Date(at - 12 * HOUR), to: new Date(at + 2 * HOUR), includeActive: true, limit: 500 });
+  for (const c of countedFeeds(near, ctx.now)) if (c.bottle && c.more.some((b) => b.id === e.id)) return { start: c.start, bottle: c.bottle };
+  return null;
+}
+
+/**
+ * The bottles a new one's feeding plan link is read without (planBottleFor's skip): its own earlier save under the
+ * same client_ref, and, unless they said it's a second one, any bottle within save's 3 minutes of it, which is this
+ * very bottle sent again (a retry; or a possible duplicate, which saves nothing until they say it's another). So a
+ * retry gets the same link as the first save, and save's replay and retry checks find the same data.
+ */
+async function bottleTwins(ctx: Ctx, start: Date, w: WriteOpts): Promise<Set<number>> {
+  const out = new Set<number>();
+  const ref = w.client_ref?.trim();
+  const prior = ref ? await byClientId(ctx, clientIdFor(ctx, ref)) : null;
+  if (prior) out.add(prior.entry.id);
+  if (!w.allow_duplicate) {
+    const s = start.getTime();
+    const near = await listEntries(ctx.fam, { babyId: ctx.baby.id, kinds: ["feed"], from: new Date(s - 3 * MIN), to: new Date(s + 3 * MIN), includeActive: true, limit: 50 });
+    for (const x of near) if (x.kind === "feed" && x.data.method === "bottle" && Math.abs(ts(x) - s) <= 3 * MIN) out.add(x.id);
+  }
+  return out;
+}
+
+/**
  * "Counted as a top-up to the feed that began at 9:45 AM today: part of that feed, not a feed of its own." Milk given
  * at the breast (a syringe, an SNS) is said as that, never as a top-up: in a feeding plan the top-up is another step.
- * `part`: what the feeding plan took the bottle as (planOwedPart), so a bottle taken as the milk at the breast it owed
- * isn't called a top-up either.
+ * `part`: what the feeding plan took the bottle as (owedPart), so a bottle taken as the milk at the breast it owed
+ * isn't called a top-up either. `at`: the moment that plan feed is named by (its first nursing: feeding-plan-mcp.ts
+ * namedAt), so a feed with a re-latch reads as the one the plan and Today's card name, not the re-latch.
  */
-function topUpLine(run: NursingRun, ctx: Ctx, e: Entry, part: OwedPart["part"] | null = null): string {
-  const when = whenText(new Date(run.start), ctx);
+function topUpLine(run: NursingRun, ctx: Ctx, e: Entry, part: OwedPart["part"] | null = null, at: number | null = null): string {
+  const when = whenText(new Date(at ?? run.start), ctx);
   if (e.kind === "feed" && atBreast(e as FeedEntry)) return `Counted with the feed that began at ${when}: milk at the breast, part of that feed, not a feed of its own.`;
   if (part === "milk at the breast") return `Counted with the feed that began at ${when}: part of that feed, not a feed of its own.`;
   return `Counted as a top-up to the feed that began at ${when}: part of that feed, not a feed of its own.`;
@@ -1708,22 +1740,25 @@ async function doFeed(a: FeedArgs, ctx: Ctx, w: WriteOpts): Promise<Saved> {
     const milk = split ? "mixed" : a.milk ?? undefined;
     const named = await topUpTarget(a.top_up_of, ctx);
     const { start } = resolveSpan({ at: a.at, minutes_ago: a.minutes_ago, ended_at: a.ended_at, ended_minutes_ago: a.ended_minutes_ago }, null, ctx, assumed);
-    // With no feed named: the late top-up (or milk at the breast) the feeding plan still owes the feed just before, saved
-    // with that feed as Today's card saves it, so Last fed, the day's count and the plan's next feed stay on it.
-    const owed = named == null ? await planOwedPart(ctx, start, { atBreast: a.via === "syringe" || a.via === "sns", tag: planFeed?.id }) : null;
+    const bottle = { method: "bottle", amount_ml, milk, via: a.via ?? undefined, breastmilk_ml, formula_ml };
+    // With no feed named, what the feeding plan takes it as, saved with that feed as Today's card saves it, so Last fed,
+    // the day's count and the plan's next feed stay on it: the late top-up (or milk at the breast) a nursing feed just
+    // before still owes (top_up_of), else a bottle-led feed's bottle still to give or short (the night's pump, then its
+    // bottle, and formula to finish: plan). Read without this bottle's own earlier save, so a retry gets the same link.
+    const link =
+      named == null && feedingPlanOf(ctx.baby.settings)
+        ? await planBottleFor(ctx, start, { atBreast: a.via === "syringe" || a.via === "sns", tag: planFeed?.id, data: bottle, skip: await bottleTwins(ctx, start, w) })
+        : { owed: null, led: null };
+    const { owed, led } = link;
     const topUpOf = named ?? owed?.id;
+    const planId = planFeed?.id ?? led?.feed.id;
     const core = await save(ctx, {
       kind: "feed",
       start,
       end: null,
       data: {
-        method: "bottle",
-        amount_ml,
-        milk,
-        via: a.via ?? undefined,
-        breastmilk_ml,
-        formula_ml,
-        ...(planFeed ? { plan: planFeed.id } : {}),
+        ...bottle,
+        ...(planId ? { plan: planId } : {}),
         ...(topUpOf != null ? { top_up_of: topUpOf } : {}),
       },
       note: a.note,
@@ -1733,11 +1768,20 @@ async function doFeed(a: FeedArgs, ctx: Ctx, w: WriteOpts): Promise<Saved> {
     // Given with a nursing feed, it's that feed's top-up: part of it, so the day's feeds don't go up.
     const fed = core.status === "duplicate" ? null : await toppedUpFeed(ctx, core.entry);
     const linked = !!owed && !!fed && fed.entries.some((e) => e.id === owed.id);
+    // A bottle-led plan feed's: more of the bottle feed begun before it by the log's count (its formula to finish), or its first bottle.
+    const same = led && !fed && core.status !== "duplicate" ? await sameBottleFeed(ctx, core.entry) : null;
+    const lines = fed
+      ? [topUpLine(fed, ctx, core.entry, linked ? owed!.part : null, linked ? namedAt(owed!.view) : null), ...(linked ? [owedPartLine(owed!, ctx.tz)] : [])]
+      : led && core.status !== "duplicate"
+        ? [ledBottleLine(led, !!same, ctx.tz)]
+        : [];
     return finish(ctx, core, assumed, {
-      lines: fed ? [topUpLine(fed, ctx, core.entry, linked ? owed!.part : null), ...(linked ? [owedPartLine(owed!, ctx.tz)] : [])] : [],
+      lines,
       extra: {
         ...(age ? { typical_bottle: `${typicalBottle(age.days)}. ${bottleCues(vo)}` } : {}),
         ...(fed ? { top_up_of: { id: fed.entries[0].id, started_local: localWhen(new Date(fed.start), ctx) } } : {}),
+        ...(led && core.status !== "duplicate" ? { plan_feed: { id: led.feed.id, name: led.feed.name } } : {}),
+        ...(same ? { same_feed_as: { id: same.bottle.id, started_local: localWhen(new Date(same.start), ctx) } } : {}),
       },
     });
   }
