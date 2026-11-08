@@ -158,6 +158,13 @@ async function main() {
       const edit = { ...plan, feeds: plan.feeds.map((f, i) => (i === 1 ? { ...f, steps: [f.steps[0], { do: "bottle", ml: [35, 45], milk: "either", via: "paced" }] } : f)) };
       const two = await save(alpha.member, A, { plan: edit, target: r.json.target, base_rev: 1 });
       ok(two.json.saved === true && two.json.rev === 2, two.text);
+      // The save's answer says what it changed, as its read-back did.
+      ok(
+        two.text.includes(
+          "What changed:\nWas: Nurse, top up: Nurse 8–12 min each side; then top up 25–35 ml, formula or breast milk, paced bottle\nNow: Nurse, top up: Nurse 8–12 min each side; then top up 35–45 ml, formula or breast milk, paced bottle\nEverything else stayed as it was."
+        ),
+        two.text
+      );
       const after = feedingPlanOf(await settings(A))!;
       eq([after.rev, after.feeds.map((f) => f.id), after.feeds[1].steps[1]], [2, plan.feeds.map((f) => f.id), { do: "bottle", ml: { min: 35, max: 45 }, milk: "either", via: "paced" }], "a member's edit, ids kept");
     });
@@ -169,6 +176,53 @@ async function main() {
       ok(stale.error && stale.text.startsWith("Nothing was saved: the feeding plan was changed since revision 1 (it's revision 2 now). It reads now:"), stale.text);
       ok(stale.text.includes("• Nurse, top up: Nurse 8–12 min each side; then top up 35–45 ml, formula or breast milk, paced bottle") && /Make the change again on this one/.test(stale.text), "the plan as it is now");
       eq(feedingPlanOf(await settings(A))?.rev, 2, "nothing saved");
+    });
+
+    await test(`${shape}: an edit reads back what it changes on the saved plan (feeds paired by id), then the whole plan; a resend that slips shows its slip`, async () => {
+      const read = await tool(alpha.owner, A, "feeding_plan");
+      const p = read.json.plan as { feeds: { id: string; name: string; steps: Record<string, unknown>[] }[]; night: Record<string, unknown> };
+      const base = { target: read.json.target, base_rev: read.json.rev };
+      const back = async (plan: unknown) => (await tool(alpha.owner, A, "set_feeding_plan", { ...base, plan })).text.split("\n{")[0];
+      // One amount: one pair, everything else stays, and the whole plan after it, to read only if asked.
+      const one = { ...p, feeds: p.feeds.map((f, i) => (i === 0 ? { ...f, steps: [{ ...f.steps[0], supplement: { via: "sns", ml: 25, milk: "formula" } }, f.steps[1]] } : f)) };
+      const amount = await back(one);
+      ok(
+        amount.includes(
+          "Read what changes back to them as it is, then ask if that's right:\nWhat changes:\nWas: Nurse + SNS: Nurse 12–18 min, 20 ml of formula in the SNS; then pump 15 min\nNow: Nurse + SNS: Nurse 12–18 min, 25 ml of formula in the SNS; then pump 15 min\nEverything else stays as it is.\nThe whole plan with the change, to read them only if they ask:\nFrom: Feeding clinic"
+        ),
+        amount
+      );
+      eq((amount.match(/^Was: /gm) ?? []).length, 1, "exactly one change");
+      // The night left out reads as removed, and its feed, now in no turn, asks with it.
+      const night = await back({ ...p, night: null });
+      ok(night.includes("What changes:\nRemoved: Night (11 PM–5 AM): every 3 hours, waking her: Pump + bottle\nEverything else stays as it is."), night);
+      ok(night.includes('Ask with it: "Pump + bottle" isn\'t in the day\'s turns, so Today only offers it as another choice. If it takes a turn, add it to order.'), "the feed it leaves without a turn");
+      // A partial resend says everything it would take out.
+      const partial = await back({ feeds: [p.feeds[1]] });
+      ok(/Removed: From: Feeding clinic/.test(partial) && /Removed: Nurse \+ SNS: /.test(partial) && /Removed: Pump \+ bottle: /.test(partial) && /Removed: Night \(/.test(partial), partial);
+      // A rename reads once, never again in the turns that name it.
+      const renamed = await back({ ...p, feeds: p.feeds.map((f, i) => (i === 1 ? { ...f, name: "Nurse, then top up" } : f)) });
+      ok(renamed.includes('What changes:\nRenamed: "Nurse, top up" is now "Nurse, then top up".\nEverything else stays as it is.'), renamed);
+      // A yes sent with a plan that slipped from what was read back reads back again, the slip among the changes.
+      const rb = await tool(alpha.owner, A, "set_feeding_plan", { ...base, plan: one });
+      const slipped = { ...one, feeds: one.feeds.map((f, i) => (i === 1 ? { ...f, steps: [{ do: "nurse", minutes: [8, 12] }, f.steps[1]] } : f)) };
+      const re = await tool(alpha.owner, A, "set_feeding_plan", { ...base, plan: slipped, confirmed: true, read_back: rb.json.read_back });
+      ok(re.json.confirm_needed === true && /That read_back isn't for this plan/.test(re.text) && re.text.includes("Was: Nurse, top up: Nurse 8–12 min each side; then top up 35–45 ml") && re.text.includes("Now: Nurse, top up: Nurse 8–12 min; then top up 35–45 ml"), re.text);
+      eq(feedingPlanOf(await settings(A))?.rev, 2, "nothing saved");
+    });
+
+    await test(`${shape}: a read-back asks with it about a night in the daytime, a long night and a feed nothing turns to; questions, never refusals`, async () => {
+      const ask = async (plan: unknown) => (await tool(beta.owner, B, "set_feeding_plan", { plan, target: [50, 70] })).text.split("\n{")[0];
+      // "11" and "1" read as 11 AM to 1 AM: 14 hours, so it isn't refused as too long, only asked about.
+      const day = await ask({ ...INPUT, night: { ...INPUT.night, from: "11:00", to: "1:00" } });
+      ok(day.includes('Ask with it: night would start at 11 AM, in the daytime. If they meant 11 PM, send night.from as "23:00".'), day);
+      const long = await ask({ ...INPUT, night: { ...INPUT.night, from: "18:00", to: "8 AM" } });
+      ok(long.includes("Ask with it: night would run 14 hours (6 PM to 8 AM). Check that's what their plan says."), long);
+      // The night's feed left out, with the day's turns given: it's in neither.
+      const left = await ask({ ...INPUT, order: ["Nurse + SNS", "Nurse, top up"], night: { ...INPUT.night, feed: null } });
+      ok(left.includes('Ask with it: "Pump + bottle" isn\'t in the day\'s turns or the night\'s feed, so Today only offers it as another choice. If it\'s the night\'s feed, set night.feed to it; if it takes a turn by day, add it to order.'), left);
+      ok(!/Ask with it/.test(await ask(INPUT)), "none for a plan without them");
+      ok(!("feeding_plan" in (await settings(B))), "nothing saved");
     });
 
     await test(`${shape}: a plan that can't be saved comes back in feeding-plan.ts's own words; a number in the wrong place is refused, never dropped`, async () => {

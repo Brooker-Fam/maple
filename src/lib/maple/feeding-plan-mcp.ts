@@ -7,6 +7,7 @@ import {
   amountText,
   AT_BREAST_WORDS,
   checkFeedingPlan,
+  clockWords,
   dueStatus,
   dueText,
   feedById,
@@ -211,6 +212,105 @@ function planNowBlock(n: FeedPlanNow, w: Words): string[] {
   }
   const missed = missedWords(n, w);
   if (missed) out.push(`${missed}${missedTopUpOf(n) != null ? " A top-up for it given now is a bottle with top_up_of (in the JSON), so it counts as that feed's." : ""}`);
+  return out;
+}
+
+// ── an edit, read back as what it changes ────────────────────────────────
+
+type PlanWords = { her: string; sheIs: string };
+
+/**
+ * A plan's lines (planLines) by what each one says: who it's from, the
+ * target, the day, each feed by its id, the night and the notes, so an
+ * edit's lines pair with the saved plan's. A line of another kind pairs only
+ * with the same line.
+ */
+function keyedLines(plan: FeedingPlan, target: FeedTarget | null, words: PlanWords): Map<string, string> {
+  const out = new Map<string, string>();
+  let feed = 0;
+  for (const line of planLines(plan, target, words)) {
+    // The feeds' lines come in the plan's order (planLines), each named by its feed.
+    const f = line.startsWith("• ") ? plan.feeds[feed++] : undefined;
+    const key =
+      f && line.startsWith(`• ${f.name}: `)
+        ? `feed ${f.id}`
+        : /^(From: |check in )/.test(line)
+          ? "from"
+          : line.startsWith("Target: ")
+            ? "target"
+            : /^(Day|Feeds): /.test(line)
+              ? "day"
+              : line.startsWith("Night (")
+                ? "night"
+                : line.startsWith("Notes: ")
+                  ? "notes"
+                  : `line ${line}`;
+    out.set(key, line);
+  }
+  return out;
+}
+
+const unbulleted = (line: string) => line.replace(/^• /, "");
+
+/**
+ * What an edit changes on the saved plan, in the read-back's own words: a
+ * renamed feed once (feeds pair by id, so the turns and the night that name
+ * it read the same), each line that reads differently as it was and as it
+ * would be, then the lines added and removed. `kept`: how many lines stay as
+ * they are.
+ */
+export function planChanges(saved: FeedingPlan, savedTarget: FeedTarget | null, plan: FeedingPlan, target: FeedTarget | null, words: PlanWords): { lines: string[]; kept: number } {
+  const names = new Map(plan.feeds.map((f) => [f.id, f.name]));
+  const lines: string[] = [];
+  for (const f of saved.feeds) {
+    const now = names.get(f.id);
+    if (now !== undefined && now !== f.name) lines.push(`Renamed: ${named(f)} is now ${JSON.stringify(now)}.`);
+  }
+  // The saved plan in the new names: a rename reads once, never again in the turns or the night.
+  const before = keyedLines({ ...saved, feeds: saved.feeds.map((f) => ({ ...f, name: names.get(f.id) ?? f.name })) }, savedTarget, words);
+  const after = keyedLines(plan, target, words);
+  // The day's line is "Day: …" beside a night and "Feeds: …" without one: the same day either way.
+  const same = (key: string, a: string, b: string) => a === b || (key === "day" && a.replace(/^(Day|Feeds): /, "") === b.replace(/^(Day|Feeds): /, ""));
+  let kept = 0;
+  for (const [key, line] of after) {
+    const was = before.get(key);
+    if (was === undefined) lines.push(`Added: ${unbulleted(line)}`);
+    else if (!same(key, was, line)) lines.push(`Was: ${unbulleted(was)}`, `Now: ${unbulleted(line)}`);
+    else kept++;
+  }
+  for (const [key, line] of before) if (!after.has(key)) lines.push(`Removed: ${unbulleted(line)}`);
+  return { lines, kept };
+}
+
+const clockMinutes = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
+const hhmmOf = (min: number) => `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
+
+/**
+ * Questions to ask with a read-back, never refusals: a night that starts in
+ * the daytime ("11:00" for 11 PM) or runs 13 hours or more (a longer one than
+ * 16 isn't saved), and a feed neither the day's turns nor the night turn to,
+ * which Today only offers as another choice (a fallback feed is fine, a night
+ * feed left out of night.feed isn't).
+ */
+export function planCautions(plan: FeedingPlan): string[] {
+  const out: string[] = [];
+  const n = plan.night;
+  if (n) {
+    const from = clockMinutes(n.from);
+    const minutes = (clockMinutes(n.to) - from + 1440) % 1440;
+    if (from >= 6 * 60 && from < 15 * 60) {
+      const other = hhmmOf((from + 720) % 1440);
+      out.push(`Ask with it: night would start at ${clockWords(n.from)}, in the daytime. If they meant ${clockWords(other)}, send night.from as "${other}".`);
+    } else if (minutes >= 13 * 60) {
+      const hours = minutes / 60;
+      out.push(`Ask with it: night would run ${Number.isInteger(hours) ? hours : hours.toFixed(1)} hours (${clockWords(n.from)} to ${clockWords(n.to)}). Check that's what their plan says.`);
+    }
+  }
+  for (const f of plan.feeds) {
+    if (plan.order.includes(f.id) || f.id === n?.feed) continue;
+    const fix = n ? "If it's the night's feed, set night.feed to it; if it takes a turn by day, add it to order." : "If it takes a turn, add it to order.";
+    out.push(`Ask with it: ${named(f)} isn't in the day's turns${n ? " or the night's feed" : ""}, so Today only offers it as another choice. ${fix}`);
+  }
   return out;
 }
 
@@ -570,7 +670,7 @@ export function registerFeedingPlanTools(server: McpServer, copy: ToolCopy = FAM
         plan: planShape
           .nullish()
           .describe(
-            `The whole plan. feeds: 1 to 6, each {name, steps: 1 to 8, id when changing one}. Steps: {do:"nurse", minutes, each_side, shield (nipple shield), supplement: milk given at the breast while nursing {via:"syringe"|"sns", ml, milk}}; {do:"pump", minutes}; {do:"bottle", ml or to_target (up to the target per feed), milk, via:"bottle"|"paced"} (after nursing it's the top-up); {do:"note", text}. minutes, ml and every: a number or [min, max]; every is minutes start to start. milk: breastmilk, formula, either, breastmilk_first (pumped milk, then formula to finish). day: {every, wake (wake ${vo.them} to feed)}. night: {from, to ("23:00" or "11 PM"), every, wake, feed: the night's feed by name; leave feed out when the day's turns go on at night}. order: the day feeds' names in turn. amounts_in: the unit the numbers here are in (oz converts); unit: how they show (default amounts_in). from: who it's from; check_in: the next visit, YYYY-MM-DD; notes.`
+            `The whole plan. feeds: 1 to 6, each {name, steps: 1 to 8, id when changing one}. Steps: {do:"nurse", minutes, each_side, shield (nipple shield), supplement: milk given at the breast while nursing {via:"syringe"|"sns", ml, milk}}; {do:"pump", minutes}; {do:"bottle", ml or to_target (up to the target per feed), milk, via:"bottle"|"paced"} (after nursing it's the top-up); {do:"note", text}. minutes, ml and every: a number or [min, max]; every is minutes start to start. milk: breastmilk, formula, either, breastmilk_first (pumped milk, then formula to finish). day: {every, wake (wake ${vo.them} to feed)}. night: {from, to (24-hour "23:00", or "11 PM" with AM or PM), every, wake, feed: the night's feed by name; leave feed out when the day's turns go on at night}. order: the day feeds' names in turn. amounts_in: the unit the numbers here are in (oz converts); unit: how they show (default amounts_in). from: who it's from; check_in: the next visit, YYYY-MM-DD; notes.`
           ),
         target: range()
           .nullish()
@@ -659,19 +759,35 @@ export function registerFeedingPlanTools(server: McpServer, copy: ToolCopy = FAM
         return ok("Nothing to change: that's the feeding plan as it's saved.\nIt reads the same as the saved one, target included, so nothing was saved.", { unchanged: true, rev: current!.rev });
       }
       const what = ["feeding_plan", "set", stable, target, sets];
+      // An edit is read back as what it changes on the saved plan (the re-read after a changed resend too, so a slip shows).
+      const changes = current ? planChanges(current, savedTarget, plan, target, words) : null;
       if (a.confirmed !== true || !readBackMatches(ctx, what, a.read_back)) {
         const token = readBackToken(ctx, what);
         const ask = plan.feeds.some((f) => f.steps.some((s) => s.do === "bottle" && s.to_target && !s.ml)) && !target
           ? ["Ask with it: a bottle says up to the target, and there's no target per feed. If their plan gives one, add it as target; if not, it stays \"up to the target\"."]
           : [];
+        // An edit asks only what it brings: a caution the saved plan already had was asked when it was saved.
+        const had = current ? planCautions(current) : [];
+        const cautions = planCautions(plan).filter((c) => !had.includes(c));
+        const yes = `Only if they say yes, call set_feeding_plan again with the same plan${sets ? " and target" : ""}, confirmed: true and read_back: "${token}". To change something first, change it and read the plan back again. ${PLAN_WORDS_JSON}`;
+        const body = changes
+          ? [
+              `${rereadWhy(a, "plan") ?? ""} Read what changes back to them as it is, then ask if that's right:`.trim(),
+              "What changes:",
+              ...(changes.lines.length ? changes.lines : ["Nothing they'd hear: it reads the same as the saved plan."]),
+              ...(changes.lines.length && changes.kept ? ["Everything else stays as it is."] : []),
+              ...ask,
+              ...cautions,
+              "The whole plan with the change, to read them only if they ask:",
+              ...planLines(plan, target, words),
+            ]
+          : [`${rereadWhy(a, "plan") ?? ""} Read every line of this back to them as it is, then ask if it's right:`.trim(), ...planLines(plan, target, words), ...ask, ...cautions];
         return ok(
           [
             // The first line is what the chat's card shows the family.
             "Not saved yet: say yes to save the plan.",
-            `${rereadWhy(a, "plan") ?? ""} Read every line of this back to them as it is, then ask if it's right:`.trim(),
-            ...planLines(plan, target, words),
-            ...ask,
-            `Only if they say yes, call set_feeding_plan again with the same plan${sets ? " and target" : ""}, confirmed: true and read_back: "${token}". To change something first, change it and read the plan back again. ${PLAN_WORDS_JSON}`,
+            ...body,
+            yes,
           ].join("\n"),
           { confirm_needed: true, read_back: token, ...(current ? { base_rev: current.rev } : {}) }
         );
@@ -689,6 +805,8 @@ export function registerFeedingPlanTools(server: McpServer, copy: ToolCopy = FAM
         [
           "Saved the feeding plan.",
           `Revision ${plan.rev}${plan.from ? `, from ${plan.from}` : ""}${sets ? `, with a target of ${amountText(target!, plan.unit)} a feed` : ""}. Today shows it now: ${planNowLine(n, wordsOf(ctx)).replace(/^Feeding plan: /, "")}`,
+          // An edit's answer says what it changed, as its read-back did.
+          ...(changes?.lines.length ? ["What changed:", ...changes.lines, ...(changes.kept ? ["Everything else stayed as it was."] : [])] : []),
         ].join("\n"),
         { saved: true, rev: plan.rev, feeds: plan.feeds.map((f) => ({ id: f.id, name: f.name })), family_words: PLAN_WORDS_JSON }
       );
