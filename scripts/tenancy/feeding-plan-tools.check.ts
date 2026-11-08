@@ -85,6 +85,40 @@ async function main() {
     return tool(who, fam, "set_feeding_plan", { ...args, confirmed: true, read_back: first.json.read_back });
   };
 
+  await test("a bottle up to the target that's short of it reads what's in it and what it still needs: the plan's line, the missed line and Siri's", async () => {
+    // The engine's contract (feeding-plan.ts StepView.need): such a bottle stays to do while what's logged is under
+    // its amount. The night feed's view is built here as the engine gives it, so the words are checked on their own.
+    type Now = import("../../src/lib/maple/feeding-plan").FeedPlanNow;
+    const { feedPlanNow } = await import("../../src/lib/maple/feeding-plan");
+    const { planNowLine, planSpeak } = await import("../../src/lib/maple/feeding-plan-mcp");
+    const { FAMILY_ONE_VOICE } = await import("../../src/lib/maple/voice");
+    const { zonedTimeToUtc } = await import("../../src/lib/maple/time");
+    const tz = "America/Chicago";
+    const T = (h: number, m: number) => zonedTimeToUtc(2026, 11, 4, h, m, tz).getTime();
+    const now = new Date(T(2, 5));
+    const plan = parseFeedingPlan(INPUT, null, now);
+    const target = { min: 50, max: 70 };
+    // The night's pump from 1:30 to 1:50 AM, then 40 ml of pumped milk by bottle at 1:55: the formula to finish not yet given.
+    const steps = plan.feeds[2].steps.map((step, i) =>
+      step.do === "pump"
+        ? { i, step, status: "done", minutes: 20, ml: null, need: null, milkMissing: false, entries: [] }
+        : step.do === "bottle"
+          ? { i, step, status: "todo", minutes: null, ml: 40, need: target, milkMissing: false, entries: [] }
+          : { i, step, status: "info", minutes: null, ml: null, need: null, milkMissing: false, entries: [] }
+    );
+    const short = { feed: plan.feeds[2], why: "night", night: true, start: T(1, 30), group: null, steps, done: false, live: false, lastAt: T(1, 55), extraNursing: false } as unknown as Now["focus"];
+    const base = feedPlanNow(plan, [], now, { tz, target });
+    const w = { now, tz, vo: FAMILY_ONE_VOICE };
+    const going: Now = { ...base, focus: { ...short, state: "underway" }, after: { feed: plan.feeds[0], night: true }, missed: null, others: [] };
+    const line = planNowLine(going, w);
+    ok(line.includes("So far: bottle up to 50–70 ml, pumped milk first, then formula to finish (40 ml so far). Next: formula to finish, 10–30 ml more; then burp halfway."), line);
+    eq(planSpeak(going, w), "From the feeding plan: Pump + bottle is underway; still to do: formula to finish, 10 to 30 ml more (40 ml so far).", "Siri");
+    // Left like that, the next feed's line says it, as a step the feed didn't finish.
+    const after: Now = { ...base, missed: { view: short, steps: short.steps.filter((s) => s.status === "todo") } };
+    const missed = planNowLine(after, w);
+    ok(missed.includes('From the 1:30 AM feed ("Pump + bottle"), bottle up to 50–70 ml, pumped milk first, then formula to finish (40 ml so far); not logged: formula to finish, 10–30 ml more.'), missed);
+  });
+
   for (const shape of ["production", "final"] as Shape[]) {
     await freshDb({ shape });
     const s: Seed = await seedFamilies();
