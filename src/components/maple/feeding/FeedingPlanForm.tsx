@@ -211,7 +211,7 @@ function FeedEditor({ feed, was, index, draft, change, watch, canFold, mark, has
   // and one a refusal is about opens (and stays open while it's fixed).
   const [open, setOpen] = useState(!feed.id);
   if (mark && !open) setOpen(true);
-  // Its name still says what this edit took out ("Shield + syringe" without the shield): say so, with a way to rename it.
+  // Its name still says what this edit took out ("Nurse + SNS" with no SNS any more): say so, with a way to rename it.
   const stale = staleNameWords(feed, was);
   const staleText = stale.length ? `Its name still says ${quotedList(stale)}.` : null;
   const nameRef = useRef<HTMLInputElement>(null);
