@@ -4,7 +4,7 @@ import { useId, type ReactNode } from "react";
 import { feedPartsList, planUnitsOf } from "@/lib/maple/describe";
 import { bottleAmount, gapSummary, minutesShort, sideMinutesText, spanText, stepsIn, type GapStep, type Latch } from "@/lib/maple/feed";
 import { dayKey, formatDayLabel, formatDuration, formatTime } from "@/lib/maple/time";
-import type { UnitSystem } from "@/lib/maple/types";
+import type { EntryOf, UnitSystem } from "@/lib/maple/types";
 import { formatVolume } from "@/lib/maple/units";
 import { DETAIL_COLOR } from "./palette";
 import { HowToRead, cx, tone } from "./ui";
@@ -23,7 +23,9 @@ import { useMaple } from "./useMaple";
  * Back on within 10 minutes is still one feed on Today and in the counts, so
  * its row says "back on after 6m"; milk at the breast and a top-up are part
  * of their feed, so they ride on that row ("+ 20 ml in the syringe", "+ 35 ml
- * top-up"), never a row or a gap of their own. A cluster is a shaded band, never folded,
+ * top-up"), never a row or a gap of their own, and so do a feeding plan's later
+ * bottles of a bottle feed (pumped milk, then formula to finish: "Bottle · 30
+ * ml + 20 ml"), as Today counts them. A cluster is a shaded band, never folded,
  * so its gaps show too. The time on the breast just before the window leads,
  * quieter, so a day's first gap (from the evening before) shows. It only
  * describes what was logged: no targets, no scores, and over 12 hours
@@ -36,6 +38,9 @@ const BUCKET_NAMES = ["Under 1 hour", "1 to 2 hours", "2 to 3 hours", "3 to 4 ho
 const GRID = "grid grid-cols-[64px_20px_minmax(0,1fr)] gap-x-1.5";
 // A cluster's band; at night the sunken ink is too close to the card, so it's the night look's amber wash (as .mp-kind's).
 const BAND = "-mx-2 px-2 bg-mp-sunken/70 [.maple-night_&]:bg-[rgb(224_169_59/0.08)]";
+
+/** "30 ml", never broken between the number and its unit at a narrow line's end. */
+const amountText = (ml: number, units: UnitSystem) => formatVolume(ml, units).replace(" ", "\u00a0");
 
 /** Unique per row (a bottle can begin the same minute as nursing). */
 const stepKey = (s: GapStep) => (s.feed.kind === "bottle" ? `b${s.feed.entry.id}` : `n${s.feed.latch.entries[0].id}-${s.start}`);
@@ -55,8 +60,14 @@ function sidesText(latch: Latch): string {
  */
 function feedWords(step: GapStep, units: UnitSystem, planUnits: UnitSystem | null): { main: string; more: string[] } {
   if (step.feed.kind === "bottle") {
-    const ml = bottleAmount(step.feed.entry.data);
-    return { main: ml ? `Bottle · ${formatVolume(ml, units)}` : "Bottle", more: [] };
+    // A bottle feed's later bottles ride on its row, never a row or a gap of their own (feed.ts's `more`: a feeding
+    // plan's formula to finish), each amount said: "Bottle · 30 ml + 20 ml" (an amount not said: "+ 1 more bottle").
+    const bottles = [step.feed.entry, ...((step.feed as { more?: readonly EntryOf<"feed">[] }).more ?? [])];
+    const amounts = bottles.map((b) => bottleAmount(b.data)).filter((ml): ml is number => !!ml);
+    const unsaid = bottles.length - amounts.length;
+    if (!amounts.length) return { main: bottles.length > 1 ? `${bottles.length} bottles` : "Bottle", more: [] };
+    const said = amounts.map((ml) => amountText(ml, units)).join(" + ");
+    return { main: `Bottle · ${said}${unsaid ? ` + ${unsaid} more bottle${unsaid === 1 ? "" : "s"}` : ""}`, more: [] };
   }
   const latch = step.feed.latch;
   const total = minutesShort(latch.min.total);
@@ -248,7 +259,7 @@ export default function BetweenFeeds({
         {rows}
       </ol>
       <HowToRead className="border-t border-mp-line px-4">
-        <p>Each row is a time on the breast, or a bottle on its own. Between rows is the time from one start to the next start. Coming off for under 2 minutes, like switching sides, stays on the same row, and milk at the breast or a top-up given with nursing is on its row.</p>
+        <p>Each row is a time on the breast, or a bottle on its own. Between rows is the time from one start to the next start. Coming off for under 2 minutes, like switching sides, stays on the same row, and milk at the breast or a top-up given with nursing is on its row. A feeding plan&apos;s bottles of one feed, like pumped milk and then formula to finish, share a row too.</p>
         <p>Back on within 10 minutes counts as the same feed on Today and in the feed counts. Here it gets its own row, marked &ldquo;back on after&rdquo;, so that gap shows too.</p>
         <p>A shaded band is a cluster: 3 or more feeds, each starting less than 30 minutes after the last one ended.</p>
         <p>Only what was logged counts. Over 12 hours between two logged feeds is left out of the numbers, in case a feed wasn&apos;t logged.</p>

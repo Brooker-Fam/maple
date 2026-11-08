@@ -571,6 +571,32 @@ try {
     assert.equal(await text(), "8:00 PM Nursed 20m · Right 3h 00m until the next start Cluster 11:00 PM–12:20 AM · 3 feeds 11:00 PM Nursed 15m · Left 35m until the next start 11:35 PM Nursed 10m · Right");
   });
 
+  await scenario("a feeding plan's bottles of one feed are one row in Between feeds, and Compare days names milk at the breast", "planDay=1&metric=1", 375, async (page) => {
+    const card = page.getByRole("region", { name: "Between feeds", exact: true });
+    await card.waitFor();
+    const list = card.getByRole("list", { name: "Feeds and the time between them", exact: true });
+    const text = async (locator) => (await locator.innerText()).replace(/\s+/g, " ").trim();
+    // The night's pumped milk and its formula to finish are one feed, as Today counts it: one row, no 13-minute gap.
+    assert.equal(await text(list), "Yesterday 11:20 PM Nursed 20m · Right 3h 02m until the next start Today 2:22 AM Bottle · 30 ml + 20 ml 3h 08m until the next start "
+      + "5:30 AM Nursed 15m · Left · + 20 ml in the syringe 3h 00m until the next start 8:30 AM Nursed 20m · Right 2h 30m until the next start 11:00 AM Bottle · 60 ml");
+    assert.equal(await text(card.locator("p").first()), "4 gaps · longest 3h 08m, 2:22–5:30 AM");
+    assert.equal(await text(card.locator("dl")), "Under 1 hour 0 1 to 2 hours 0 2 to 3 hours 1 3 to 4 hours 3 4 hours or more 0");
+    await page.setViewportSize({ width: 320, height: 568 });
+    await noOverflow(page);
+    await card.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(screenshots, "between-feeds-plan-320.png"), fullPage: true });
+    await page.setViewportSize({ width: 375, height: 812 });
+
+    // Compare days: each bottle is its own mark, in the log's words; milk at the breast is never a top-up.
+    await page.getByRole("radio", { name: "Compare days", exact: true }).click();
+    const ribbon = page.getByRole("button", { name: /^Today.*Open in the Timeline$/ });
+    await ribbon.waitFor();
+    const titles = (await ribbon.locator("svg title").allTextContents()).map((t) => t.replace(/\s+/g, " "));
+    assert.ok(titles.includes("Syringe at the breast 20 ml · 5:35 AM"), titles.join(" | "));
+    assert.ok(titles.includes("Bottle 30 ml · 2:22 AM") && titles.includes("Bottle 20 ml · 2:35 AM"), titles.join(" | "));
+    assert.ok(!titles.some((t) => /^Top-up/.test(t)), titles.join(" | "));
+  });
+
   await scenario("fresh snapshots appear before the minute tick while true future entries stay hidden", "empty=1", 375, async (page) => {
     await page.getByRole("region", { name: "Day dial", exact: true }).getByRole("img", { name: /0 wet/ }).waitFor();
     await page.evaluate(() => {

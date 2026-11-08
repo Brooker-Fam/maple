@@ -98,6 +98,29 @@ if (query.has("feedingDay")) {
   }
 }
 
+// A made-up day on a feeding plan, in ml: the night's Pump + bottle (pump at 2:00, then 30 ml of pumped milk and 20 ml of
+// formula to finish, both of plan feed p1f3: one feed, one row in Between feeds), nursing at 5:30 with 20 ml in the
+// syringe (part of it, said as milk at the breast, never a top-up), nursing at 8:30 and a 60 ml bottle at 11:00; the
+// evening before, nursing at 11:20 PM.
+if (query.has("planDay")) {
+  entries.splice(0);
+  const at = (date, clock) => { const { year, month, day } = parseDayKey(date); const [hour, minute] = clock.split(":").map(Number); return zonedTimeToUtc(year, month, day, hour, minute, TZ).toISOString(); };
+  const push = (kind, start, end, data) => entries.push({ id: ++nextId, kind, started_at: start, ended_at: end, active: false, data, note: null, source: "app", created_by: MEMBER.email, updated_by: null, created_at: NOW, updated_at: NOW });
+  const nurse = (date, side, a, b) => {
+    const segments = [{ side, start: at(date, a), end: at(date, b) }];
+    push("feed", segments[0].start, segments[0].end, { method: "breast", segments, first_side: side, last_side: side });
+    return nextId;
+  };
+  nurse(addDays(TODAY, -1), "R", "23:20", "23:40");
+  push("pump", at(TODAY, "02:00"), at(TODAY, "02:20"), {});
+  push("feed", at(TODAY, "02:22"), null, { method: "bottle", amount_ml: 30, milk: "breastmilk", plan: "p1f3" });
+  push("feed", at(TODAY, "02:35"), null, { method: "bottle", amount_ml: 20, milk: "formula", plan: "p1f3" });
+  const early = nurse(TODAY, "L", "05:30", "05:45");
+  push("feed", at(TODAY, "05:35"), null, { method: "bottle", amount_ml: 20, milk: "formula", via: "syringe", top_up_of: early });
+  nurse(TODAY, "R", "08:30", "08:50");
+  push("feed", at(TODAY, "11:00"), null, { method: "bottle", amount_ml: 60, milk: "formula" });
+}
+
 function HistoryShell() {
   const nav = useAppNav();
   return nav.tab === "history" ? <HistoryTab /> : null;

@@ -381,6 +381,55 @@ export function feedPartsCases({ fixture, freshState, record, writes, assert }) 
         assert.deepEqual(f.errors, []);
       } finally { await f.close(); }
     }],
+    ["Feed parts: Last fed on a plan's bottle feed adds its formula to finish, says each, and opens the first bottle", async () => {
+      const state = freshState();
+      state.baby.settings = { show_alerts: false, feeding_plan: PLAN, feed_target_ml: { min: 50, max: 70 } };
+      // Pump + bottle: pumped 8:35–8:55, then 30 ml of pumped milk at 9:00 and 20 ml of formula to finish at 9:12, both
+      // its own (p1f3), logged from the card with no end: one feed.
+      state.entries = newest([
+        record(71, "pump", {}, "2026-10-28T12:35:00.000Z", { ended_at: "2026-10-28T12:55:00.000Z" }),
+        record(72, "feed", { method: "bottle", amount_ml: 30, milk: "breastmilk", plan: "p1f3" }, "2026-10-28T13:00:00.000Z"),
+        record(73, "feed", { method: "bottle", amount_ml: 20, milk: "formula", plan: "p1f3" }, "2026-10-28T13:12:00.000Z"),
+      ]);
+      const f = await fixture({ state, records: state.entries });
+      try {
+        await metric(f);
+        for (const width of [375, 320]) {
+          await f.page.setViewportSize({ width, height: 740 });
+          await f.page.goto("https://first-use.example.test/#today");
+          const block = f.page.getByRole("button", { name: /^Last feed started 30m ago, started 9:00\sAM\./ });
+          await block.waitFor();
+          const line = block.locator("xpath=..").locator("p", { hasText: "bottle" }).first();
+          assert.equal((await line.innerText()).replace(/\s+/g, " ").trim(), "50 ml bottle (30 ml breast milk + 20 ml formula) · target 50–70 ml");
+          // Inside the card at both widths, broken only between the bottles.
+          const fits = await line.evaluate((p) => {
+            const card = p.closest("div.overflow-hidden") ?? document.body;
+            const edge = card.getBoundingClientRect().right;
+            return [...p.querySelectorAll("span.whitespace-nowrap")].every((s) => s.getBoundingClientRect().right <= edge + 0.5);
+          });
+          assert(fits, `Last fed's line stays inside the card at ${width}px`);
+          // MAPLE_FEED_PARTS_SHOTS=<folder>: the card by day and in the night look, to look at.
+          const shots = process.env.MAPLE_FEED_PARTS_SHOTS;
+          if (shots) {
+            // Tall enough that the dock sits below the card.
+            await f.page.setViewportSize({ width, height: 1200 });
+            const lastFed = block.locator("xpath=..");
+            await lastFed.screenshot({ path: `${shots}/last-fed-bottles-${width}-day.png` });
+            await f.page.evaluate(() => { localStorage.setItem("maple-night", "always"); window.dispatchEvent(new Event("maple-night-pref")); });
+            await f.page.waitForTimeout(300);
+            await lastFed.screenshot({ path: `${shots}/last-fed-bottles-${width}-night.png` });
+            await f.page.evaluate(() => { localStorage.removeItem("maple-night"); window.dispatchEvent(new Event("maple-night-pref")); });
+          }
+        }
+        await f.page.getByRole("button", { name: /^Last feed started 30m ago/ }).click();
+        // The feed it opens is its first bottle (the pumped milk).
+        const sheet = f.page.getByRole("dialog", { name: "Bottle", exact: true });
+        await sheet.waitFor();
+        assert.equal(await sheet.getByRole("textbox", { name: "millilitres", exact: true }).inputValue(), "30");
+        assert.deepEqual(writes(f), []);
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
     ["Feed parts: While you slept counts a feed still going once, with its milk at the breast, never as a feed of its own", async () => {
       const helper = { email: "helper@example.test", display_name: "Alex", role: "member", emoji: null, color: null };
       const state = freshState();
