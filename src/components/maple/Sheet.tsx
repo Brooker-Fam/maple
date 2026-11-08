@@ -55,6 +55,7 @@ export function Sheet({
   open,
   onClose,
   title,
+  titleRoom,
   subtitle,
   children,
   footer,
@@ -69,6 +70,11 @@ export function Sheet({
   dirty?: boolean;
   onClose: () => void;
   title: string;
+  /**
+   * A title it can change to with a tap inside ("Bottle" for a feed's part said to be a feed of its own): the header
+   * keeps the room of the longer of the two, unseen, so the form under it doesn't move under the thumb.
+   */
+  titleRoom?: string;
   /** One quiet line under the title ("Nursing · feed started 4:00 PM"). */
   subtitle?: ReactNode;
   children: ReactNode;
@@ -279,7 +285,16 @@ export function Sheet({
             <div className={cx("flex items-center justify-between gap-3 px-5 pb-3", locked ? "pt-0.5" : "pt-2")}>
               <div className="min-w-0">
                 <h2 ref={titleRef} tabIndex={calm ? -1 : undefined} className={cx(display ? tone.display : tone.heading, display ? "text-[28px] leading-tight" : "text-[20px]", "outline-none")}>
-                  {title}
+                  {titleRoom ? (
+                    <span className="grid">
+                      <span className="col-start-1 row-start-1">{title}</span>
+                      <span aria-hidden className="invisible col-start-1 row-start-1">
+                        {titleRoom}
+                      </span>
+                    </span>
+                  ) : (
+                    title
+                  )}
                 </h2>
                 {subtitle && <p className="mt-0.5 text-[13px] leading-snug text-mp-ink-2">{subtitle}</p>}
               </div>

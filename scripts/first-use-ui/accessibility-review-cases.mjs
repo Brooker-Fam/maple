@@ -1,4 +1,4 @@
-export function accessibilityReviewCases({ fixture, freshState, record, assert }) {
+export function accessibilityReviewCases({ fixture, freshState, record, assert, settle }) {
   const openMore = async (f, name) => {
     await f.page.goto("https://first-use.example.test/#today");
     await f.page.getByRole("button", { name: "More", exact: true }).click();
@@ -106,6 +106,8 @@ export function accessibilityReviewCases({ fixture, freshState, record, assert }
         await form.getByRole("button", { name: "Close", exact: true }).click();
         await guard.getByRole("button", { name: "Discard changes", exact: true }).click();
         await form.waitFor({ state: "hidden" });
+        // More again within the dock's own wait after its first tap (tapCooldown.ts) does nothing: waited out first.
+        await settle(f);
         await f.page.getByRole("button", { name: "More", exact: true }).click();
         await f.page.getByRole("button", { name: "For the doctor", exact: true }).click();
         form = f.page.getByRole("dialog", { name: "For the doctor", exact: true });

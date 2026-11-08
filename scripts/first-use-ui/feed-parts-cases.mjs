@@ -443,8 +443,9 @@ export function feedPartsCases({ fixture, freshState, record, writes, assert }) 
         assert.equal(await switched.getAttribute("aria-checked"), "true");
         const after = await switched.boundingBox();
         assert(before && after && Math.abs(after.y - before.y) < 2, `the switch stays put (${before?.y} → ${after?.y})`);
-        assert.match(await form.textContent(), /A feed of its own, not that feed's top-up\./);
-        assert.doesNotMatch(await form.textContent(), /Part of that feed/);
+        // What it says (innerText): not the room it keeps, unseen, for what the switch would say, so the switch stays put.
+        assert.match(await form.innerText(), /A feed of its own, not that feed's top-up\./);
+        assert.doesNotMatch(await form.innerText(), /Part of that feed/);
         assert(await form.getByRole("region", { name: "Plan feed" }).isVisible(), "which plan feed it was is the family's to say, not set");
         await form.getByRole("button", { name: "Log 60 ml now", exact: true }).click();
         await form.waitFor({ state: "hidden" });
@@ -526,7 +527,9 @@ export function feedPartsCases({ fixture, freshState, record, writes, assert }) 
         // The switch stays under the thumb, and the bottle is said as a bottle: how it was given, its amount, at now.
         const after = await form.getByRole("switch", { name: "A feed of its own", exact: true }).boundingBox();
         assert(before && after && Math.abs(after.y - before.y) < 2, `the switch stays put (${before?.y} → ${after?.y})`);
-        assert.match((await form.textContent()).replace(/[  ]/g, " "), /A feed of its own, not part of the 10:40 AM feed\./);
+        // What it says (innerText): not the room it keeps, unseen, for what the switch would say, so the switch stays put.
+        assert.match((await form.innerText()).replace(/[  ]/g, " "), /A feed of its own, not part of the 10:40 AM feed\./);
+        assert.doesNotMatch(await form.innerText(), /part of it/);
         const how = form.getByRole("radiogroup", { name: "How it was given" });
         assert.deepEqual(await how.getByRole("radio").allTextContents(), ["Bottle", "Paced bottle"]);
         assert.equal(await form.getByRole("textbox", { name: "millilitres", exact: true }).inputValue(), "60");
@@ -546,7 +549,8 @@ export function feedPartsCases({ fixture, freshState, record, writes, assert }) 
         form = f.page.getByRole("dialog", { name: "Milk at the breast", exact: true });
         await form.waitFor();
         assert.equal(await form.getByRole("radiogroup", { name: "How it was given" }).getByRole("radio", { name: "SNS", exact: true }).getAttribute("aria-checked"), "true");
-        assert.match((await form.textContent()).replace(/[  ]/g, " "), /With the 10:40 AM feed: part of it, not a feed of its own\./);
+        assert.match((await form.innerText()).replace(/[  ]/g, " "), /With the 10:40 AM feed: part of it, not a feed of its own\./);
+        assert.doesNotMatch(await form.innerText(), /A feed of its own, not/);
         assert.equal(await form.getByRole("button", { name: "Now", exact: true }).getAttribute("aria-pressed"), "false", "back at that feed's end");
         if (shots) await form.screenshot({ path: `${shots}/own-sns-off.png` });
         await form.getByRole("switch", { name: "A feed of its own", exact: true }).click();

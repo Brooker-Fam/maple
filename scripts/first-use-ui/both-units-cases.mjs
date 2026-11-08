@@ -5,7 +5,7 @@
  * did. Made-up feeds and amounts on the fixture's clock (9:30 AM in the family's zone); the plan is the invented one
  * in feeding-plan-cases.mjs ("Nurse + SNS" with 20 ml of formula in the SNS, a 50–70 ml target).
  */
-export function bothUnitsCases({ fixture, freshState, record, writes, assert }) {
+export function bothUnitsCases({ fixture, freshState, record, writes, assert, settle }) {
   const both = (f, units = "us") =>
     f.page.addInitScript((units) => {
       localStorage.setItem("maple-units", units);
@@ -89,9 +89,14 @@ export function bothUnitsCases({ fixture, freshState, record, writes, assert }) 
         assert.equal(await tile.innerText(), "Bottle\n2 oz last\n59.1 ml");
         await f.page.setViewportSize({ width: 320, height: 640 });
         const box = await tile.boundingBox();
-        const fits = await tile.evaluate((el) => [...el.querySelectorAll("span")].every((s) => s.getBoundingClientRect().right <= el.getBoundingClientRect().right + 0.5));
+        // Its amount lines, measured on their own: the line over them (Bottle and its icon) is the tile's in any units,
+        // and as wide as the tile at 320, so how far it reaches depends on the font, not on the amounts.
+        const fits = await tile.evaluate((el) => {
+          const amounts = [...el.querySelectorAll("span")].find((s) => s.textContent === "2 oz last\n59.1 ml");
+          return !!amounts && amounts.getBoundingClientRect().right <= el.getBoundingClientRect().right + 0.5;
+        });
         assert(box && box.height <= 64.5, `the tile keeps the row's 64px at 320 (${box?.height})`);
-        assert(fits, "the tile's lines fit it at 320");
+        assert(fits, "the tile's amount lines fit it at 320");
         assert.equal(await f.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, "no sideways scroll");
         assert.deepEqual(f.errors, []);
       } finally { await f.close(); }
@@ -138,7 +143,9 @@ export function bothUnitsCases({ fixture, freshState, record, writes, assert }) 
         await form.getByRole("button", { name: "Log 8.45 oz (250 ml) now", exact: true }).click();
         await form.waitFor({ state: "hidden" });
         assert.equal(writes(f)[0]?.body.data.amount_ml, 250, "8.45 oz read from 250 ml still saves 250 ml, not 249.9");
-        // The pump's total: 90 ml read in oz saves 90 ml.
+        // The pump's total: 90 ml read in oz saves 90 ml. Waited out first, as a person reading the toast does: More
+        // within the dock's own wait after its Bottle tile (tapCooldown.ts) does nothing, and a fast runner got there in it.
+        await settle(f);
         await f.page.getByRole("button", { name: "More", exact: true }).click();
         await f.page.getByRole("dialog", { name: "More to log", exact: true }).getByRole("button", { name: /^Pump/ }).click();
         const pump = f.page.getByRole("dialog", { name: "Pump", exact: true });

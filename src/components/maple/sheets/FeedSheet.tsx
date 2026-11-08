@@ -560,12 +560,12 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
         ? `${amountLabel} reaches the target per feed, ${formatVolumeRange(target, vu)}.`
         : null;
   // What a feed of its own changed, put back when it's switched off again: the part's way in at the breast and its
-  // plan feed, and its time unless one was picked since.
-  const [ownUndo, setOwnUndo] = useState<{ when: Date | null; via: BottleVia | undefined; planPick: string | undefined } | null>(null);
+  // plan feed, and its time unless one was picked since (and whether its line said no feed then, for the room it keeps).
+  const [ownUndo, setOwnUndo] = useState<{ when: Date | null; via: BottleVia | undefined; planPick: string | undefined; alone: boolean } | null>(null);
   const sayOwn = (on: boolean) => {
     setOwn(on);
     if (on) {
-      setOwnUndo({ when, via, planPick });
+      setOwnUndo({ when, via, planPick, alone: !topUpOf });
       if (!whenMoved) setWhen(null);
       if (breastVia) setVia(undefined);
       setPlanPick(undefined);
@@ -892,6 +892,8 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   // breast", "Top-up", "Bottle"); a new one as it was opened ("Milk at the breast", "Top-up · 12:20 PM feed" for that
   // feed's top-up, "Feed" while Breast or Bottle is a choice), or "Bottle" once it's said to be a feed of its own.
   const savedAtBreast = e?.data.method === "bottle" ? atBreastOf(e.data) : null;
+  // A feed's part as it was opened: milk at the breast, or the top-up of the feed at `at` (no feed then: a bottle).
+  const partTitle = (at: string | null) => (forBreast ? "Milk at the breast" : at ? `Top-up · ${at} feed` : "Bottle");
   const bottleTitle = e
     ? savedAtBreast
       ? `${AT_BREAST_WORDS[savedAtBreast].name} at the breast`
@@ -900,13 +902,9 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
         : "Bottle"
     : own
       ? "Bottle"
-      : forBreast
-        ? "Milk at the breast"
-        : forTopUp
-          ? feedClock
-            ? `Top-up · ${feedClock} feed`
-            : "Bottle"
-          : "Feed";
+      : forBreast || forTopUp
+        ? partTitle(feedClock)
+        : "Feed";
   const title = e ? (running ? "Nursing now" : timed && preset?.editTime ? "Edit nursing times" : e.data.method === "bottle" ? bottleTitle : describeEntry(e).title) : method === "bottle" ? bottleTitle : "Feed";
   // "Log 20 ml in the syringe", "Log 30 ml top-up", "Log 2 oz now".
   const logBottle = atBreastShown
@@ -1082,9 +1080,35 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const unitWord = vu === "metric" ? "ml" : "oz";
   const unitName = vu === "metric" ? "millilitres" : "ounces";
   // A feed's part opened for its feed: the feed it goes with, first (or, its time moved off any feed, what it is then);
-  // said to be a feed of its own, that it isn't that feed's (as long as the line it replaces, so nothing under it
-  // moves), the feed named as the plan's card names it (the preset's feed_at) when it says.
+  // said to be a feed of its own, that it isn't that feed's, the feed named as the plan's card names it (the preset's
+  // feed_at) when it says.
   const partClock = partRun ? clock(pstr(preset, "feed_at") ?? partRun.start) : null;
+  // Said to be a feed of its own.
+  const ownWords = forTopUp ? (
+    "A feed of its own, not that feed's top-up."
+  ) : partClock ? (
+    <>
+      A feed of its own, not part of the <span className="font-semibold whitespace-nowrap">{partClock}</span> feed.
+    </>
+  ) : (
+    "A feed of its own."
+  );
+  // As it was opened: with the feed at `at`, or (`alone`) with no feed then.
+  const partWords = (alone: boolean, at: string | null) =>
+    alone ? (
+      "No nursing feed then, so it counts as a feed of its own."
+    ) : forTopUp && !breastVia ? (
+      "Part of that feed, not a feed of its own."
+    ) : (
+      <>
+        With the <span className="font-semibold whitespace-nowrap">{at}</span> feed: part of it, not a feed of its own.
+      </>
+    );
+  // While "A feed of its own" is offered, the line and the title also hold, unseen in the same place, what the switch
+  // would make them (of its own, or back as it was), so they're as tall either way in any font or width, and the
+  // switch under them stays under the thumb.
+  const otherWords = !ownShown ? null : own ? partWords(!!ownUndo?.alone, partClock) : ownWords;
+  const titleRoom = !ownShown ? undefined : own ? partTitle(ownUndo?.alone ? null : partClock) : "Bottle";
   const partLine = partOpened ? (
     <p className="flex items-start gap-2 text-[15px] leading-snug text-mp-ink">
       {own ? (
@@ -1092,25 +1116,12 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       ) : (
         <Icon name="baby" size={18} className="mp-kind-ink mt-px shrink-0" style={{ color: DETAIL_COLOR.nursing }} />
       )}
-      <span className="min-w-0">
-        {own ? (
-          forTopUp ? (
-            "A feed of its own, not that feed's top-up."
-          ) : partClock ? (
-            <>
-              A feed of its own, not part of the <span className="font-semibold whitespace-nowrap">{partClock}</span> feed.
-            </>
-          ) : (
-            "A feed of its own."
-          )
-        ) : !topUpOf ? (
-          "No nursing feed then, so it counts as a feed of its own."
-        ) : forTopUp && !breastVia ? (
-          "Part of that feed, not a feed of its own."
-        ) : (
-          <>
-            With the <span className="font-semibold whitespace-nowrap">{feedClock}</span> feed: part of it, not a feed of its own.
-          </>
+      <span className="grid min-w-0">
+        <span className="col-start-1 row-start-1">{own ? ownWords : partWords(!topUpOf, feedClock)}</span>
+        {otherWords && (
+          <span aria-hidden className="invisible col-start-1 row-start-1">
+            {otherWords}
+          </span>
         )}
       </span>
     </p>
@@ -1214,6 +1225,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       onClose={close}
       dirty={fieldsDirty && !dirty && !addBlocked && !timeInvalid && !readOnly}
       title={title}
+      titleRoom={titleRoom}
       calm={preset?.editTime === true}
       footer={
         confirming ? (

@@ -94,6 +94,13 @@ async function fixture({ state = freshState(), records = [], entryResponse, rang
 }
 
 const writes = (f) => f.requests.filter((r) => r.pathname === "/api/maple/entries" && r.method !== "GET");
+/**
+ * Waits out the shared tap cooldown (src/components/maple/tapCooldown.ts, 600 ms), as a person reading what a tap
+ * brought in does: within it, a tap where the last one landed, or any dock tile after another, does nothing. (Today's
+ * own hold after a tap that moved the page shows as [data-taps-held], which the cases wait out on their own.)
+ */
+const TAP_COOLDOWN_MS = 600;
+const settle = (f) => f.page.waitForTimeout(TAP_COOLDOWN_MS + 100);
 const localDay = (at, timezone) => {
   const parts = Object.fromEntries(new Intl.DateTimeFormat("en", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(at)).map(({ type, value }) => [type, value]));
   return `${parts.year}-${parts.month}-${parts.day}`;
@@ -115,9 +122,9 @@ const cases = [
   ...medicinePlanCases({ fixture, freshState, assert }),
   ...checkinPrivacyCases({ fixture, freshState, assert }),
   ...doctorReviewCases({ fixture, freshState, record, writes, assert }),
-  ...accessibilityReviewCases({ fixture, freshState, record, assert }),
+  ...accessibilityReviewCases({ fixture, freshState, record, assert, settle }),
   ...feedingPlanCases({ fixture, freshState, record, writes, assert }),
-  ...bothUnitsCases({ fixture, freshState, record, writes, assert }),
+  ...bothUnitsCases({ fixture, freshState, record, writes, assert, settle }),
   ...timeCases({ fixture, freshState, record, writes, assert }),
   ...handoffCases({ fixture, freshState, record, writes, assert }),
   ["Every historical entry kind keeps an older family-local date", async () => {
