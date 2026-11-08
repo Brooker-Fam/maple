@@ -386,7 +386,7 @@ check("night: the pump before the bottle begins the feed; the bottle after it fi
 });
 
 check("night: she wouldn't take the bottle, so milk went in at the breast: the night feed is still fed", () => {
-  const log = [nurse("L 20:30-20:45", { plan: SNS.id }), bottle("20:44", 20, { via: "sns" }), pump("20:50-21:05"), pump("23:20-23:45"), nurse("L 23:50-+1d00:20"), bottle("+1 00:00", 45, { via: "syringe", milk: "formula" })];
+  const log = [nurse("L 20:30-20:45", { plan: SNS.id }), bottle("20:44", 20, { via: "sns" }), pump("20:50-21:05"), pump("23:20-23:45"), nurse("L 23:50-+1d00:20"), bottle("+1 00:00", 55, { via: "syringe", milk: "formula" })];
   const n = feedPlanNow(PLAN, log, D("+1 00:25"), { tz: TZ, target: TARGET });
   eq([n.focus.state, n.focus.feed.id, n.missed], ["upcoming", NIGHT.id, null]);
   const v = feedPlanNow(PLAN, log, D("+1 00:21"), { tz: TZ, target: TARGET });
@@ -394,7 +394,7 @@ check("night: she wouldn't take the bottle, so milk went in at the breast: the n
   // While she was on: the night's feed (not the SNS feed, though it looked like one), nursing besides its steps.
   const on = log.map((e) => (e.kind === "feed" && e.data.method === "breast" && e.started_at === T("23:50") ? nurse("L 23:50-", {}) : e));
   const u = feedPlanNow(PLAN, on, D("+1 00:10"), { tz: TZ, target: TARGET });
-  eq([u.focus.state, u.focus.feed.id, u.focus.why, u.focus.extraNursing, states(u.focus), u.focus.steps[1].ml], ["underway", NIGHT.id, "night", true, ["done", "done", "info"], 45]);
+  eq([u.focus.state, u.focus.feed.id, u.focus.why, u.focus.extraNursing, states(u.focus), u.focus.steps[1].ml], ["underway", NIGHT.id, "night", true, ["done", "done", "info"], 55]);
 });
 
 check("the morning: day feeds take turns from the last day feed, not the night's", () => {
