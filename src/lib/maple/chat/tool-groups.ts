@@ -89,6 +89,14 @@ export function definitionTokens(sizes: Readonly<Record<string, number>>, names:
 
 // ── what the newest message points to ────────────────────────────────────
 
+/** What a feed is in a care team's words: feeding, eating, nursing, a bottle, formula, expressed milk, an amount. */
+const FEED_WORD = String.raw`(?:feed\w*|fed|eat\w*|nurs\w*|breast ?feed\w*|bottles?|formula|ebm|oz|ounces?|ml|milk)`;
+/** How often in words: "every 3 hours", "every 2-3 hrs", "every 2.5 to 3 hours", "every three hours", "every 2 and a half hours". */
+const EVERY_HOURS = String.raw`every\s+(?:\d+(?:\.\d+)?|one|two|three|four|five|six)(?:\s*(?:-|–|—|to|or)\s*(?:\d+(?:\.\d+)?|two|three|four|five|six))?(?:\s+and\s+a\s+half)?\s*(?:h|hrs?|hours?)\b`;
+/** How many a day: "8 to 12", "at least 8", "eight". */
+const COUNT = String.raw`(?:\d{1,2}|six|seven|eight|nine|ten|eleven|twelve)(?:\s*(?:-|–|—|to|or)\s*(?:\d{1,2}|eight|nine|ten|eleven|twelve))?`;
+const A_DAY = String.raw`(?:a|per|each|in(?:\s+a)?)\s+(?:day|24\s*h(?:ou)?rs?|24)\b`;
+
 /** A medicine is the baby's or hers until someone says whose, so these point to both groups. */
 const MEDICINE = /\b(medicines?|meds?|medications?|doses?|dosage|drops|vitamin\s?d|vit\s?d|simethicone|mylicon|gripe water|probiotics?|tylenol|acetaminophen|paracetamol|motrin|advil|ibuprofen|antibiotics?|amoxicillin|ointment|nystatin|famotidine|pepcid|omeprazole|prescriptions?|pharmacy|pills?|tablets?|capsules?|syrup)\b/i;
 
@@ -142,6 +150,12 @@ const GROUP_WORDS: Record<ToolGroup, RegExp[]> = {
     /\b(nipple )?shields?\b|\bsyringes?\b|\bsns\b|\bsupplement\w*|\btop[- ]?ups?\b|\btopping (her|him|them) up\b|\btriple[- ]feed\w*|\bpower[- ]pump\w*/i,
     // A plan sheet's shorthand ("s&s", "q2-3h") and a routine that isn't bedtime's, a nap's or sleep's.
     /\bs ?& ?s\b|\bq ?\d+(?:\.\d+)?(?: ?[-–—] ?\d+(?:\.\d+)?)? ?h(?:rs?|ours?)?\b|(?<!\b(?:bedtime|sleep|sleeping|nap|naptime)\s)\broutines?\b/i,
+    // A care team's plan in ordinary words: how often beside what ("feed every 3 hours", "2 oz of formula every 3 to 4
+    // hours", "52 ml EBM every 3 hours"), how many a day ("8 to 12 feeds a day", "feed her at least 8 times a day"), waking
+    // to feed, feeding on demand or when hungry, and discharge instructions. A night waking with no feed in it stays sleep's.
+    new RegExp(String.raw`\b${FEED_WORD}\b[^.?!\n]{0,60}\b${EVERY_HOURS}|\b${EVERY_HOURS}[^.?!\n]{0,40}\b${FEED_WORD}\b`, "i"),
+    new RegExp(String.raw`\b${COUNT}\s+(?:feeds|feedings|bottles|nursing sessions|feeding sessions)\s+${A_DAY}|\b${FEED_WORD}\b[^.?!\n]{0,30}\b${COUNT}\s+times\s+${A_DAY}`, "i"),
+    /\bwake\s+(?:(?:her|him|them|the baby|baby)\s+)?(?:up\s+)?(?:to|for)\s+(?:a\s+)?(?:feeds?|feedings?|eat)\b|\b(?:feed|feeding|nurse|nursing|breastfeed\w*)\s+(?:(?:her|him|them|the baby)\s+)?(?:on demand|on cue|when (?:she|he|they)(?:['’]s|['’]re| is| are)? (?:hungry|wakes?|wake up|stirs?)|when hungry)\b|\bdischarge (?:instructions|papers|sheet|plan|summary)\b/i,
   ],
   log_more: [
     /\b(pump\w*|expressed|expressing|haakaa|let-?down|freezer stash|milk stash)\b/i,

@@ -300,7 +300,9 @@ export async function POST(request: NextRequest) {
       }
       case "bottle": {
         const oz = Number(body.amount_oz);
-        const amount = Number.isFinite(oz) && oz > 0 && oz <= 12 ? { amount_ml: Math.round(ozToMl(oz)) } : {};
+        // To a tenth of a ml, as the bottle form and log_feed keep it, so "4 ounces" reads back as 4 oz, never 3.99, and
+        // reaches a plan's amount in ounces.
+        const amount = Number.isFinite(oz) && oz > 0 && oz <= 12 ? { amount_ml: Math.round(ozToMl(oz) * 10) / 10 } : {};
         // What the feeding plan takes it as (log_feed's rule), saved with that feed, so Last fed, the day's count and the
         // plan's next feed stay on it: the late top-up a nursing feed just before still owes (top_up_of), else a bottle-led
         // feed's bottle still to give or short (the night's pump, then its bottle, and formula to finish: plan). Read without

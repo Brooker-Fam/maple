@@ -5,6 +5,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { captureServerException } from "@/lib/posthog-server";
 import { nursingRuns } from "./feed";
 import {
+  afterNursing,
   amountText,
   AT_BREAST_WORDS,
   checkFeedingPlan,
@@ -16,6 +17,7 @@ import {
   feedNameKey,
   feedPlanNow,
   feedText,
+  GIVEN_BY_WORDS,
   minutesRangeText,
   nightClockTurns,
   nightTurns,
@@ -23,8 +25,12 @@ import {
   PLAN_GIVEN_BY,
   PLAN_LATE_TOP_UP_MS,
   PLAN_LIMITS,
+  PLAN_PUMP_BEFORE_MS,
   PlanConflict,
+  planDayCounts,
   PlanError,
+  perDayLines,
+  perDayText,
   planLines,
   planNotes,
   stepText,
@@ -86,15 +92,43 @@ const named = (f: PlanFeed) => JSON.stringify(f.name);
 const lower = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 const pronouns = (vo: Voice) => ({ her: vo.them, sheIs: `${vo.they}${vo.verb("'s")}` });
 
-/** Each step's words as feedText says them ("Top up" after the nursing). */
+/**
+ * Each step's words as feedText says them: "Top up" after the nursing, never after the breast offered only if she
+ * wants it (feeding-plan.ts afterNursing), where the bottle is the feed ("Bottle 60 ml").
+ */
 function stepWords(f: PlanFeed, plan: FeedingPlan, target: FeedTarget | null): string[] {
-  let nursed = false;
-  return f.steps.map((s) => {
-    const t = stepText(s, plan, target, { afterNurse: nursed });
-    if (s.do === "nurse") nursed = true;
-    return t;
-  });
+  return f.steps.map((s, i) => stepText(s, plan, target, { afterNurse: afterNursing(f.steps, i) }));
 }
+
+/** A note step's words as a sentence of its own, in the family's own capitals, with no stop of its own ("Burp halfway"). */
+const noteSentence = (s: StepView) => (s.step.do === "note" ? s.step.text.replace(/[\s.;,]+$/, "") : "");
+
+/**
+ * The night is when she's hungry (feeding-plan.ts nightWhenHungry) and the next feed is the night's: no time to say and
+ * none to wake her by, so a due the reading gives at night (the day's interval, as a release before this read it) isn't
+ * said either. The day's due comes back at the night's end.
+ */
+function hungryAtNight(n: FeedPlanNow): boolean {
+  if (!nightWhenHungry(n.plan)) return false;
+  const night = n.focus.state === "upcoming" ? n.focus.night : !!n.after?.night;
+  return night && (!n.due || n.due.night);
+}
+
+/** "At night (to 5 AM), when she's hungry: no set time". */
+const hungryWords = (n: FeedPlanNow, w: Words) => `At night (to ${clockWords(n.plan.night!.to)}), when ${w.vo.they}${w.vo.verb("'s")} hungry: no set time`;
+
+/** A night feed's turn by the clock ("its turn by the clock, 10 PM to 2 AM"), when the night's feeds go by the clock; else null. */
+function clockTurnWords(plan: FeedingPlan, feed: PlanFeed, night: boolean): string | null {
+  if (!night) return null;
+  const turn = nightClockTurns(plan)?.find((c) => c.feed === feed.id);
+  return turn ? `its turn by the clock, ${clockWords(turn.from)} to ${clockWords(turn.until)}` : null;
+}
+
+/**
+ * The plan's feeds and milk in the last 24 hours beside what was logged ("7 feeds in the last 24 hours · plan: at least
+ * 8"), context and never a warning; null without per_day or a log to count.
+ */
+const dayWords = (n: FeedPlanNow, w: Words, entries: readonly Entry[] | undefined) => (entries && n.plan.per_day ? perDayText(n.plan, planDayCounts(n.plan, entries, w.now)) : null);
 
 /** A nursing step's milk at the breast left unlogged: "the 20 ml in the SNS". */
 function breastMilkWords(s: StepView, plan: FeedingPlan): string {
@@ -136,33 +170,54 @@ function logged(s: StepView, plan: FeedingPlan, tz: string): string[] {
 const withLogged = (text: string, bits: string[]) => (bits.length ? `${text} (${bits.join(", ")})` : text);
 
 /**
- * A bottle step that must reach an amount (feeding-plan.ts StepView.need: up to the target per feed, or pumped milk
- * first, then formula to finish) with some of it given and short of that amount, so it's still to do: what's in it
- * and what's left. Null for any other step. `need` is read through a wider type, so these words hold on a release
- * whose StepView doesn't carry it yet.
+ * How far under its amount a bottle can be and still have reached it, as the engine reads it: Siri's ounces stored as
+ * whole ml before they kept a tenth (2 oz as 59 ml against 59.1).
+ */
+const REACHED_SLACK_ML = 0.5;
+
+/**
+ * A bottle step that must reach an amount (feeding-plan.ts StepView.need: up to the target per feed, pumped milk first,
+ * then formula to finish, or at least an amount) with some of it given and short of that amount, so it's still to do:
+ * what's in it and what's left. Null for any other step. `need` is read through a wider type, so these words hold on
+ * a release whose StepView doesn't carry it yet.
  */
 function shortBottle(s: StepView): { given: number; need: Range } | null {
   const need = (s as StepView & { need?: Range | null }).need;
-  if (s.step.do !== "bottle" || s.status !== "todo" || !need || s.ml == null || s.ml >= need.min) return null;
+  if (s.step.do !== "bottle" || s.status !== "todo" || !need || s.ml == null || s.ml >= need.min - REACHED_SLACK_ML) return null;
   return { given: s.ml, need };
 }
 
 /** "40 ml so far" in a short bottle. */
 const soFarWords = (short: { given: number }, plan: FeedingPlan) => `${amountText({ min: short.given, max: short.given }, plan.unit)} so far`;
 
-/** What a short bottle still needs: "formula to finish, 10–30 ml more" (pumped milk first), "the rest of the bottle, 10–30 ml more". */
+/**
+ * What a short bottle still needs: "formula to finish, 10–30 ml more" (pumped milk first), "the rest of the bottle,
+ * 10–30 ml more", "the rest of the bottle, at least 20 ml more" (at least an amount), "the rest by cup, 10 ml more".
+ */
 function finishWords(s: StepView, short: { given: number; need: Range }, plan: FeedingPlan): string {
+  const step = s.step.do === "bottle" ? s.step : null;
   const more = { min: Math.max(1, round1(short.need.min - short.given)), max: Math.max(1, round1(short.need.max - short.given)) };
-  const what = s.step.do === "bottle" && s.step.milk === "breastmilk_first" ? "formula to finish" : "the rest of the bottle";
-  return `${what}, ${amountText(more, plan.unit)} more`;
+  const what = step?.milk === "breastmilk_first" ? "formula to finish" : step?.by ? `the rest ${GIVEN_BY_WORDS[step.by].by}` : "the rest of the bottle";
+  return `${what}, ${step?.at_least ? `at least ${amountText({ min: more.min, max: more.min }, plan.unit)}` : amountText(more, plan.unit)} more`;
 }
 
-/** One step with what the log says about it: "Pump 15 min (done, 14 min)", "Top up 25–35 ml (not logged yet)". */
-function statusWords(s: StepView, text: string, plan: FeedingPlan, tz: string): string {
+/**
+ * The breast offered only if she wants it (practice before a bottle) whose moment has gone: a later step of the feed is
+ * logged or going. It's never owed, so it's no longer one of the steps to come.
+ */
+const offerPassed = (s: StepView, steps: readonly StepView[]) =>
+  s.step.do === "nurse" && !!s.step.if_needed && s.status === "todo" && steps.some((x) => x.i > s.i && x.step.do !== "note" && (x.status === "done" || x.status === "running"));
+
+/**
+ * One step with what the log says about it: "Pump 15 min (done, 14 min)", "Top up 25–35 ml (not logged yet)", "Offer
+ * the breast 5–10 min (not this time)" once a later step is logged. `steps`: the feed's, for that.
+ */
+function statusWords(s: StepView, text: string, plan: FeedingPlan, tz: string, steps: readonly StepView[]): string {
   if (s.status === "info") return text;
   if (s.status === "running") return withLogged(text, ["going now", ...logged(s, plan, tz), ...(breastMilkOwedNow(s) ? [`${breastMilkWords(s, plan)} not logged yet`] : [])]);
   const short = shortBottle(s);
   if (short) return `${text} (${soFarWords(short, plan)}; next: ${finishWords(s, short, plan)})`;
+  if (offerPassed(s, steps)) return `${text} (not this time)`;
   if (s.status === "todo") return `${text} (not logged yet)`;
   if (s.milkMissing) return `${text} (nursed${s.minutes != null ? ` ${s.minutes} min` : ""}; ${breastMilkWords(s, plan)} isn't logged)`;
   return withLogged(text, ["done", ...logged(s, plan, tz)]);
@@ -176,12 +231,13 @@ const WHY: Record<PlanFeedView["why"], string> = {
   chosen: "picked instead on a phone",
 };
 
-/** The steps still to come in a feed underway: those not logged, and the notes among them. */
+/** The steps still to come in a feed underway: those not logged, and the notes among them; never the breast offered whose moment has gone. */
 function stepsLeft(n: FeedPlanNow): StepView[] {
   const steps = n.focus.steps;
   if (n.focus.state === "upcoming") return steps;
-  const first = steps.findIndex((s) => s.status === "todo" || s.status === "running" || s.milkMissing);
-  return first < 0 ? [] : steps.slice(first).filter((s) => s.status !== "done" || s.milkMissing);
+  const left = steps.filter((s) => !offerPassed(s, steps));
+  const first = left.findIndex((s) => s.status === "todo" || s.status === "running" || s.milkMissing);
+  return first < 0 ? [] : left.slice(first).filter((s) => s.status !== "done" || s.milkMissing);
 }
 
 /**
@@ -217,18 +273,30 @@ function missedTopUpOf(n: FeedPlanNow): number | null {
 
 const dueWords = (d: PlanDue | null, w: Words) => (d ? dueText(d, w.now, w.tz, w.vo.them) : null);
 
+/** When the next feed is, in words: the due (dueText), or at night when she's hungry; null with neither. */
+const whenWords = (n: FeedPlanNow, w: Words) => (hungryAtNight(n) ? hungryWords(n, w) : dueWords(n.due, w));
+
+/** A plan feed as the lines name it, with its turn by the clock at night: "\"Partner's bottle\" (its turn by the clock, 10 PM to 2 AM)". */
+const namedTurn = (plan: FeedingPlan, feed: PlanFeed, night: boolean) => {
+  const turn = clockTurnWords(plan, feed, night);
+  return `${named(feed)}${turn ? ` (${turn})` : ""}`;
+};
+
 /**
  * What the plan says now, in one line (maple_status, the chat's [App] lines,
- * a save's answer): the next feed with its steps and when it's due, or the
- * feed underway with what's logged and what's left, then the feed after; and
- * a finished feed's unlogged step. Dashes stay: the chat's lines lose them.
+ * a save's answer): the next feed with its steps and when it's due (at night
+ * when she's hungry, no time; a night by the clock, the feed's turn), or the
+ * feed underway with what's logged and what's left (its notes as sentences of
+ * their own), then the feed after; a finished feed's unlogged step; and, with
+ * the plan's feeds or milk in 24 hours and the log (`entries`), what was
+ * logged beside them, as context. Dashes stay: the chat's lines lose them.
  */
-export function planNowLine(n: FeedPlanNow, w: Words): string {
+export function planNowLine(n: FeedPlanNow, w: Words, entries?: readonly Entry[]): string {
   const f = n.focus;
-  const due = dueWords(n.due, w);
+  const due = whenWords(n, w);
   const out: string[] = [];
   if (f.state === "upcoming") {
-    out.push(`Feeding plan: next is ${named(f.feed)}: ${lower(feedText(f.feed, n.plan, n.target))}.${due ? ` ${due}.` : ""}`);
+    out.push(`Feeding plan: next is ${namedTurn(n.plan, f.feed, f.night)}: ${lower(feedText(f.feed, n.plan, n.target))}.${due ? ` ${due}.` : ""}`);
   } else {
     const words = stepWords(f.feed, n.plan, n.target);
     const done = f.steps.filter((s) => s.status === "done" && !s.milkMissing);
@@ -236,6 +304,9 @@ export function planNowLine(n: FeedPlanNow, w: Words): string {
     const unlogged = f.steps.filter((s) => s.milkMissing);
     const short = f.steps.filter((s) => shortBottle(s));
     const left = stepsLeft(n).filter((s) => s.status === "todo" || s.status === "info");
+    // The steps to come join with "then"; a note among them is a sentence of its own, in the family's capitals (feedText's rule).
+    const next = left.filter((s) => s.step.do !== "note");
+    const notes = left.map(noteSentence).filter(Boolean);
     const bits = [
       `Feeding plan: ${named(f.feed)} is underway${f.start != null ? ` since ${formatTime(f.start, w.tz)}` : ""}.`,
       done.length ? `Done: ${done.map((s) => withLogged(lower(words[s.i]), logged(s, n.plan, w.tz))).join("; ")}.` : "",
@@ -247,27 +318,33 @@ export function planNowLine(n: FeedPlanNow, w: Words): string {
         : "",
       // A bottle short of its amount: what's in it so far, and next what it still needs ("formula to finish").
       short.length ? `So far: ${short.map((s) => `${lower(words[s.i])} (${soFarWords(shortBottle(s)!, n.plan)})`).join("; ")}.` : "",
-      left.length ? `Next: ${left.map((s) => (shortBottle(s) ? finishWords(s, shortBottle(s)!, n.plan) : lower(words[s.i]))).join("; then ")}.` : "",
+      next.length ? `Next: ${next.map((s) => (shortBottle(s) ? finishWords(s, shortBottle(s)!, n.plan) : lower(words[s.i]))).join("; then ")}.` : "",
+      ...notes.map((t) => `${t}.`),
     ];
     out.push(bits.filter(Boolean).join(" "));
-    if (n.after) out.push(`After it: ${named(n.after.feed)}${due ? `; ${lower(due)}` : ""}.`);
+    if (n.after) out.push(`After it: ${namedTurn(n.plan, n.after.feed, n.after.night)}${due ? `; ${lower(due)}` : ""}.`);
     else if (due) out.push(`${due}.`);
   }
   const missed = missedWords(n, w);
   if (missed) out.push(missed);
+  const day = dayWords(n, w, entries);
+  if (day) out.push(`${day}.`);
   return out.join(" ");
 }
 
 /** maple_status's feeding_plan field: the same, as parts. */
-function planNowJson(n: FeedPlanNow, w: Words): Record<string, unknown> {
+function planNowJson(n: FeedPlanNow, w: Words, entries?: readonly Entry[]): Record<string, unknown> {
   const words = stepWords(n.focus.feed, n.plan, n.target);
   const topUpOf = missedTopUpOf(n);
   const missed = missedWords(n, w);
+  const turn = n.focus.state === "upcoming" ? clockTurnWords(n.plan, n.focus.feed, n.focus.night) : null;
+  const day = dayWords(n, w, entries);
   return {
     state: n.focus.state,
     feed: n.focus.feed.name,
     id: n.focus.feed.id,
-    due: dueWords(n.due, w),
+    ...(turn ? { turn } : {}),
+    due: whenWords(n, w),
     steps_left: stepsLeft(n).map((s) => {
       const short = shortBottle(s);
       if (s.milkMissing) return `${breastMilkWords(s, n.plan)}, not logged`;
@@ -276,30 +353,34 @@ function planNowJson(n: FeedPlanNow, w: Words): Record<string, unknown> {
     }),
     ...(n.after ? { after: n.after.feed.name, after_id: n.after.feed.id } : {}),
     ...(missed ? { missed, ...(topUpOf != null ? { top_up_of: topUpOf } : {}) } : {}),
+    ...(day ? { per_day: day } : {}),
     more: "feeding_plan",
   };
 }
 
-/** feeding_plan's "now": the feed underway step by step, or the next one, the feed after, the others, anything unlogged. */
-function planNowBlock(n: FeedPlanNow, w: Words): string[] {
+/** feeding_plan's "now": the feed underway step by step, or the next one, the feed after, the others, anything unlogged, the last 24 hours. */
+function planNowBlock(n: FeedPlanNow, w: Words, entries?: readonly Entry[]): string[] {
   const f = n.focus;
   const words = stepWords(f.feed, n.plan, n.target);
-  const due = dueWords(n.due, w);
+  const due = whenWords(n, w);
   const out: string[] = [];
   if (f.state === "upcoming") {
-    out.push(`Next: ${named(f.feed)} (${WHY[f.why]}).${due ? ` ${due}.` : ""}`);
+    const turn = clockTurnWords(n.plan, f.feed, f.night);
+    out.push(`Next: ${named(f.feed)} (${WHY[f.why]}${turn ? `; ${turn}` : ""}).${due ? ` ${due}.` : ""}`);
     out.push(...f.steps.map((s) => `- ${words[s.i]}`));
     // Doing another of its feeds changes nothing in the plan: start it from the plan, and the turns go on from it.
     if (n.others.length) out.push(`The plan's other feeds, if they'd rather do one of those (start_timer with plan when it begins; nothing in the plan changes): ${n.others.map(named).join(", ")}.`);
   } else {
     out.push(`Underway: ${named(f.feed)} (${WHY[f.why]}${f.start != null ? `, since ${formatTime(f.start, w.tz)}` : ""}).`);
-    out.push(...f.steps.map((s) => `- ${statusWords(s, words[s.i], n.plan, w.tz)}`));
+    out.push(...f.steps.map((s) => `- ${statusWords(s, words[s.i], n.plan, w.tz, f.steps)}`));
     if (f.extraNursing) out.push(`${w.vo.They} also nursed in this feed, which its steps don't include.`);
-    if (n.after) out.push(`After it: ${named(n.after.feed)}.${due ? ` ${due}.` : ""}`);
+    if (n.after) out.push(`After it: ${namedTurn(n.plan, n.after.feed, n.after.night)}.${due ? ` ${due}.` : ""}`);
     else if (due) out.push(`${due}.`);
   }
   const missed = missedWords(n, w);
   if (missed) out.push(`${missed}${missedTopUpOf(n) != null ? " Logged now, it's a bottle (via syringe or sns for milk at the breast) with top_up_of that entry (in the JSON too), so it counts as that feed's, never a feed of its own." : ""}`);
+  const day = dayWords(n, w, entries);
+  if (day) out.push(`${day}. Context only: say it as it is, never as behind or short.`);
   return out;
 }
 
@@ -309,13 +390,18 @@ type PlanWords = { her: string; sheIs: string };
 
 /**
  * A plan's lines (planLines) by what each one says: who it's from, the
- * target, the day, each feed by its id, the night and the notes, so an
- * edit's lines pair with the saved plan's. A line of another kind pairs only
- * with the same line.
+ * target, the day, each feed by its id, the night, the feeds and the milk in
+ * 24 hours, and the notes, so an edit's lines pair with the saved plan's. A
+ * line of another kind pairs only with the same line.
  */
 function keyedLines(plan: FeedingPlan, target: FeedTarget | null, words: PlanWords): Map<string, string> {
   const out = new Map<string, string>();
   let feed = 0;
+  // Feeds and milk in 24 hours, one line each, as planLines says them (perDayLines, part by part).
+  const pd = plan.per_day;
+  const perDay = new Map<string, string>();
+  if (pd?.feeds) perDay.set(perDayLines({ unit: plan.unit, per_day: { feeds: pd.feeds } })[0], "per_day feeds");
+  if (pd?.ml) perDay.set(perDayLines({ unit: plan.unit, per_day: { ml: pd.ml } })[0], "per_day ml");
   for (const line of planLines(plan, target, words)) {
     // The feeds' lines come in the plan's order (planLines), each named by its feed.
     const f = line.startsWith("• ") ? plan.feeds[feed++] : undefined;
@@ -332,7 +418,7 @@ function keyedLines(plan: FeedingPlan, target: FeedTarget | null, words: PlanWor
                 ? "night"
                 : line.startsWith("Notes: ")
                   ? "notes"
-                  : `line ${line}`;
+                  : (perDay.get(line) ?? `line ${line}`);
     out.set(key, line);
   }
   return out;
@@ -348,19 +434,25 @@ const milkSaid = (milk: BottleStep["milk"], s: Said) => (milk ? stepText({ do: "
 
 /**
  * Each part of a step an edit changes, in stepText's words with what it was:
- * "nurse 10–15 min (was 12–18 min)", "no nipple shield (was with it)", "25 ml
- * of formula in the SNS (was 20 ml)", "top up 35–45 ml (was 25–35 ml)", "pump
- * only if needed (was every time)". Null when a change in its words isn't
- * one of these (the read-back then says the whole step as it was and is).
+ * "nurse 10–15 min (was 12–18 min)", "nurse up to 10 min (was 10 min)", "no
+ * nipple shield (was with it)", "25 ml of formula in the SNS (was 20 ml)",
+ * "top up 35–45 ml (was 25–35 ml)", "bottle at least 60 ml (was 60 ml)",
+ * "given by cup (was by bottle)", "pump only if needed (was every time)".
+ * Null when a change in its words isn't one of these (the read-back then says
+ * the whole feed as it was and is): the breast offered only if she wants it,
+ * or no longer, is another step in words ("Offer the breast", and the bottle
+ * after it is the feed's, never its top-up).
  */
 function stepChanges(a: PlanStep, b: PlanStep, was: Said, now: Said, afterNurse: boolean): string[] | null {
   if (a.do !== b.do) return null;
   const out: string[] = [];
   const changed = (x: string | null, y: string | null) => x !== y;
-  const time = (r: Range | undefined) => (r ? minutesRangeText(r) : "with no time given");
+  // Minutes as stepText says them, with their most: "up to 20 min".
+  const time = (r: Range | undefined, upTo?: boolean) => (r ? `${upTo ? "up to " : ""}${minutesRangeText(r)}` : "with no time given");
   if (a.do === "nurse" && b.do === "nurse") {
-    // As stepText says it: "10–15 min each side", "on each side" with no time given.
-    const length = (s: NurseStep) => (s.minutes ? `${minutesRangeText(s.minutes)}${s.each_side ? " each side" : ""}` : s.each_side ? "on each side" : time(undefined));
+    if (a.if_needed || b.if_needed) return null;
+    // As stepText says it: "10–15 min each side", "up to 10 min", "on each side" with no time given.
+    const length = (s: NurseStep) => (s.minutes ? `${time(s.minutes, s.up_to)}${s.each_side ? " each side" : ""}` : s.each_side ? "on each side" : time(undefined));
     if (changed(length(a), length(b))) out.push(`nurse ${length(b)} (was ${length(a)})`);
     const side = (s: NurseStep) => (s.side ? `on the ${s.side === "L" ? "left" : "right"}` : "either side");
     if (changed(side(a), side(b))) out.push(`${side(b)} (was ${side(a)})`);
@@ -378,17 +470,29 @@ function stepChanges(a: PlanStep, b: PlanStep, was: Said, now: Said, afterNurse:
       }
     }
   } else if (a.do === "pump" && b.do === "pump") {
-    if (changed(time(a.minutes), time(b.minutes))) out.push(`pump ${time(b.minutes)} (was ${time(a.minutes)})`);
+    if (changed(time(a.minutes, a.up_to), time(b.minutes, b.up_to))) out.push(`pump ${time(b.minutes, b.up_to)} (was ${time(a.minutes, a.up_to)})`);
     if (!!a.if_needed !== !!b.if_needed) out.push(b.if_needed ? "pump only if needed (was every time)" : "pump every time (was only if needed)");
   } else if (a.do === "bottle" && b.do === "bottle") {
-    const label = afterNurse ? "top up" : "bottle";
-    // Its amount as stepText says it: its own, else up to the target per feed (so a changed target shows here too).
+    // As stepText names the step: "top up" after nursing, else how it's given ("bottle", "cup", "finger feed").
+    const label = afterNurse ? "top up" : b.by ? GIVEN_BY_WORDS[b.by].name.toLowerCase() : "bottle";
+    // Its amount as stepText says it: its own, with its most or least, else up to the target per feed (so a changed
+    // target shows here too). After nursing, "top up to 30 ml", never "top up up to".
     const amount = (s: BottleStep, in_: Said) =>
-      s.ml ? amountText(s.ml, in_.plan.unit) : s.to_target ? (in_.target ? `up to ${amountText(in_.target, in_.plan.unit)}` : "up to the target") : "no amount given";
-    if (changed(amount(a, was), amount(b, now))) out.push(`${label} ${amount(b, now)} (was ${amount(a, was)})`);
+      s.ml
+        ? `${s.up_to ? "up to " : s.at_least ? "at least " : ""}${amountText(s.ml, in_.plan.unit)}`
+        : s.to_target
+          ? in_.target
+            ? `up to ${amountText(in_.target, in_.plan.unit)}`
+            : "up to the target"
+          : "no amount given";
+    const [p, q] = [amount(a, was), amount(b, now)];
+    if (changed(p, q)) out.push(`${label} ${afterNurse ? q.replace(/^up to /, "to ") : q} (was ${p})`);
     const [x, y] = [milkSaid(a.milk, was), milkSaid(b.milk, now)];
     if (changed(x, y)) out.push(`${y ?? "no milk named"} (was ${x ?? "no milk named"})`);
     if ((a.via === "paced") !== (b.via === "paced")) out.push(b.via === "paced" ? "paced bottle (was not paced)" : "not paced (was a paced bottle)");
+    // By cup, spoon or finger instead of a bottle.
+    const by = (s: BottleStep) => (s.by ? GIVEN_BY_WORDS[s.by].by : "by bottle");
+    if (changed(by(a), by(b))) out.push(`given ${by(b)} (was ${by(a)})`);
     if (!!a.if_needed !== !!b.if_needed) out.push(b.if_needed ? `${label} only if still hungry (was every time)` : `${label} every time (was only if still hungry)`);
   } else if (a.do === "note" && b.do === "note") {
     if (a.text !== b.text) out.push(`note ${JSON.stringify(b.text)} (was ${JSON.stringify(a.text)})`);
@@ -407,13 +511,14 @@ function stepChanges(a: PlanStep, b: PlanStep, was: Said, now: Said, afterNurse:
 function feedChanges(was: PlanFeed, now: PlanFeed, before: Said, after: Said): string[] | null {
   if (was.steps.length !== now.steps.length || was.steps.some((s, i) => s.do !== now.steps[i].do)) return null;
   const out: string[] = [];
-  let nursed = false;
   for (const [i, a] of was.steps.entries()) {
     const b = now.steps[i];
-    const afterNurse = nursed;
-    if (a.do === "nurse") nursed = true;
-    if (stepText(a, before.plan, before.target, { afterNurse }) === stepText(b, after.plan, after.target, { afterNurse })) continue;
-    const parts = stepChanges(a, b, before, after, afterNurse);
+    // A bottle after the nursing is its top-up (afterNursing), in each plan as its own steps say: a step whose name changes
+    // with the edit (the nursing before it now offered only if she wants it) is said with the whole feed.
+    const [wasAfter, nowAfter] = [afterNursing(was.steps, i), afterNursing(now.steps, i)];
+    if (stepText(a, before.plan, before.target, { afterNurse: wasAfter }) === stepText(b, after.plan, after.target, { afterNurse: nowAfter })) continue;
+    if (wasAfter !== nowAfter) return null;
+    const parts = stepChanges(a, b, before, after, nowAfter);
     if (!parts?.length) return null;
     // A feed with two steps of a kind says which ("step 3: bottle 40 ml (was 30 ml)").
     const many = now.steps.filter((s) => s.do === b.do).length > 1;
@@ -463,14 +568,27 @@ export function planChanges(saved: FeedingPlan, savedTarget: FeedTarget | null, 
 const clockMinutes = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
 const hhmmOf = (min: number) => `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
 
+/** A bottle or target this small in ml was likely ounces sent as ml ("2–3" for "2–3 oz"). */
+const TINY_ML = 10;
+
+/** A feed whose first step (notes aside) is a pump: the night's "pump, then bottle". */
+const pumpsFirst = (f: PlanFeed) => f.steps.find((s) => s.do !== "note")?.do === "pump";
+
+/** How long before its bottle a pump is still that feed's (feeding-plan.ts PLAN_PUMP_BEFORE_MS), in words. */
+const PUMP_BEFORE_WORDS = PLAN_PUMP_BEFORE_MS === 60 * 60_000 ? "an hour" : `${Math.round(PLAN_PUMP_BEFORE_MS / 60_000)} minutes`;
+
 /**
  * Questions to ask with a read-back, never refusals: a night that starts in
  * the daytime ("11:00" for 11 PM) or runs 13 hours or more (a longer one than
- * 16 isn't saved), and a feed neither the day's turns nor the night turn to,
- * which Today only offers as another choice (a fallback feed is fine, a night
- * feed left out of night.feed isn't).
+ * 16 isn't saved); a feed neither the day's turns nor the night turn to,
+ * which Today only offers as another choice (a fallback feed or a dream feed
+ * is fine, a night feed left out of night.feed isn't); a feed that pumps
+ * first (Today takes a pump as that feed's only up to an hour before its
+ * bottle, so a pump on its own clock goes in the notes); and, with amounts
+ * sent in ml (`amountsIn`), a bottle or target under 10 ml, likely ounces.
+ * `target`: the target per feed it would save.
  */
-export function planCautions(plan: FeedingPlan): string[] {
+export function planCautions(plan: FeedingPlan, opts: { target?: FeedTarget | null; amountsIn?: "ml" | "oz" } = {}): string[] {
   const out: string[] = [];
   const n = plan.night;
   if (n) {
@@ -492,7 +610,27 @@ export function planCautions(plan: FeedingPlan): string[] {
       : atNight.length > 1
         ? "If it's one of the night's feeds, add it to night.order; if it takes a turn by day, add it to order."
         : "If it's the night's feed, set night.feed to it; if it takes a turn by day, add it to order.";
-    out.push(`Ask with it: ${named(f)} isn't in the day's turns${n ? ` or the night's ${atNight.length > 1 ? "turns" : "feed"}` : ""}, so Today only offers it as another choice. ${fix}`);
+    // A feed given once a night (a dream feed) takes no turn: it's right as it is, or it has its own start by the clock.
+    const once = n ? " Given once a night (a dream feed), it's right as it is, or it can have its own start in night.starts." : "";
+    out.push(`Ask with it: ${named(f)} isn't in the day's turns${n ? ` or the night's ${atNight.length > 1 ? "turns" : "feed"}` : ""}, so Today only offers it as another choice. ${fix}${once}`);
+  }
+  // A pump begins the feed: only one up to an hour before its bottle is that feed's, so pumps on their own clock misread.
+  for (const f of plan.feeds.filter(pumpsFirst)) {
+    out.push(
+      `Ask with it: Today counts a pump as part of ${named(f)} only when it starts up to ${PUMP_BEFORE_WORDS} before its bottle. If they pump on their own clock, keep the feed to its bottle and put the pump times in the notes.`
+    );
+  }
+  // Amounts sent in ml that are this small were likely ounces: say each as the read-back does, and the way to send ounces.
+  if ((opts.amountsIn ?? plan.unit) === "ml") {
+    const tiny = new Set<string>();
+    for (const f of plan.feeds)
+      for (const s of f.steps) if (s.do === "bottle" && s.ml && s.ml.max < TINY_ML && s.by !== "spoon" && s.by !== "finger") tiny.add(`a bottle of ${amountText(s.ml, "ml", false)}`);
+    if (opts.target && opts.target.max < TINY_ML) tiny.add(`a target of ${amountText(opts.target, "ml", false)} a feed`);
+    if (tiny.size) {
+      const list = [...tiny];
+      const said = list.length > 1 ? `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}` : list[0];
+      out.push(`Ask with it: ${said} ${list.length > 1 ? "are" : "is"} very small. If the plan says ounces, send amounts_in: "oz" with the same numbers.`);
+    }
   }
   return out;
 }
@@ -720,7 +858,9 @@ function targetMl(raw: number | number[], amountsIn: "ml" | "oz"): FeedTarget {
   try {
     checkFeedTarget(patch);
   } catch (e) {
-    throw new ToolError(`${e instanceof Error ? e.message.replace(/\.$/, "") : "That target doesn't fit"}${amountsIn === "oz" ? " (about 0.2 to 10 oz)" : ""}. Nothing was saved.`);
+    // Numbers this small sent in ml were likely ounces ("2–3" for "2–3 oz").
+    const oz = amountsIn === "ml" && Math.max(min, max) < TINY_ML ? `. If the plan says ounces, send amounts_in: "oz" with the same numbers` : "";
+    throw new ToolError(`${e instanceof Error ? e.message.replace(/\.$/, "") : "That target doesn't fit"}${amountsIn === "oz" ? " (about 0.2 to 10 oz)" : ""}${oz}. Nothing was saved.`);
   }
   return patch.feed_target_ml as FeedTarget;
 }
@@ -814,9 +954,10 @@ export function planNextSide(n: FeedPlanNow): PlanSide | null {
 export async function feedingPlanStatus(ctx: Ctx, entries?: readonly Entry[]): Promise<{ lines: string[]; json: Record<string, unknown>; side: PlanSide | null } | null> {
   const plan = feedingPlanOf(ctx.baby.settings);
   if (!plan) return null;
-  const n = planNow(ctx, plan, entries ?? (await recentLog(ctx)));
+  const log = entries ?? (await recentLog(ctx));
+  const n = planNow(ctx, plan, log);
   const w = wordsOf(ctx);
-  return { lines: [planNowLine(n, w)], json: { ...planNowJson(n, w), family_words: PLAN_WORDS_JSON }, side: planNextSide(n) };
+  return { lines: [planNowLine(n, w, log)], json: { ...planNowJson(n, w, log), family_words: PLAN_WORDS_JSON }, side: planNextSide(n) };
 }
 
 /**
@@ -838,8 +979,12 @@ export function planFeedArg(ctx: Pick<Ctx, "baby">, raw: string | null | undefin
 /** Whether the plan feed's nursing uses the nipple shield (a start or log from it records the shield unless told otherwise). */
 export const planShield = (f: PlanFeed | null): boolean => !!f?.steps.some((s) => s.do === "nurse" && s.shield);
 
-/** A bottle the plan takes as an earlier feed's late part: that feed (its first nursing entry, for top_up_of) and which part. */
-export type OwedPart = { id: number; view: PlanFeedView; part: "top-up" | "milk at the breast" };
+/**
+ * A bottle the plan takes as an earlier feed's late part: that feed (its first nursing entry, for top_up_of) and which
+ * part: its top-up, its milk at the breast, or its bottle (one after the breast offered only if she wants it, which is
+ * the feed's bottle, never a top-up: feeding-plan.ts afterNursing).
+ */
+export type OwedPart = { id: number; view: PlanFeedView; part: "top-up" | "milk at the breast" | "bottle" };
 
 /**
  * The nursing feed a bottle given at `at`, with no feed named for it, is the
@@ -875,7 +1020,8 @@ export function owedPart(
   if (!view || view.offPlan || (view as PlanFeedView & { nursedOnly?: boolean }).nursedOnly) return null;
   if (!run || run.end === null || atMs < run.end || atMs - run.end > PLAN_LATE_TOP_UP_MS) return null;
   if (opts.tag && opts.tag !== view.feed.id) return null;
-  const bottle = view.steps.some((s) => s.step.do === "bottle" && s.status === "todo");
+  const owedBottle = view.steps.find((s) => s.step.do === "bottle" && s.status === "todo") ?? null;
+  const bottle = !!owedBottle;
   const breast = view.steps.some((s) => s.milkMissing);
   if (!bottle && !breast) return null;
   const id = newestNursingId(run);
@@ -886,7 +1032,8 @@ export function owedPart(
     const home = probeHome(read([...before, probeBottle(at, { ...opts.data, ...(opts.tag ? { plan: opts.tag } : {}) })]));
     if (!home || home.feed.id !== view.feed.id || (home.anchor !== null && home.anchor !== view.group!.anchor)) return null;
   }
-  return { id, view, part: breast && (opts.atBreast || !bottle) ? "milk at the breast" : "top-up" };
+  if (breast && (opts.atBreast || !bottle)) return { id, view, part: "milk at the breast" };
+  return { id, view, part: owedBottle && afterNursing(view.feed.steps, owedBottle.i) ? "top-up" : "bottle" };
 }
 
 /**
@@ -923,8 +1070,11 @@ const feedWord = (v: PlanFeedView, tz: string) => {
 /** The would-be bottle's id while the plan reads the log with it: never a saved entry's. */
 const PROBE_ID = -1;
 
-/** A plan feed fed by bottle: no nursing step, a bottle step (the night's "pump, then bottle"). */
-const bottleLed = (f: PlanFeed) => !f.steps.some((s) => s.do === "nurse") && f.steps.some((s) => s.do === "bottle");
+/**
+ * A plan feed fed by bottle: no nursing step, or only the breast offered if she wants it (practice before the bottle),
+ * and a bottle step (the night's "pump, then bottle").
+ */
+const bottleLed = (f: PlanFeed) => !f.steps.some((s) => s.do === "nurse" && !s.if_needed) && f.steps.some((s) => s.do === "bottle");
 
 /**
  * A bottle the feeding plan reads as a bottle-led plan feed's (one with no
@@ -952,7 +1102,9 @@ export type LedBottle = {
 /** The words for what a bottle is to a bottle-led feed's step: its bottle, or what a bottle short of its amount still needs. */
 function ledPartWords(s: StepView | null): string {
   if (!s || !shortBottle(s)) return "its bottle";
-  return s.step.do === "bottle" && s.step.milk === "breastmilk_first" ? "its formula to finish" : "the rest of its bottle";
+  if (s.step.do === "bottle" && s.step.milk === "breastmilk_first") return "its formula to finish";
+  // Given by cup, spoon or finger: the rest of that feed, never a bottle.
+  return s.step.do === "bottle" && s.step.by ? "the rest of it" : "the rest of its bottle";
 }
 
 /** A reading of the plan as every surface shows it: each feed's place, steps and times, the due, what's missed; never which rule placed a feed. */
@@ -1137,8 +1289,9 @@ export function planSpeak(n: FeedPlanNow, w: Words): string {
   const f = n.focus;
   if (f.state === "underway") {
     const words = stepWords(f.feed, n.plan, n.target);
-    // While she's on, milk at the breast not given yet comes first ("the 20 ml in the SNS, then pump 15 min").
-    const left = f.steps.filter((s) => s.status === "todo" || s.milkMissing || breastMilkOwedNow(s));
+    // While she's on, milk at the breast not given yet comes first ("the 20 ml in the SNS, then pump 15 min"); the breast
+    // offered before a bottle that's since been given is never still to do.
+    const left = f.steps.filter((s) => (s.status === "todo" && !offerPassed(s, f.steps)) || s.milkMissing || breastMilkOwedNow(s));
     const todo = left.map((s) => {
       const short = shortBottle(s);
       if (breastMilkOwedNow(s)) return breastMilkWords(s, n.plan);
@@ -1148,8 +1301,8 @@ export function planSpeak(n: FeedPlanNow, w: Words): string {
     });
     return spokenRange(`From the feeding plan: ${f.feed.name} is underway${todo.length ? `; still to do: ${todo.join(", then ")}` : ""}.`);
   }
-  const d = n.due;
-  const when = d ? dueSpeak(d, w) : null;
+  // At night when she's hungry, there's no time to say.
+  const when = hungryAtNight(n) ? `when ${w.vo.they}${w.vo.verb("'s")} hungry at night` : n.due ? dueSpeak(n.due, w) : null;
   return spokenRange(`Next from the feeding plan: ${f.feed.name}${when ? `, ${when}` : ""}.`);
 }
 
@@ -1168,6 +1321,10 @@ function dueSpeak(d: PlanDue, w: Words): string {
 
 export function registerFeedingPlanTools(server: McpServer, copy: ToolCopy = FAMILY_ONE_COPY) {
   const vo = copy.v;
+  // Whose own health stays out of the plan: the care person by name when the family has the page (the app keeps no
+  // pronoun for them), else the parents'.
+  const leaveOut = vo.hasMom ? `leave out ${vo.mom}'s own medicines and health (${vo.mom}'s page keeps those)` : "leave out the parents' own medicines and health";
+  const hungry = `${vo.they}${vo.verb("'s")}`;
 
   addPlanTool(
     server,
@@ -1189,14 +1346,15 @@ export function registerFeedingPlanTools(server: McpServer, copy: ToolCopy = FAM
         );
       }
       const target = feedTargetOf(ctx.baby.settings);
-      const n = planNow(ctx, plan, await recentLog(ctx));
+      const log = await recentLog(ctx);
+      const n = planNow(ctx, plan, log);
       const w = wordsOf(ctx);
       const input = planInput(plan, target);
       const topUpOf = missedTopUpOf(n);
       const lines = [
         `Feeding plan (revision ${plan.rev}), as the family saved it from their care team:`,
         ...planLines(plan, target, pronouns(vo)),
-        ...planNowBlock(n, w),
+        ...planNowBlock(n, w, log),
         "Say these words as they are; Maple counts the steps from what was logged. A change to the plan is the care team's to suggest, never yours.",
       ];
       return ok(lines.join("\n"), {
@@ -1273,12 +1431,12 @@ export function registerFeedingPlanTools(server: McpServer, copy: ToolCopy = FAM
     "set_feeding_plan",
     {
       title: "Save the feeding plan",
-      description: `Saves the family's feeding plan from their care team, so Today says which feed is next, its steps and when it's due; or removes it (remove: true). Build it only from what the family wrote or said, copying each value as written: never fill in a number that isn't there, and ask about anything unclear first (which feeds take turns, when night starts and ends). Shorthand is the family's or their consultant's (s&s, EBM, q3h): when it could mean two things (s&s: a shield and syringe, or an SNS), ask; never pick. Everyone in the family reads it, so leave out ${vo.mom}'s own medicines and health (her page keeps those). It saves only after a read-back: call it without confirmed to check the plan, and it gives every line to read back and a read_back token; only after their clear yes, call again with the same plan (and target), confirmed: true and that read_back (good for ${READ_BACK_HOURS} hours). A change sends the whole plan with base_rev, the rev it started from: start it from feeding_plan, or from the last save's answer (the plan as saved, in this shape, with its base_rev), never an older copy.`,
+      description: `Saves the family's feeding plan from their care team, so Today says which feed is next, its steps and when it's due; or removes it (remove: true). Build it only from what the family wrote or said, copying each value as written: never fill in a number that isn't there, and ask about anything unclear first (which feeds take turns, when night starts and ends). Shorthand is the family's or their consultant's (s&s, EBM, q3h): when it could mean two things (s&s: a shield and syringe, or an SNS; q3h or 8-11-2-5: by the clock, or start to start as the plan counts), ask; never pick; clock times go in the notes word for word. A pump is a feed's step only when it's done at that feed; pumping on its own clock (at work, a stash pump) goes in the notes. A feed given once a night (a dream feed) takes no turn: leave it out of the turns (Today offers it as another choice) or give it its own start in night.starts; ask when it's unclear. An amount that steps down by date: save today's, put the dates in a note step on that feed, and tell them to ask for the change on the day. Everyone in the family reads it, so ${leaveOut}. It saves only after a read-back: call it without confirmed to check the plan, and it gives every line to read back and a read_back token; only after their clear yes, call again with the same plan (and target), confirmed: true and that read_back (good for ${READ_BACK_HOURS} hours). A change sends the whole plan with base_rev, the rev it started from: start it from feeding_plan, or from the last save's answer (the plan as saved, in this shape, with its base_rev), never an older copy.`,
       inputSchema: {
         plan: planShape
           .nullish()
           .describe(
-            `The whole plan. feeds: 1 to 6, each {name, steps: 1 to 8, id when changing one}. Steps: {do:"nurse", minutes, each_side, side ("left"|"right": that side only; not with each_side), shield (nipple shield), supplement: milk given at the breast while nursing {via:"syringe"|"sns", ml, milk}}; {do:"pump", minutes, if_needed}; {do:"bottle", ml or to_target (up to the target per feed), milk, via:"bottle"|"paced", if_needed} (after nursing it's the top-up); {do:"note", text}. if_needed: true only when the plan says so ("if still hungry", "pump if still full"). minutes, ml and every: a number or [min, max]; every is minutes start to start, and on demand at most that apart ("at least every 3 hours") is {max: 180} or [0, 180]. milk: breastmilk, formula, either, breastmilk_first (pumped milk, then formula to finish). day: {every, wake (wake ${vo.them} to feed)}. night: {from, to (24-hour like "23:00", or with AM or PM like "11 PM"), every, wake, feed: the night's feed by name, or order: the night's feeds taking turns, by name; leave both out when the day's turns go on at night}. order: the day feeds' names in turn. amounts_in: the unit the numbers here are in (oz converts); unit: how they show (default amounts_in). from: who it's from; check_in: the next visit, YYYY-MM-DD; notes.`
+            `The whole plan. feeds: 1 to 6, each {name, steps: 1 to 8, id when changing one}. Steps: {do:"nurse", minutes, each_side, side ("left"|"right": that side only; not with each_side), shield (nipple shield), supplement: milk given at the breast while nursing {via:"syringe"|"sns", ml, milk}, if_needed (the breast offered only if ${vo.they} ${vo.verb("wants")} it, practice before a bottle)}; {do:"pump", minutes, if_needed}; {do:"bottle", ml or to_target (up to the target per feed), milk, via:"bottle"|"paced" or by:"cup"|"spoon"|"finger" (instead of a bottle), if_needed} (after nursing it's the top-up); {do:"note", text}. if_needed: true only when the plan says so ("if still hungry", "pump if still full", "offer the breast"). minutes, ml and every: a number or [min, max]; "up to N" is N with up_to (minutes or ml), "at least N" is ml N with at_least: never fill in the other end. every is minutes start to start, and on demand at most that apart ("at least every 3 hours") is {max: 180} or [0, 180]. milk: breastmilk, formula, either, breastmilk_first (breast milk first, then formula to finish; pumped or donor milk is breast milk). day: {every, on_demand, wake (wake ${vo.them} to feed)}. night: {from, to (24-hour like "23:00", or with AM or PM like "11 PM"), every, on_demand (with no every: when ${hungry} hungry at night, no wake), wake, feed: the night's feed by name, or order: the night's feeds taking turns, by name, and starts: one time for each when they go by the clock ("the partner until 2 AM, then nurse"); leave feed and order out when the day's turns go on at night}. order: the day feeds' names in turn. per_day: {feeds, ml} in 24 hours as written ("8 to 12 feeds a day"), each a number, [min, max], {min} (at least) or {max} (up to). amounts_in: the unit the numbers here are in (oz converts); unit: how they show (default amounts_in). from: who it's from; check_in: the next visit, YYYY-MM-DD; notes (the sheet's other words).`
           ),
         target: range()
           .nullish()
@@ -1377,9 +1535,10 @@ export function registerFeedingPlanTools(server: McpServer, copy: ToolCopy = FAM
           ? ["Ask with it: a bottle says up to the target, and there's no target per feed. If their plan gives one, add it as target; if not, it stays \"up to the target\"."]
           : [];
         // An edit asks only what it brings: a caution the saved plan already had was asked when it was saved.
-        const had = current ? planCautions(current) : [];
+        const had = current ? planCautions(current, { target: savedTarget }) : [];
         // And a feed whose name still says what the edit takes out of it ("Shield, then pump" with no shield now).
-        const cautions = [...planCautions(plan).filter((c) => !had.includes(c)), ...(current ? staleNames(current, plan) : [])];
+        const amountsIn = a.plan.amounts_in === "oz" ? "oz" : "ml";
+        const cautions = [...planCautions(plan, { target, amountsIn }).filter((c) => !had.includes(c)), ...(current ? staleNames(current, plan) : [])];
         const yes = `Only if they say yes, call set_feeding_plan again with the same plan${sets ? " and target" : ""}, confirmed: true and read_back: "${token}". To change something first, change it and read the plan back again. ${PLAN_WORDS_JSON}`;
         const body = changes
           ? [
@@ -1411,12 +1570,13 @@ export function registerFeedingPlanTools(server: McpServer, copy: ToolCopy = FAM
         throw e;
       }
       // What Today's Next feed card shows now, from the plan just saved.
-      const n = feedPlanNow(plan, await recentLog(ctx), ctx.now, { tz: ctx.tz, target });
+      const log = await recentLog(ctx);
+      const n = feedPlanNow(plan, log, ctx.now, { tz: ctx.tz, target });
       const saved = planInput(plan, target);
       return ok(
         [
           "Saved the feeding plan.",
-          `Revision ${plan.rev}${plan.from ? `, from ${plan.from}` : ""}${sets ? `, with a target of ${amountText(target!, plan.unit)} a feed` : ""}. Today shows it now: ${planNowLine(n, wordsOf(ctx)).replace(/^Feeding plan: /, "")}`,
+          `Revision ${plan.rev}${plan.from ? `, from ${plan.from}` : ""}${sets ? `, with a target of ${amountText(target!, plan.unit)} a feed` : ""}. Today shows it now: ${planNowLine(n, wordsOf(ctx), log).replace(/^Feeding plan: /, "")}`,
           // An edit's answer says what it changed, as its read-back did.
           ...(changes?.lines.length ? ["What changed:", ...changes.lines, ...(changes.kept ? ["Everything else stayed as it was."] : [])] : []),
         ].join("\n"),
