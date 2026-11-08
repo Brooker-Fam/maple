@@ -71,6 +71,8 @@ import { momSameMedicine, momStatus, momSummary, registerCareTools } from "./car
 import { registerMemoryTools, statusMemories } from "./memory/mcp";
 import { memoryRules } from "./memory/policy";
 import { registerPeopleTools } from "./people-mcp";
+import { feedingPlanStatus, planFeedArg, planShield, registerFeedingPlanTools } from "./feeding-plan-mcp";
+import { feedingPlanOf } from "./feeding-plan";
 import { registerSleepTools, sleepStatus, tryRef, undoableGoalWrite, undoableSleep, undoAsk } from "./sleep/mcp";
 import { deleteShift, deleteTry, endArmsSleepForFeed, getTry as getSleepTry } from "./sleep/store";
 import { adminActsAs, alertsOn, dailyStats, isVitaminD, memberName, soloBottleMl, summarize, type Summary } from "./insights";
@@ -261,6 +263,8 @@ Health alerts: when a result includes alerts, tell the user each one word for wo
 Duplicates: if a write returns created:false with possible_duplicate, nothing was saved. Ask the user whether it's the same event; only if it's a different one, call again with allow_duplicate: true. A result with deduped:true means it was already saved, so don't retry. If you didn't get a "Saved #…" line back, say it didn't save.
 
 Feeds: log_feed is for a feed that already finished; start_timer, switch_side, pause_nursing and stop_timer track one happening now (reopen_timer undoes a mistaken stop; update_entry with at fixes when a running one started). Sides are "left"/"right". When ${v.they}${v.verb("'s")} going back and forth between sides, switch_side {to:"both"} (or start_timer with back_and_forth and the side ${v.they} started on) stops tracking sides, so nothing needs calling at each change; "left" or "right" later tracks sides again, and log_feed takes both_minutes. Which side next: say maple_status's next_side (on a break mid-feed, back_on_side is the side to go back on now). The guidance behind it: "${NEXT_SIDE_NOTE}" The app takes "last time" as the side the last feed started on, or, within 30 minutes of a feed ending, the side ${v.they} finished on; after going back and forth it adds "or whichever side feels fuller". Stopping and starting again within 10 minutes counts as one feed, like a pause, and 3 or more feeds close together are a cluster (maple_status describes it). switch_side, pause_nursing and stop_timer take minutes_ago for when it really happened; fix_nursing_time moves one recorded moment of a feed (its start, a switch, a pause, going back on, the end), fixes which side a part was, or undoes the latest tap; nothing else moves. Its reply includes an undo.
+
+Feeding plan: when the family shares their care team's feeding plan (a photo of the plan sheet, or in their own words), build it with set_feeding_plan. Copy only what's written, never fill in a number that isn't there, and ask about anything unclear first (which feeds take turns, when night starts and ends). Read every line of its read-back to them and save only on a clear yes. Once saved, the plan is the source, not a memory: if a memory holds their feeding plan, offer to turn it into the plan (then archive the memory). For "what do we do next?", "which feed?" or "when?", say the words of feeding_plan${memories === "chat" ? " or the [App] lines' Feeding plan line" : " or maple_status's feeding_plan"}, never a schedule of your own, and never suggest changing the plan: that's for their care team. Starting one of its feeds: start_timer with plan; a top-up given late for an earlier feed: log_feed with top_up_of.
 
 Several things at once ("${v.they} nursed 15 min on the left at 2, pooped, and slept until 4:30"): use log_many.
 
@@ -614,13 +618,16 @@ function resolveSpan(a: TimeArgs, durationMin: number | null, ctx: Ctx, assumed:
 
 /** "wet + dirty diaper (mustard & seedy, big)", "breastfeed (L 12m, R 8m, started left)". */
 function phrase(e: Entry, ctx: Pick<Ctx, "now" | "fam" | "baby">): string {
-  const { title, detail } = describeEntry(e, { now: ctx.now, words: wordsOf(ctx) });
+  const { title, detail: said } = describeEntry(e, { now: ctx.now, words: wordsOf(ctx) });
+  // A nursing feed with the nipple shield says so, unless the log's own words already do.
+  const shield = e.kind === "feed" && e.data.method === "breast" && e.data.shield && !/shield/i.test(said);
+  const detail = shield ? [said, "with the nipple shield"].filter(Boolean).join(" · ") : said;
   const d = detail ? ` (${detail.replace(/ · /g, ", ")})` : "";
   if (e.active) return `${TIMER_LABEL[e.kind as TimerKind] ?? e.kind} timer${d}`;
   switch (e.kind) {
     case "feed":
-      // describeEntry titles a bottle given through a supplementer "SNS" (its detail then leaves it out).
-      return e.data.method === "bottle" ? `${title === "SNS" ? "SNS" : "bottle"}${d}` : `breastfeed${d}`;
+      // describeEntry titles milk given at the breast "SNS" or "Syringe" (its detail then leaves it out).
+      return e.data.method === "bottle" ? `${title === "SNS" ? "SNS" : title === "Syringe" ? "syringe" : "bottle"}${d}` : `breastfeed${d}`;
     case "diaper":
       return `${title.toLowerCase()}${d}`;
     case "sleep":
@@ -1008,12 +1015,17 @@ const KIND_ALERT_IDS: Partial<Record<EntryKind, string[]>> = {
 
 /** The same summary the Today screen shows (72h of entries, like /api/maple/state). */
 async function snapshot(ctx: Ctx): Promise<Summary> {
+  return (await snapshotWithLog(ctx)).s;
+}
+
+/** snapshot, with the 72 hours it read (the feeding plan reads the log against itself from them, as Today does). */
+async function snapshotWithLog(ctx: Ctx): Promise<{ s: Summary; entries: Entry[] }> {
   const [entries, growth, lifetime] = await Promise.all([
     listEntries(ctx.fam, { babyId: ctx.baby.id, from: new Date(ctx.now.getTime() - 72 * HOUR), includeActive: true, limit: 2000 }),
     listEntries(ctx.fam, { babyId: ctx.baby.id, kinds: ["growth"], ascending: true, limit: 2000 }),
     lifetimeCounts(ctx.fam, ctx.baby.id),
   ]);
-  return summarize({ entries, growth, baby: ctx.baby, members: ctx.members, now: ctx.now, lifetime, vo: voiceOf(ctx) });
+  return { s: summarize({ entries, growth, baby: ctx.baby, members: ctx.members, now: ctx.now, lifetime, vo: voiceOf(ctx) }), entries };
 }
 
 function targetsJson(s: Summary) {
@@ -1587,8 +1599,24 @@ type FeedArgs = TimeArgs & {
   formula_amount?: number | null;
   /** How it was given (BOTTLE_VIAS). */
   via?: BottleVia | null;
+  /** Nursing: with a nipple shield. */
+  shield?: boolean | null;
+  /** The feeding plan's feed it was, by id or name (feeding-plan-mcp.ts planFeedArg). */
+  plan?: string | null;
+  /** Bottle: a nursing entry of the feed it tops up, given late (feed.ts TOP_UP_LINK_MS). */
+  top_up_of?: number | null;
   note?: string | null;
 };
+
+/** A late top-up's feed: one of this family's nursing feeds, or a ToolError saying where its id comes from. */
+async function topUpTarget(id: number | null | undefined, ctx: Ctx): Promise<number | undefined> {
+  if (id == null) return undefined;
+  const e = await getEntry(ctx.fam, id);
+  if (!e || e.kind !== "feed" || e.data.method !== "breast") {
+    throw new ToolError(`top_up_of ${id} isn't a nursing feed in this log. Use the id of the nursing feed it tops up (maple_status's last_feed id, or feeding_plan's top_up_of). Nothing was saved.`);
+  }
+  return e.id;
+}
 
 function volumeMl(amount: number, unit: string | null | undefined, what: string): number {
   if (unit && unit !== "oz" && unit !== "ml") throw new ToolError(`unit for a ${what} must be "oz" or "ml".`);
@@ -1612,10 +1640,13 @@ function topUpLine(run: NursingRun, ctx: Ctx): string {
 async function doFeed(a: FeedArgs, ctx: Ctx, w: WriteOpts): Promise<Saved> {
   const vo = voiceOf(ctx);
   const assumed: string[] = [];
+  // The feeding plan's feed it was (a nursing feed's nipple shield comes with it unless they said otherwise).
+  const planFeed = planFeedArg(ctx, a.plan);
   if (a.method === "bottle") {
     if (a.left_minutes != null || a.right_minutes != null || a.both_minutes != null || a.first_side) {
       throw new ToolError("left_minutes, right_minutes, both_minutes and first_side are for breastfeeding. For a bottle give amount + unit.");
     }
+    if (a.shield) throw new ToolError("shield is for nursing (a nipple shield). For a bottle leave it out.");
     let amount_ml: number | undefined;
     if (a.amount != null) {
       amount_ml = volumeMl(a.amount, a.unit ?? "oz", "bottle");
@@ -1633,12 +1664,22 @@ async function doFeed(a: FeedArgs, ctx: Ctx, w: WriteOpts): Promise<Saved> {
       throw new ToolError(`breastmilk_amount and formula_amount split a mixed bottle, but milk is ${a.milk}. Give milk "mixed" (or leave it out), or drop the split.`);
     }
     const milk = split ? "mixed" : a.milk ?? undefined;
+    const topUpOf = await topUpTarget(a.top_up_of, ctx);
     const { start } = resolveSpan({ at: a.at, minutes_ago: a.minutes_ago, ended_at: a.ended_at, ended_minutes_ago: a.ended_minutes_ago }, null, ctx, assumed);
     const core = await save(ctx, {
       kind: "feed",
       start,
       end: null,
-      data: { method: "bottle", amount_ml, milk, via: a.via ?? undefined, breastmilk_ml, formula_ml },
+      data: {
+        method: "bottle",
+        amount_ml,
+        milk,
+        via: a.via ?? undefined,
+        breastmilk_ml,
+        formula_ml,
+        ...(planFeed ? { plan: planFeed.id } : {}),
+        ...(topUpOf != null ? { top_up_of: topUpOf } : {}),
+      },
       note: a.note,
       ...w,
     });
@@ -1654,9 +1695,10 @@ async function doFeed(a: FeedArgs, ctx: Ctx, w: WriteOpts): Promise<Saved> {
     });
   }
 
-  if (a.amount != null || a.milk || a.via || a.breastmilk_amount != null || a.formula_amount != null) {
-    throw new ToolError("amount, milk, the split and via are for bottles (an SNS amount is a bottle with via \"sns\"). For breastfeeding give left_minutes, right_minutes and/or both_minutes.");
+  if (a.amount != null || a.milk || a.via || a.breastmilk_amount != null || a.formula_amount != null || a.top_up_of != null) {
+    throw new ToolError("amount, milk, the split, via and top_up_of are for bottles (an SNS or syringe amount is a bottle with via \"sns\" or \"syringe\"). For breastfeeding give left_minutes, right_minutes and/or both_minutes.");
   }
+  const shield = a.shield ?? planShield(planFeed);
   const left = a.left_minutes ?? 0;
   const right = a.right_minutes ?? 0;
   const both = a.both_minutes ?? 0;
@@ -1678,6 +1720,8 @@ async function doFeed(a: FeedArgs, ctx: Ctx, w: WriteOpts): Promise<Saved> {
     ...(both > 0 ? { both_sec: Math.round(both * 60) } : {}),
     first_side: first,
     last_side: last,
+    ...(shield ? { shield: true } : {}),
+    ...(planFeed ? { plan: planFeed.id } : {}),
   };
   // validate.ts drops keys it doesn't list: never save a back-and-forth feed as no minutes at all.
   if (both > 0 && !("both_sec" in cleanData("feed", data))) {
@@ -1958,6 +2002,9 @@ function timerJson(e: Entry, ctx: Ctx) {
       total_nursing_minutes: t.min.nursing,
       break_minutes: t.min.breaks,
       timeline: timelineJson(parts, ctx),
+      // The nipple shield and the feeding plan's feed it was started under, when it has them.
+      ...(e.data.shield ? { shield: true } : {}),
+      ...(e.data.plan ? { plan: e.data.plan } : {}),
     });
   }
   return base;
@@ -1979,7 +2026,7 @@ function timerLine(e: Entry, ctx: Ctx): string {
     const where = cur.kind === "break" ? `paused ${since}` : cur.side === "B" ? `going back and forth (both sides) ${since}` : `on the ${sideWord(cur.side)} ${since}`;
     const past = parts.slice(0, -1).map((p) => partText(p, ctx));
     const rest = past.length ? `; ${past.join(", ")}; total nursing ${minutesText(partTotals(parts).min.nursing)}` : "";
-    return `Nursing ${where}${rest}, started by ${by} [timer #${e.id}].`;
+    return `Nursing ${e.data.shield ? "with the nipple shield, " : ""}${where}${rest}, started by ${by} [timer #${e.id}].`;
   }
   return `${TIMER_LABEL[e.kind as TimerKind].replace(/^./, (c) => c.toUpperCase())} timer running: ${elapsed} since ${formatTime(e.started_at, ctx.tz)} (started by ${by}) [timer #${e.id}].`;
 }
@@ -2001,12 +2048,26 @@ const STALE_FEED_MIN = 6 * 60;
 
 /** A feed's top-ups (bottles given with it, feed.ts), in words: "with a 35 ml (1.2 oz) top-up", "with 2 top-ups"; "" for none. */
 function topUpWords(run: NursingRun): string {
-  const n = run.topUps.length;
-  if (!n) return "";
-  const ml = topUpMl(run);
-  if (n === 1) return `with a ${ml != null ? `${formatVolumeBoth(ml)} ` : ""}top-up`;
-  return `with ${n} top-ups${ml != null ? `, ${formatVolumeBoth(ml)} in all` : ""}`;
+  if (!run.topUps.length) return "";
+  // Milk given at the breast while she nursed (an SNS, a syringe) is part of the nursing, said as such; the rest are top-ups.
+  const breast = run.topUps.filter(atBreast);
+  const bottles = run.topUps.filter((b) => !atBreast(b));
+  const parts: string[] = [];
+  if (breast.length) {
+    const ml = topUpMl({ topUps: breast });
+    const how = breast.every((b) => b.data.via === "sns") ? "in the SNS" : breast.every((b) => b.data.via === "syringe") ? "by syringe" : "at the breast";
+    parts.push(`${ml != null ? `${formatVolumeBoth(ml)} ` : "milk "}${how}`);
+  }
+  const n = bottles.length;
+  if (n) {
+    const ml = topUpMl({ topUps: bottles });
+    parts.push(n === 1 ? `a ${ml != null ? `${formatVolumeBoth(ml)} ` : ""}top-up` : `${n} top-ups${ml != null ? `, ${formatVolumeBoth(ml)} in all` : ""}`);
+  }
+  return `with ${parts.join(" and ")}`;
 }
+
+/** A bottle entry whose milk was given at the breast while she nursed (via an SNS or a syringe). */
+const atBreast = (b: FeedEntry) => b.data.via === "sns" || b.data.via === "syringe";
 
 /**
  * Her last feed as counted (feed.ts nursingRuns: Pauses and Dones under 10 minutes apart are one feed), from the
@@ -2149,10 +2210,15 @@ export function logStateLines(s: Summary, ctx: Ctx): string[] {
   return lines.filter((l): l is string => !!l);
 }
 
-/** logStateLines for the log now, then her next medicine for someone who can read her page (momStatus, so ctx.care holds). */
+/**
+ * logStateLines for the log now, then the feeding plan's next feed (a family with one), the sleep plan's lines, and her
+ * next medicine for someone who can read her page (momStatus, so ctx.care holds).
+ */
 export async function logState(ctx: Ctx): Promise<string[]> {
-  const [s, mom, sleep] = await Promise.all([snapshot(ctx), momStatus(ctx), sleepStatus(ctx).catch(() => null)]);
+  const [{ s, entries }, mom, sleep] = await Promise.all([snapshotWithLog(ctx), momStatus(ctx), sleepStatus(ctx).catch(() => null)]);
   const lines = logStateLines(s, ctx);
+  const plan = s.born ? await feedingPlanStatus(ctx, entries) : null;
+  if (plan) lines.push(...plan.lines);
   if (s.born && sleep) lines.push(...sleep.lines);
   if (mom) lines.push(`${mom.name}'s next medicine: ${mom.top}.`);
   return lines;
@@ -2213,8 +2279,11 @@ export function lastFedSpeak(s: Summary, name: string, tz: string, vo: Voice): s
     return `${head} ${counted ?? `${vo.They} last ate ${agoWords(s.minutesSinceFeed)}${next}.`}`;
   }
   const run = fed.run;
-  // A bottle given with the feed is its top-up: said with it ("…, with a top-up"), never as when she last ate.
-  const topUp = run?.topUps.length ? ", with a top-up" : "";
+  // A bottle given with the feed is its top-up: said with it ("…, with a top-up"), never as when she last ate; milk
+  // given at the breast (an SNS, a syringe) is part of the nursing ("…, with milk at the breast").
+  const breastMilk = !!run?.topUps.some(atBreast);
+  const bottleTopUp = !!run?.topUps.some((b) => !atBreast(b));
+  const topUp = breastMilk || bottleTopUp ? `, with ${[breastMilk ? "milk at the breast" : "", bottleTopUp ? "a top-up" : ""].filter(Boolean).join(" and ")}` : "";
   const first = `${run?.firstSide ? `, starting on the ${sideWord(run.firstSide)}${run.backAndForth ? " and going back and forth" : ""}` : fed.kind === "bottle" ? ", from a bottle" : ""}${topUp}`;
   if (counted && fed.end) return `${name} finished a long feed ${agoWords((Date.parse(s.now) - Date.parse(fed.end)) / MIN)}${first}. ${counted}`;
   return `${name} last ate ${agoWords(s.minutesSinceFeed)}${first}${next}.`;
@@ -2293,7 +2362,7 @@ async function recap(ctx: Ctx, since: Date, reason: string) {
 
 async function statusResult(ctx: Ctx, since: string | null | undefined): Promise<CallToolResult> {
   const vo = voiceOf(ctx);
-  const s = await snapshot(ctx);
+  const { s, entries } = await snapshotWithLog(ctx);
   const name = ctx.baby.nickname || vo.Name;
   const lines: string[] = [];
   const json: Record<string, unknown> = {
@@ -2353,6 +2422,12 @@ async function statusResult(ctx: Ctx, since: string | null | undefined): Promise
   // The family's own target per feed from their care team, only when they typed one.
   const target = feedTargetOf(ctx.baby.settings);
   if (target) json.feed_target = `${formatVolumeRangeBoth(target)}, from their care team, counting what's taken at the breast`;
+  // The care team's feeding plan, only for a family that saved one: the next feed (or the one underway) in its words.
+  const plan = s.born ? await feedingPlanStatus(ctx, entries) : null;
+  if (plan) {
+    lines.push(...plan.lines);
+    json.feeding_plan = plan.json;
+  }
   // The cluster her last feed is in: 3+ feeds, each starting under 30 minutes after the last one ended.
   const cluster = lastCluster(s);
   json.cluster = cluster ? clusterJson(cluster, ctx) : null;
@@ -3422,6 +3497,9 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
     breastmilk_amount: z.number().min(0).max(1000).nullish().describe("Bottle, mixed: the breast milk part, in `unit`."),
     formula_amount: z.number().min(0).max(1000).nullish().describe("Bottle, mixed: the formula part, in `unit`."),
     via: z.enum(BOTTLE_VIAS).nullish().describe("Bottle: how it was given, only if said (sns: a supplementer at the breast; syringe: a syringe, at the breast or by finger). Never guess."),
+    shield: z.boolean().nullish().describe("Breast: with a nipple shield (a plan feed's own comes with plan)."),
+    plan: z.string().max(60).nullish().describe("The feeding plan's feed, by id or name."),
+    top_up_of: z.number().int().positive().nullish().describe("Bottle: a late top-up's nursing feed id (feeding_plan's top_up_of)."),
     at: fields.at("When the feed STARTED"),
     minutes_ago: fields.minutesAgo("How many minutes ago the feed STARTED"),
     ended_minutes_ago: fields.endedMinutesAgo(),
@@ -3516,6 +3594,8 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
           .describe(
             `Nursing: true when ${vo.they}${vo.verb("'s")} going back and forth between sides (switching often, nobody tracking which). Needs side. With a feed already running, it goes back and forth from now, like switch_side {to:"both"}.`
           ),
+        shield: z.boolean().nullish().describe("Nursing: with a nipple shield (a plan feed's own comes with plan)."),
+        plan: z.string().max(60).nullish().describe("Nursing: the feeding plan's feed, by id or name."),
         at: fields.at("When it started (default now)"),
         minutes_ago: fields.minutesAgo("How many minutes ago it started"),
         client_ref: fields.clientRef(),
@@ -3533,6 +3613,11 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
       const kind = TIMER_KIND[a.timer];
       const both = !!a.back_and_forth;
       if (both && kind !== "feed") throw new ToolError(`back_and_forth is for nursing: it means ${vo.they}${vo.verb("'s")} going back and forth between sides.`);
+      if ((a.shield != null || a.plan?.trim()) && kind !== "feed") throw new ToolError("shield and plan are for a nursing timer.");
+      // The feeding plan's feed she's starting, and its nipple shield unless they said otherwise (a new feed only).
+      const planFeed = kind === "feed" ? planFeedArg(ctx, a.plan) : null;
+      const shield = kind === "feed" && (a.shield ?? planShield(planFeed));
+      const startWith = shield || planFeed ? { ...(shield ? { shield: true } : {}), ...(planFeed ? { plan: planFeed.id } : {}) } : undefined;
       let side: Side | undefined = a.side ? toSide(a.side) : undefined;
       let suggested = false;
       const ref = a.client_ref?.trim() || null;
@@ -3580,6 +3665,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
         kind,
         side: kind === "feed" ? side : undefined,
         ...(both ? { backAndForth: true } : {}),
+        ...(startWith ? { with: startWith } : {}),
         at,
         createdBy: ctx.who.id,
         source: ctx.who.via,
@@ -3594,10 +3680,13 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
         return ` going back and forth${entry.data.first_side ? ` (${vo.they} started on the ${sideWord(entry.data.first_side)})` : ""}`;
       })() : "";
       const goingBoth = entry.kind === "feed" && openSegment(entry.data.segments)?.side === "B";
+      // What the new feed carries from the plan: its nipple shield, and which of the plan's feeds it is.
+      const shieldText = entry.kind === "feed" && entry.data.shield ? " with the nipple shield" : "";
+      const planText = planFeed && entry.kind === "feed" && entry.data.plan === planFeed.id ? `, for the feeding plan's ${JSON.stringify(planFeed.name)}` : "";
       const lines = [
         alreadyRunning
-          ? `A ${label} timer was already running (#${entry.id}, started ${whenText(entry.started_at, ctx)} by ${by})${sideText ? `; now${sideText}` : ""}. No second timer was started.`
-          : `Saved #${entry.id}: ${label} timer started${sideText} at ${whenText(entry.started_at, ctx)} (logged by ${by} via ${viaLabel(entry.source)}).${suggested ? " (That's the suggested next side.)" : ""}`,
+          ? `A ${label} timer was already running (#${entry.id}, started ${whenText(entry.started_at, ctx)} by ${by})${sideText ? `; now${sideText}` : ""}. No second timer was started${startWith ? ", and the running feed kept its own plan feed and shield" : ""}.`
+          : `Saved #${entry.id}: ${label} timer started${sideText}${shieldText} at ${whenText(entry.started_at, ctx)}${planText} (logged by ${by} via ${viaLabel(entry.source)}).${suggested ? " (That's the suggested next side.)" : ""}`,
         ...(goingBoth && !alreadyRunning ? [BOTH_NOTE] : []),
         ...(armsEnded ? [`${vo.Name}'s sleep in arms (#${armsEnded.sleep.id}, since ${formatTime(armsEnded.sleep.started_at, ctx.tz)}) ended at ${formatTime(armsEnded.sleep.ended_at!, ctx.tz)}, when the feed began (if ${vo.they} ${vo.verb("is")} still asleep in arms, reopen_timer with id ${armsEnded.sleep.id} runs it again).`] : []),
       ];
@@ -4544,7 +4633,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
   // ── fixing things ─────────────────────────────────────────────────────
 
   const DETAIL_KEYS: Record<EntryKind, string[]> = {
-    feed: ["method", "left_sec", "right_sec", "both_sec", "first_side", "last_side", "amount_ml", "milk"],
+    feed: ["method", "left_sec", "right_sec", "both_sec", "first_side", "last_side", "amount_ml", "milk", "breastmilk_ml", "formula_ml", "via", "shield", "plan", "top_up_of"],
     pump: ["left_ml", "right_ml", "total_ml"],
     diaper: ["pee", "poop", "color", "texture", "size", "rash"],
     sleep: ["place"],
@@ -4564,7 +4653,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
     {
       title: "Fix a logged entry",
       description: `Use this to fix an entry by id (from a log result or list_entries): its time (at / minutes_ago), end (ended_at / ended_minutes_ago / duration_minutes), note, or details. details holds kind-specific fields in STORAGE units; set a field to null to remove it:
-feed: method (breast|bottle), left_sec, right_sec, both_sec (seconds; both = going back and forth, sides not tracked), first_side/last_side ("left"|"right"), amount_ml, milk (breastmilk|formula|mixed), breastmilk_ml/formula_ml (mixed split), via (bottle|paced|sns)
+feed: method (breast|bottle), left_sec, right_sec, both_sec (seconds; both = going back and forth, sides not tracked), first_side/last_side ("left"|"right"), amount_ml, milk (breastmilk|formula|mixed), breastmilk_ml/formula_ml (mixed split), via (bottle|paced|sns|syringe), shield (nursing: a nipple shield), plan (its feeding plan feed), top_up_of (a late top-up's nursing feed id)
 diaper: pee, poop (true/false), color (${STOOL_COLORS.join("|")}), texture, size, rash
 sleep: place · growth: weight_g, length_cm, head_cm, at (home|doctor) · temperature: temp_c (°C), method
 vitals: heart_bpm, resp_rate, spo2, jaundice · medicine: name, dose · pump: left_ml, right_ml, total_ml
@@ -4617,6 +4706,9 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
           if (data[k] === "left") data[k] = "L";
           if (data[k] === "right") data[k] = "R";
         }
+        // The feeding plan's feed by its id or name, and a late top-up's feed, checked as log_feed checks them (null removes).
+        if (cur.kind === "feed" && typeof data.plan === "string") data.plan = planFeedArg(ctx, data.plan)?.id ?? null;
+        if (cur.kind === "feed" && data.top_up_of != null) data.top_up_of = (await topUpTarget(Number(data.top_up_of), ctx)) ?? null;
       }
       const note = a.note === undefined || a.note === null ? undefined : a.note;
       if (!start && !end && !data && note === undefined) throw new ToolError("Nothing to change: give a new time, end, note or details.");
@@ -4805,8 +4897,17 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
       const fixAt = fix ? new Date(fix.updated_at).getTime() : 0;
       const planAt = plan ? new Date(plan.updated_at).getTime() : 0;
       const latestOther = Math.max(momAt, createdAt, editedAt, sleepAt, tryEditAt);
+      // The feeding plan saved in the last 30 minutes (by anyone: the plan doesn't keep who): never undone by removing an older entry.
+      const feeding = feedingPlanOf(ctx.baby.settings);
+      const savedAt = feeding?.updated_at ? Date.parse(feeding.updated_at) : NaN;
+      const feedingAt = Number.isFinite(savedAt) && ctx.now.getTime() - savedAt <= 30 * MIN ? savedAt : 0;
       // A sleep goal write or a check-in is the newest: a check-in just saved goes, anything else is explained (sleep/mcp.ts).
-      if (goalWrite && goalWrite.at > Math.max(latestOther, planAt, fixAt)) return goalWrite.run();
+      if (goalWrite && goalWrite.at > Math.max(latestOther, planAt, fixAt, feedingAt)) return goalWrite.run();
+      if (feedingAt > Math.max(latestOther, planAt, fixAt)) {
+        throw new ToolError(
+          `Nothing was removed. The newest change was the feeding plan, saved at ${formatTime(feedingAt, ctx.tz)}, not a new entry, and undo_last doesn't take that back. To change it, read the plan as it should be back with set_feeding_plan (feeding_plan has it now); remove: true removes it.`
+        );
+      }
       if (planAt > latestOther && planAt >= fixAt && plan) {
         const added = Math.abs(new Date(plan.created_at).getTime() - planAt) < 2000;
         const how = plan.deleted_at
@@ -4917,4 +5018,6 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
   registerPeopleTools(server, copy);
   // The sleep plan: bassinet tries and holding shifts (sleep/mcp.ts).
   registerSleepTools(server, copy);
+  // The care team's feeding plan: what it says to do now, and saving it after a read-back (feeding-plan-mcp.ts).
+  registerFeedingPlanTools(server, copy);
 }

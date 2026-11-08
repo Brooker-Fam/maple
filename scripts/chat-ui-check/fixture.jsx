@@ -68,6 +68,19 @@ function scenario(name) {
   if (name === "web") return { ...base, messages: [user("msg_user", "When should we worry about jaundice?"), assistant("msg_web", [tool("web_search", { ok: true, write: false, text: "Web results for \"newborn jaundice when to call the doctor\" on trusted health sites: made-up lines.", web: { query: "newborn jaundice when to call the doctor", health: true, sources: [{ title: "Jaundice in Newborns: Parent FAQs, a deliberately long synthetic page title that has to wrap on a small phone", url: "https://www.healthychildren.org/jaundice", site: "healthychildren.org" }, { title: "Newborn jaundice", url: "https://www.nhs.uk/conditions/jaundice-newborn/", site: "nhs.uk" }] } }), { type: "text", text: "The AAP says to call the pediatrician if the yellow spreads or the baby is very sleepy." }])] };
   if (name === "web-searching") return { ...base, busy: true, status: "streaming", messages: [user("msg_user", "When should we worry about jaundice?"), assistant("msg_web", [{ type: "tool-web_search", toolCallId: "call_ws", state: "input-available", input: { query: "newborn jaundice", topic: "health" } }])] };
   if (name === "people-invited") return { ...base, messages: [user("msg_user", "Invite aunt@example.test to view the log."), assistant("msg_people", [tool("invite_person", { ok: true, write: true, text: "Invited aunt@example.test: sees River's log and moments, no changes. Email isn't set up, so copy the invite link from the card and send it to them.", invite: { email: "aunt@example.test", url: INVITE_URL, emailed: false } })])] };
+  // The care team's feeding plan (an invented one): its read-back waiting for a yes, the save, and the button to the plan.
+  if (name === "feeding-plan-read-back") return { ...base, messages: [user("msg_user", "Here's the plan from our lactation consultant, can you save it?"), assistant("msg_plan", [
+    tool("set_feeding_plan", { ok: true, write: true, pending: true, text: "Not saved yet: say yes to save the plan.\nRead every line of this back to them as it is, then ask if it's right:\n{\"confirm_needed\":true}" }),
+    { type: "text", text: "Here's the plan as I read it:\n- From: Feeding clinic, check in Fri, Nov 13\n- Target: 50 to 70 ml a feed\n- Day: every 2.5 to 3.5 hours, taking turns: Nurse + SNS, then Nurse, top up\n- Nurse + SNS: nurse 12 to 18 min, 20 ml of formula in the SNS; then pump 15 min\n- Nurse, top up: nurse 8 to 12 min each side; then top up 25 to 35 ml, formula or breast milk, paced bottle\n- Night (11 PM to 5 AM): every 3 hours, waking her: Pump + bottle\nIs that all right?" },
+  ])] };
+  if (name === "feeding-plan-saved") return { ...base, messages: [user("msg_user", "Yes, that's right"), assistant("msg_plan", [
+    tool("set_feeding_plan", { ok: true, write: true, text: "Saved the feeding plan.\nRevision 1, from Feeding clinic, with a target of 50–70 ml a feed. Today shows it now: next is \"Nurse + SNS\".\n{\"saved\":true}" }),
+    { type: "text", text: "Next is Nurse + SNS: nurse 12 to 18 min with 20 ml of formula in the SNS, then pump 15 min." },
+  ])] };
+  if (name === "feeding-plan-open") return { ...base, messages: [user("msg_user", "Where can I change the plan myself?"), assistant("msg_plan", [
+    tool("open_screen", { ok: true, write: false, text: "A button to open Feeding plan is shown. Nothing changes until the person opens the screen and uses its controls.", navigation: { v: 1, destination: "feeding_plan" } }),
+    { type: "text", text: "You can see it and change it by hand there." },
+  ])] };
   if (name === "long") return { ...base, messages: Array.from({ length: 30 }, (_, i) => i % 2 ? assistant(`msg_${i}`, [{ type: "text", text: `Synthetic reply ${i}. The log shows a completed entry at the recorded time. This example is long enough to exercise reading and scrolling.` }]) : user(`msg_${i}`, `Synthetic question ${i}: What happened in this example?`)) };
   return base;
 }
