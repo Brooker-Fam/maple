@@ -1,25 +1,31 @@
 /**
  * Assertions for the feeding plan's form as data (src/components/maple/feeding/planDraft.ts): a saved plan opened in
- * the sheet and saved untouched comes back the same plan, in ml or oz; the target per feed round-trips; switching ml
- * and oz never changes an amount; starting shapes fill in kinds of step and no numbers; taking a feed out keeps the
- * turns and the night whole; and a refusal's words point at the feed and step they're about.
+ * the sheet and saved untouched comes back the same plan, in ml or oz, every newer option included (the night when
+ * hungry, its turns by the clock, nursing only if she wants to, up to and at least, a cup, spoon or finger, feeds and
+ * milk in 24 hours, long notes); the target per feed round-trips; switching ml and oz never changes an amount;
+ * starting shapes fill in kinds of step and no numbers, the everyday ones first; taking a feed out keeps the turns and
+ * the night whole; and a refusal's words point at the feed and step they're about.
  *
  *   npx tsx scripts/maple-feeding-plan-form-check.ts   (part of pnpm check:maple-feeding-plan)
  *
  * The plans here are invented examples, not any family's. One PASS/FAIL line per case, exit 1 on any failure.
  */
-import { amountText, checkFeedingPlan, feedText, parseFeedingPlan, PlanError, type FeedingPlan } from "../src/lib/maple/feeding-plan";
+import { amountText, checkFeedingPlan, feedText, NOTES_OLDER, parseFeedingPlan, perDayLines, PlanError, planLines, planNotes, type FeedingPlan } from "../src/lib/maple/feeding-plan";
 import {
   addFeed,
+  draftAfterNursing,
   draftFromShape,
   draftOf,
   draftProblem,
+  EMPTY_RANGE,
   feedSummary,
   hoursText,
   inputOf,
+  leastOf,
   move,
   newFeed,
   newStep,
+  nightHungry,
   PLAN_SHAPES,
   planShortLine,
   problemPlace,
@@ -27,13 +33,19 @@ import {
   removeFeed,
   samePlan,
   setNightFeed,
+  setNightStart,
   setNightTurns,
   shownAmount,
   staleNameWords,
+  stepTitle,
   takeOutFeed,
   typedAmount,
+  upToOf,
   wakeText,
+  type BottleDraft,
+  type NurseDraft,
   type PlanDraft,
+  type PumpDraft,
   type StepDraft,
 } from "../src/components/maple/feeding/planDraft";
 
@@ -57,6 +69,13 @@ function eq(actual: unknown, expected: unknown, what = "value") {
 
 const NOW = new Date("2026-03-10T14:00:00.000Z");
 const LATER = new Date("2026-03-11T14:00:00.000Z");
+
+/** A starting shape by its id. */
+const shape = (id: string) => {
+  const s = PLAN_SHAPES.find((x) => x.id === id);
+  if (!s) throw new Error(`no starting shape "${id}"`);
+  return s;
+};
 
 /** The invented plan of maple-feeding-plan-check.ts, plus a nipple shield, waking by day and notes. */
 const PLAN = parseFeedingPlan(
@@ -131,7 +150,7 @@ check("ml and oz: switching only changes how amounts show; typed ounces go as ml
   eq([shownAmount(ml, "oz"), shownAmount(ml, "ml")], [1.5, 44.4]);
   // A saved 44.4 ml shows as 1.5 oz and goes back as 44.4 ml.
   eq([shownAmount(44.4, "oz"), shownAmount(29.6, "oz")], [1.5, 1]);
-  const d: PlanDraft = draftFromShape(PLAN_SHAPES[2], null, "oz");
+  const d: PlanDraft = draftFromShape(shape("pump-bottle"), null, "oz");
   const bottle = d.feeds[0].steps[1];
   if (bottle.do !== "bottle") throw new Error("the shape's second step is a bottle");
   const typed: PlanDraft = { ...d, feeds: [{ ...d.feeds[0], steps: [d.feeds[0].steps[0], { ...bottle, ml: { min: typedAmount(1, "oz"), max: typedAmount(1.5, "oz") } }] }] };
@@ -144,7 +163,7 @@ check("ml and oz: switching only changes how amounts show; typed ounces go as ml
 });
 
 check("starting shapes: the kinds of step only, no numbers, the feeds taking turns", () => {
-  const turns = draftFromShape(PLAN_SHAPES[0], null, "ml");
+  const turns = draftFromShape(shape("turns"), null, "ml");
   const { plan: input } = inputOf(turns);
   eq(input.feeds, [
     { name: "Nurse, then pump", steps: [{ do: "nurse" }, { do: "pump" }] },
@@ -153,7 +172,7 @@ check("starting shapes: the kinds of step only, no numbers, the feeds taking tur
   eq([input.order, input.day, input.night, input.from], [[1, 2], {}, undefined, undefined]);
   // Saved as it is, it's a plan: what's left to add is numbers, never steps.
   eq(parseFeedingPlan(input, null, NOW).feeds.length, 2);
-  const blank = inputOf(draftFromShape(PLAN_SHAPES[3], null, "ml")).plan;
+  const blank = inputOf(draftFromShape(shape("blank"), null, "ml")).plan;
   eq(blank.feeds, [{ name: "", steps: [] }]);
   let refused = "";
   try {
@@ -257,7 +276,7 @@ check("Save checks the draft as the server will, in its words: a feed that only 
   eq(server, words, "the server's words");
   eq(problemPlace(words!, dry), { feed: d.feeds[2].key, step: null });
   // A new plan's feed that only pumps, too.
-  const fresh = draftFromShape(PLAN_SHAPES[2], null, "ml");
+  const fresh = draftFromShape(shape("pump-bottle"), null, "ml");
   eq(draftProblem({ ...fresh, feeds: [{ ...fresh.feeds[0], steps: fresh.feeds[0].steps.slice(0, 1) }] }, null, LATER), '"Pump and bottle" needs nursing or a bottle: a pump on its own goes in the plan\'s notes');
   // An untouched plan isn't sent, so only the target is checked.
   eq(draftProblem(dry, PLAN, LATER, false), null);
@@ -423,6 +442,237 @@ check("the night's turns: in order, each out of the day's turns (one left there)
 
 check("the way in's line: who it's from and how many feeds, or the invitation", () => {
   eq([planShortLine(PLAN), planShortLine(BARE), planShortLine(null)], ["From Feeding clinic · 3 feeds", "1 feed", "Add your care team's plan"]);
+});
+
+// ── the newer options (round 4) ─────────────────────────────────────────────
+
+/** Notes longer than an older release reads (invented, general advice). */
+const LONG_NOTES = "Signs of enough milk: six or more wet diapers a day by day six, and yellow stools by day five. ".repeat(6).trim();
+
+/**
+ * An invented plan with every newer option: by day every 2.5–3 hours; "Nurse" up to 20 min each side; "Practice, then
+ * bottle" (the breast offered 5–10 min only if she wants to, then a paced bottle of at least 60 ml of breast milk);
+ * "Partner's bottle" (up to 90 ml, paced); "Cup feed" (20–30 ml by cup); "Nurse, spoon" (nursing, then 10–15 ml by
+ * spoon if still hungry, then pump up to 15 min); "Finger feed" (5 ml by finger). At night (10 PM–6 AM) every 3
+ * hours, by the clock: "Partner's bottle" from 10 PM, then "Nurse" from 2 AM. At least 8 feeds and 450–550 ml in 24
+ * hours. Long notes.
+ */
+const NEWER = parseFeedingPlan(
+  {
+    from: "Feeding clinic",
+    day: { every: [150, 180] },
+    night: { from: "22:00", to: "06:00", every: 180, order: ["Partner's bottle", "Nurse"], starts: ["22:00", "02:00"] },
+    feeds: [
+      { name: "Nurse", steps: [{ do: "nurse", minutes: { max: 20 }, each_side: true }] },
+      { name: "Practice, then bottle", steps: [{ do: "nurse", minutes: [5, 10], if_needed: true }, { do: "bottle", ml: { min: 60 }, milk: "breastmilk", via: "paced" }] },
+      { name: "Partner's bottle", steps: [{ do: "bottle", ml: { max: 90 }, milk: "breastmilk", via: "paced" }] },
+      { name: "Cup feed", steps: [{ do: "bottle", ml: [20, 30], milk: "breastmilk", by: "cup" }] },
+      { name: "Nurse, spoon", steps: [{ do: "nurse" }, { do: "bottle", ml: [10, 15], by: "spoon", if_needed: true }, { do: "pump", minutes: { max: 15 } }] },
+      { name: "Finger feed", steps: [{ do: "bottle", ml: 5, milk: "breastmilk", by: "finger" }] },
+    ],
+    order: ["Nurse", "Practice, then bottle", "Cup feed", "Nurse, spoon", "Finger feed"],
+    per_day: { feeds: { min: 8 }, ml: [450, 550] },
+    notes: LONG_NOTES,
+  },
+  null,
+  NOW
+);
+/** In ounces: every 3 hours by day, waking her; at night (10 PM–6 AM) whenever she's hungry; 8–12 feeds and up to 24 oz in 24 hours. */
+const HUNGRY = parseFeedingPlan(
+  {
+    amounts_in: "oz",
+    day: { every: 180, wake: true },
+    night: { from: "10 PM", to: "6 AM", on_demand: true, feed: "Bottle" },
+    feeds: [{ name: "Bottle", steps: [{ do: "bottle", ml: [2, 3], milk: "formula" }] }],
+    per_day: { feeds: [8, 12], ml: { max: 24 } },
+  },
+  null,
+  NOW
+);
+/** The steps of NEWER's feed `i` in the draft. */
+const newerSteps = (i: number) => draftOf(NEWER, null, "ml").feeds[i].steps;
+/** One feed of one step (or a few), as the form sends it. */
+const sent = (...steps: StepDraft[]) => inputOf({ ...draftOf(null, null, "ml"), feeds: [{ ...newFeed("Feed"), steps }] }).plan.feeds[0].steps;
+/** Why the server refuses a draft (draftProblem, as Save checks it before sending), or null. */
+const refusal = (d: PlanDraft) => draftProblem(d, null, LATER);
+
+check("round trip: every newer option comes back the same plan, in ml or oz, and the read-back says it as before", () => {
+  for (const [name, plan] of [["every newer option", NEWER], ["when hungry at night, in oz", HUNGRY]] as const) {
+    eq(roundTrip(plan), same(plan), name);
+    eq(roundTrip(plan, "oz"), same(plan), `${name}, shown in oz`);
+    eq(planLines(roundTrip(plan), { min: 50, max: 70 }), planLines(plan, { min: 50, max: 70 }), `${name}: the read-back`);
+  }
+  // The long notes go whole, and the plan keeps their start where an older release reads them.
+  const d = draftOf(NEWER, null, "ml");
+  eq([d.notes === LONG_NOTES, inputOf(d).plan.notes === LONG_NOTES, planNotes(roundTrip(NEWER)) === LONG_NOTES, (roundTrip(NEWER).notes ?? "").length <= NOTES_OLDER], [true, true, true, true]);
+});
+
+check("the night when hungry: On demand with nothing in Up to sends on_demand alone, never waking her, and opens the same way", () => {
+  const d = draftOf(HUNGRY, null, "oz");
+  eq([d.night.onDemand, d.night.every, nightHungry(d.night)], [true, EMPTY_RANGE, true]);
+  eq(inputOf(d).plan.night, { from: "22:00", to: "06:00", on_demand: true, feed: 1 });
+  // Wake to feed at night is hidden then: one left on from before isn't sent, and nothing is refused.
+  const waking: PlanDraft = { ...d, night: { ...d.night, wake: true } };
+  eq([inputOf(waking).plan.night, refusal(waking)], [{ from: "22:00", to: "06:00", on_demand: true, feed: 1 }, null]);
+  eq(samePlan(waking, d), true, "a hidden switch changes nothing");
+  // An Up to typed: at least that often, and waking her goes again.
+  const most: PlanDraft = { ...waking, night: { ...waking.night, every: { min: null, max: 240 } } };
+  eq([nightHungry(most.night), inputOf(most).plan.night], [false, { from: "22:00", to: "06:00", every: { min: 240, max: 240 }, on_demand: true, wake: true, feed: 1 }]);
+  // Every, with nothing typed: the day's time between feeds, as before.
+  const asByDay: PlanDraft = { ...d, night: { ...d.night, onDemand: false } };
+  eq(inputOf(asByDay).plan.night, { from: "22:00", to: "06:00", feed: 1 });
+  // The server reads each as the read-back says it.
+  const night = (x: PlanDraft) => planLines(parseFeedingPlan({ ...inputOf(x).plan, base_rev: HUNGRY.rev }, HUNGRY, LATER), null).find((l) => l.startsWith("Night"));
+  eq([night(d), night(most), night(asByDay)], ["Night (10 PM–6 AM): when hungry: Bottle", "Night (10 PM–6 AM): on demand, at least every 4 hours, waking her: Bottle", "Night (10 PM–6 AM): every 3 hours (as by day): Bottle"]);
+  // A night every 3 hours, switched to On demand and its Up to cleared, is whenever she's hungry: the day stays as it was.
+  const was = draftOf(PLAN, null, "ml");
+  const cleared: PlanDraft = { ...was, night: { ...was.night, onDemand: true, every: EMPTY_RANGE } };
+  eq([inputOf(cleared).plan.night, inputOf(cleared).plan.day], [{ from: "23:00", to: "05:00", on_demand: true, feed: 3 }, inputOf(was).plan.day]);
+  // By day, nothing in Up to is a day with no set time between feeds (when hungry), as before.
+  eq(inputOf({ ...was, onDemand: true, every: EMPTY_RANGE }).plan.day, { wake: true });
+});
+
+check("the night's turns by the clock: each turn's time goes with its turn, moved feeds take the place's time, and the form asks for one missing", () => {
+  const d = draftOf(NEWER, null, "ml");
+  const [nurse, , partner, cup] = d.feeds.map((f) => f.key);
+  eq([d.night.byClock, d.night.order, d.night.starts], [true, [partner, nurse], ["22:00", "02:00"]]);
+  eq(inputOf(d).plan.night, { from: "22:00", to: "06:00", every: { min: 180, max: 180 }, order: [3, 1], starts: ["22:00", "02:00"] });
+  // Moved: the feeds change places, and the night's hours stay in order.
+  const moved = setNightTurns(d, move(d.night.order, 1, -1));
+  eq([moved.night.order, moved.night.starts, inputOf(moved).plan.night?.starts], [[nurse, partner], ["22:00", "02:00"], ["22:00", "02:00"]]);
+  // Added, a feed has no time yet, and Save says so in the form's words; given one, it goes.
+  const added = setNightTurns(d, [...d.night.order, cup]);
+  eq([added.night.starts, refusal(added)], [["22:00", "02:00", ""], "Say when each of the night's feeds starts, or switch off By the clock."]);
+  const timed = setNightStart(added, 2, "04:00");
+  eq([refusal(timed), inputOf(timed).plan.night?.order, inputOf(timed).plan.night?.starts], [null, [3, 1, 4], ["22:00", "02:00", "04:00"]]);
+  // Taken out of the night's turns, its time goes with it; one turn left is just the night's feed, with no time.
+  const one = setNightTurns(d, [nurse]);
+  eq([one.night.starts, inputOf(one).plan.night], [["02:00"], { from: "22:00", to: "06:00", every: { min: 180, max: 180 }, feed: 1 }]);
+  // Switched off: the turns in order, no times sent (they stay in the draft, should it go back on).
+  const off: PlanDraft = { ...d, night: { ...d.night, byClock: false } };
+  eq([inputOf(off).plan.night?.starts, inputOf(off).plan.night?.order, off.night.starts], [undefined, [3, 1], ["22:00", "02:00"]]);
+  // A feed taken out of the plan takes its time; Put it back brings both back.
+  const out = takeOutFeed(d, partner);
+  eq([out.next.night.order, out.next.night.starts], [[nurse], ["02:00"]]);
+  eq(inputOf(out.putBack(out.next)), inputOf(d));
+  eq(removeFeed(d, nurse).night.starts, ["22:00"]);
+  // A time outside the night is the server's to say, in its words.
+  eq(refusal(setNightStart(d, 1, "07:00")), "The night's turn 2 would start at 7 AM, outside the night (10 PM to 6 AM)");
+  // A new night of two turns, By the clock on, its times still to type.
+  const fresh = setNightTurns({ ...draftOf(PLAN, null, "ml"), night: { ...draftOf(PLAN, null, "ml").night, byClock: true } }, [d.feeds[0].key]);
+  eq(fresh.night.starts, [""]);
+});
+
+check("nursing only if she wants to: sent as the plan's if_needed, and the bottle after it is the feed's, never a top-up", () => {
+  const [practice, bottle] = newerSteps(1) as [NurseDraft, BottleDraft];
+  eq([practice.if_needed, draftAfterNursing([practice, bottle], 1), stepTitle(bottle, draftAfterNursing([practice, bottle], 1))], [true, false, "Bottle"]);
+  eq(sent(practice, bottle), [{ do: "nurse", minutes: { min: 5, max: 10 }, if_needed: true }, { do: "bottle", ml: { min: 60, max: 60 }, at_least: true, milk: "breastmilk", via: "paced" }]);
+  const feed = draftOf(NEWER, null, "ml").feeds[1];
+  eq(feedSummary(feed, "ml", null), "Offer the breast 5–10 min; then bottle at least 60 ml, breast milk, paced bottle");
+  // Switched off, it's nursing again, and the bottle after it its top-up.
+  const required = { ...practice, if_needed: false };
+  eq([draftAfterNursing([required, bottle], 1), stepTitle(bottle, true)], [true, "Top-up"]);
+  eq(feedSummary({ ...feed, steps: [required, bottle] }, "ml", null), "Nurse 5–10 min; then top up at least 60 ml, breast milk, paced bottle");
+  eq(stepTitle(practice, false), "Nurse", "its switch says it's only if she wants to");
+});
+
+check("up to and at least: one number in one box, sent as the plan's one number with its flag, and switching keeps what's typed", () => {
+  const bottle = { ...newStep("bottle"), ml: { min: 25, max: 35 } } as BottleDraft;
+  const as = (amount: BottleDraft["amount"], ml = bottle.ml) => sent({ ...bottle, amount, ml })[0];
+  eq([upToOf(bottle.ml), leastOf(bottle.ml)], [35, 25], "up to shows a range's To, at least its From");
+  eq([as("up_to"), as("at_least"), as("ml"), as("target")], [
+    { do: "bottle", ml: { min: 35, max: 35 }, up_to: true },
+    { do: "bottle", ml: { min: 25, max: 25 }, at_least: true },
+    { do: "bottle", ml: { min: 25, max: 35 } },
+    { do: "bottle", to_target: true },
+  ]);
+  // Typed in the one box: up to sets its To, at least its From.
+  eq([as("up_to", { ...bottle.ml, max: 40 }), as("at_least", { ...bottle.ml, min: 30 })], [{ do: "bottle", ml: { min: 40, max: 40 }, up_to: true }, { do: "bottle", ml: { min: 30, max: 30 }, at_least: true }]);
+  // Nothing typed: the flag goes alone, and the server's words point at the step.
+  const empty = { ...draftOf(null, null, "ml"), feeds: [{ ...newFeed("Bottle"), steps: [{ ...bottle, amount: "up_to", ml: EMPTY_RANGE } as StepDraft] }] };
+  const words = refusal(empty);
+  eq(words, '"Bottle" step 1: up to needs its number (the most milk)');
+  eq(problemPlace(words!, empty), { feed: empty.feeds[0].key, step: empty.feeds[0].steps[0].key });
+  // Minutes up to, on nursing and pumping.
+  const [nurse] = newerSteps(0) as [NurseDraft];
+  const pump = newerSteps(4)[2] as PumpDraft;
+  eq([nurse.upTo, nurse.minutes, pump.upTo], [true, { min: 20, max: null }, true]);
+  eq([sent(nurse)[0], sent(pump)[0]], [{ do: "nurse", minutes: { min: 20, max: 20 }, up_to: true, each_side: true }, { do: "pump", minutes: { min: 15, max: 15 }, up_to: true }]);
+  eq(sent({ ...nurse, upTo: false, minutes: { min: 10, max: 20 } })[0], { do: "nurse", minutes: { min: 10, max: 20 }, each_side: true }, "switched off: the range as typed");
+  eq(feedSummary(draftOf(NEWER, null, "ml").feeds[0], "ml", null), "Nurse up to 20 min each side");
+  // At least 2 oz, typed in ounces, goes as ml and reads back in ounces.
+  const oz = { ...draftOf(null, null, "oz"), feeds: [{ ...newFeed("Bottle"), steps: [{ ...bottle, amount: "at_least", ml: { min: typedAmount(2, "oz"), max: null } } as StepDraft] }] };
+  const saved = parseFeedingPlan(inputOf(oz).plan, null, NOW);
+  eq([saved.feeds[0].steps[0], feedText(saved.feeds[0], saved, null)], [{ do: "bottle", ml: { min: 59.1, max: 59.1 }, at_least: true }, "Bottle at least 2 oz"]);
+});
+
+check("how it's given: Bottle and Paced bottle are the bottle's way (via), Cup, Spoon and Finger instead of one (by), never both", () => {
+  const bottle = { ...newStep("bottle"), ml: { min: 20, max: 30 } } as BottleDraft;
+  const given = (g: BottleDraft["given"]) => sent({ ...bottle, given: g })[0];
+  eq([given("paced"), given("bottle"), given("cup"), given("spoon"), given("finger"), given(null)], [
+    { do: "bottle", ml: { min: 20, max: 30 }, via: "paced" },
+    { do: "bottle", ml: { min: 20, max: 30 }, via: "bottle" },
+    { do: "bottle", ml: { min: 20, max: 30 }, by: "cup" },
+    { do: "bottle", ml: { min: 20, max: 30 }, by: "spoon" },
+    { do: "bottle", ml: { min: 20, max: 30 }, by: "finger" },
+    { do: "bottle", ml: { min: 20, max: 30 } },
+  ]);
+  const [cup] = newerSteps(3) as [BottleDraft];
+  const [finger] = newerSteps(5) as [BottleDraft];
+  const spoon = newerSteps(4)[1] as BottleDraft;
+  eq([cup.given, spoon.given, finger.given, (newerSteps(2)[0] as BottleDraft).given], ["cup", "spoon", "finger", "paced"]);
+  // On its own it's named for how it's given; after nursing it's the top-up, by spoon.
+  eq([stepTitle(cup, false), stepTitle(finger, false), stepTitle(spoon, true), stepTitle({ ...cup, given: "paced" }, false)], ["Cup", "Finger feed", "Top-up", "Bottle"]);
+  const d = draftOf(NEWER, null, "ml");
+  eq([feedSummary(d.feeds[3], "ml", null), feedSummary(d.feeds[4], "ml", null), feedSummary(d.feeds[5], "ml", null)], [
+    "Cup 20–30 ml, breast milk",
+    "Nurse; then top up 10–15 ml by spoon if still hungry; then pump up to 15 min",
+    "Finger feed 5 ml, breast milk",
+  ]);
+  // A name that says how it's given still says it once an edit gives it another way, as it does of a shield.
+  const [cupFeed, , fingerFeed] = [d.feeds[3], d.feeds[4], d.feeds[5]];
+  eq([staleNameWords(cupFeed, cupFeed), staleNameWords({ ...cupFeed, steps: [{ ...cup, given: "paced" }] }, cupFeed)], [[], ["cup"]]);
+  eq(staleNameWords({ ...fingerFeed, steps: [{ ...finger, given: null }] }, fingerFeed), ["finger"]);
+});
+
+check("feeds and milk in 24 hours: at least, up to or both, the milk in ml whatever the unit, nothing at 0", () => {
+  const d = draftOf(NEWER, null, "ml");
+  eq(d.perDay, { feeds: { min: 8, max: null }, ml: { min: 450, max: 550 } });
+  eq(inputOf(d).plan.per_day, { feeds: { min: 8 }, ml: { min: 450, max: 550 } });
+  const lines = (x: PlanDraft) => perDayLines(parseFeedingPlan(inputOf(x).plan, null, NOW), false);
+  eq(lines({ ...d, perDay: { feeds: { min: null, max: 10 }, ml: EMPTY_RANGE } }), ["Up to 10 feeds in 24 hours"]);
+  eq(lines({ ...d, perDay: { feeds: { min: 8, max: 12 }, ml: { min: null, max: 700 } } }), ["8–12 feeds in 24 hours", "Up to 700 ml in 24 hours"]);
+  eq(inputOf({ ...d, perDay: { feeds: { min: 0, max: null }, ml: EMPTY_RANGE } }).plan.per_day, undefined, "0 is nothing typed");
+  eq(inputOf({ ...d, perDay: { feeds: EMPTY_RANGE, ml: EMPTY_RANGE } }).plan.per_day, undefined, "cleared: none");
+  // In ounces: typed as oz, sent as ml, read back in oz.
+  const oz = draftOf(HUNGRY, null, "oz");
+  eq(oz.perDay, { feeds: { min: 8, max: 12 }, ml: { min: null, max: 709.8 } });
+  const typed: PlanDraft = { ...oz, perDay: { ...oz.perDay, ml: { min: typedAmount(15, "oz"), max: typedAmount(18.5, "oz") } } };
+  eq(inputOf(typed).plan.per_day, { feeds: { min: 8, max: 12 }, ml: { min: 443.6, max: 547.1 } });
+  eq(perDayLines(parseFeedingPlan({ ...inputOf(typed).plan, base_rev: HUNGRY.rev }, HUNGRY, LATER), false), ["8–12 feeds in 24 hours", "15–18.5 oz in 24 hours"]);
+  // A count that isn't whole is the server's to say.
+  eq(refusal({ ...d, perDay: { feeds: { min: 8.5, max: null }, ml: EMPTY_RANGE } }), "Feeds in 24 hours is a whole number of feeds");
+});
+
+check("notes take up to 1,000 characters, sent whole", () => {
+  const notes = `${LONG_NOTES} ${LONG_NOTES}`.slice(0, 1000);
+  const d: PlanDraft = { ...draftOf(BARE, null, "ml"), notes };
+  const saved = parseFeedingPlan({ ...inputOf(d).plan, base_rev: BARE.rev }, BARE, LATER);
+  eq([planNotes(saved)?.length, (saved.notes ?? "").length <= NOTES_OLDER], [1000, true]);
+  eq(refusal({ ...d, notes: `${notes}.` }), "The notes are too long (1000 characters at most)");
+});
+
+check("starting shapes: the everyday ones first (one feed each), nursing on its own, a bottle and triple feeding among them, two feeds taking turns and Blank last", () => {
+  eq(PLAN_SHAPES.map((s) => s.id), ["nurse", "top-up", "bottle", "triple", "pump-bottle", "turns", "blank"]);
+  eq(PLAN_SHAPES[0].feeds.length, 1, "the first is one feed, never two taking turns");
+  const feeds = (id: string) => inputOf(draftFromShape(shape(id), null, "ml")).plan.feeds;
+  eq(feeds("nurse"), [{ name: "Nurse", steps: [{ do: "nurse" }] }]);
+  eq(feeds("bottle"), [{ name: "Bottle", steps: [{ do: "bottle" }] }]);
+  eq(feeds("triple"), [{ name: "Triple feed", steps: [{ do: "nurse" }, { do: "bottle" }, { do: "pump" }] }]);
+  // Saved as they are (no numbers yet), each but Blank is a plan; triple feeding's bottle is its top-up.
+  for (const s of PLAN_SHAPES.filter((x) => x.id !== "blank")) eq(refusal(draftFromShape(s, null, "ml")), null, s.title);
+  const triple = draftFromShape(shape("triple"), null, "ml").feeds[0].steps;
+  eq(triple.map((s, i) => stepTitle(s, draftAfterNursing(triple, i))), ["Nurse", "Top-up", "Pump"]);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

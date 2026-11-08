@@ -1,7 +1,24 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { amountText, checkInText, clockWords, feedById, feedingPlanOf, intervalText, nightTurns, PLAN_LIMITS, planNotes, stepText, type FeedingPlan, type PlanFeed } from "@/lib/maple/feeding-plan";
+import {
+  afterNursing,
+  amountText,
+  checkInText,
+  clockWords,
+  feedById,
+  feedingPlanOf,
+  intervalText,
+  nightClockTurns,
+  nightTurns,
+  nightWhenHungry,
+  perDayLines,
+  PLAN_LIMITS,
+  planNotes,
+  stepText,
+  type FeedingPlan,
+  type PlanFeed,
+} from "@/lib/maple/feeding-plan";
 import { dayKey, DEFAULT_TZ } from "@/lib/maple/time";
 import type { Baby } from "@/lib/maple/types";
 import { feedTargetOf, type FeedTarget } from "@/lib/maple/units";
@@ -21,8 +38,10 @@ import { draftFromShape, draftOf, draftProblem, inputOf, PLAN_SHAPES, problemPla
  * feed card, Settings and More; `edit` opens straight on the form.
  *
  * View: who it's from and the next check-in, the target per feed, how often
- * by day and the order the feeds take turns in, the night, each feed's steps
- * numbered in the plan's own words (stepText), and notes. Owners and members
+ * by day and the order the feeds take turns in, the night (when she's hungry,
+ * its turns, or its turns by the clock), feeds and milk in 24 hours, each
+ * feed's steps numbered in the plan's own words (stepText), and notes, each
+ * as the read-back says it (planLines). Owners and members
  * can edit it, change it in the chat or remove it; viewers only read it, and
  * photos-only guests never see it. With no plan: what it does, Add a plan, or
  * send a photo of the plan sheet to the chat (read back there, saved on a yes).
@@ -329,8 +348,12 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 /** The feeds in the order a family meets them: the day's turns, then the night's, then any other. */
 function feedsInOrder(plan: FeedingPlan): { feed: PlanFeed; badge: string | null }[] {
   const atNight = nightTurns(plan);
-  // "night", or with turns at night its place in them ("night 2").
-  const nightWord = (f: PlanFeed) => (atNight.length > 1 ? `night ${atNight.indexOf(f.id) + 1}` : "night");
+  const clock = nightClockTurns(plan);
+  // "night", or with turns at night its place in them ("night 2"), or by the clock its time ("night from 2 AM").
+  const nightWord = (f: PlanFeed) => {
+    const i = atNight.indexOf(f.id);
+    return clock ? `night from ${clockWords(clock[i].from)}` : atNight.length > 1 ? `night ${i + 1}` : "night";
+  };
   const turns = plan.order.map((id) => feedById(plan, id)).filter((f): f is PlanFeed => !!f);
   const rest = plan.feeds.filter((f) => !turns.includes(f));
   const nights = atNight.map((id) => rest.find((f) => f.id === id)).filter((f): f is PlanFeed => !!f);
@@ -341,7 +364,7 @@ function feedsInOrder(plan: FeedingPlan): { feed: PlanFeed; badge: string | null
       const night = atNight.includes(feed.id) ? nightWord(feed) : null;
       return { feed, badge: one ? null : turns.length > 1 ? `Turn ${i + 1}${night ? ` · ${night}` : ""}` : night ? `By day · ${night}` : "By day" };
     }),
-    ...nights.map((feed) => ({ feed, badge: atNight.length > 1 ? `Night turn ${atNight.indexOf(feed.id) + 1}` : "At night" })),
+    ...nights.map((feed) => ({ feed, badge: atNight.length > 1 ? cap(clock ? nightWord(feed) : `Night turn ${atNight.indexOf(feed.id) + 1}`) : "At night" })),
     ...others.map((feed) => ({ feed, badge: "Not in the turns" })),
   ];
 }
@@ -351,21 +374,27 @@ function PlanView({ plan, target, canWrite, onEdit, onRemove, onClose }: { plan:
   const turns = plan.order.map((id) => feedById(plan, id)).filter((f): f is PlanFeed => !!f);
   const night = plan.night;
   const nightFeeds = night ? nightTurns(plan).map((id) => feedById(plan, id)).filter((f): f is PlanFeed => !!f) : [];
+  // The night's turns by the clock, each from its time ("Partner's bottle from 10 PM"), as the read-back says them.
+  const clock = nightClockTurns(plan);
   // When to wake her, in hours: the window's end (with no time between feeds, there's no time to wake her at).
   const nightEvery = night?.every ?? plan.day.every;
   const nightHow = night
     ? [
         night.every
           ? cap(intervalText(night.every, night.on_demand))
-          : plan.day.every
-            ? `${cap(intervalText(plan.day.every, plan.day.on_demand))}, as by day`
-            : "No set time between feeds",
+          : nightWhenHungry(plan)
+            ? "When hungry"
+            : plan.day.every
+              ? `${cap(intervalText(plan.day.every, plan.day.on_demand))}, as by day`
+              : "No set time between feeds",
         night.wake && nightEvery ? wakeText(nightEvery, w) : null,
       ]
         .filter(Boolean)
         .join(" · ")
     : "";
   const dayHow = plan.day.every ? (plan.day.wake ? cap(wakeText(plan.day.every, w, { from: true })) : "From the start of one feed to the next") : undefined;
+  // Feeds and milk in 24 hours, as the read-back says them, under their own label ("At least 8 feeds", "450–550 ml").
+  const perDay = perDayLines(plan).map((l) => l.replace(/ in 24 hours$/, ""));
   return (
     <div className="space-y-5">
       <dl className={cx(tone.card, tone.divide, "overflow-hidden")}>
@@ -395,17 +424,31 @@ function PlanView({ plan, target, canWrite, onEdit, onRemove, onClose }: { plan:
               {clockWords(night.from)} to {clockWords(night.to)}
             </span>
             <span className="text-mp-ink-2"> · </span>
-            <span className="[overflow-wrap:anywhere]">{nightFeeds.length > 1 ? "taking turns" : nightFeeds.length ? nightFeeds[0].name : "same turns as by day"}</span>
+            <span className="[overflow-wrap:anywhere]">{clock ? "by the clock" : nightFeeds.length > 1 ? "taking turns" : nightFeeds.length ? nightFeeds[0].name : "same turns as by day"}</span>
             {nightFeeds.length > 1 && (
-              <ol aria-label="Taking turns at night" className="mt-0.5 space-y-0.5">
+              <ol aria-label={clock ? "By the clock at night" : "Taking turns at night"} className="mt-0.5 space-y-0.5">
                 {nightFeeds.map((f, i) => (
                   <li key={f.id} className="flex gap-2 [overflow-wrap:anywhere]">
                     <span className="w-4 shrink-0 text-mp-ink-2 tabular-nums">{i + 1}</span>
-                    <span className="min-w-0">{f.name}</span>
+                    <span className="min-w-0">
+                      {f.name}
+                      {clock?.[i] && <span className="text-mp-ink-2 tabular-nums"> from {clockWords(clock[i].from)}</span>}
+                    </span>
                   </li>
                 ))}
               </ol>
             )}
+          </Fact>
+        )}
+        {perDay.length > 0 && (
+          <Fact label="In 24 hours">
+            <ul className="space-y-0.5">
+              {perDay.map((line) => (
+                <li key={line} className="tabular-nums [overflow-wrap:anywhere]">
+                  {line}
+                </li>
+              ))}
+            </ul>
           </Fact>
         )}
       </dl>
@@ -453,10 +496,12 @@ function Fact({ label, sub, children }: { label: string; sub?: string; children:
   );
 }
 
-/** One feed: its name, where it falls, and its steps numbered (a note is a plain line). */
+/**
+ * One feed: its name, where it falls, and its steps numbered (a note is a plain line), in the plan's words: a bottle
+ * after its nursing is the top-up, but after the breast offered only if she wants to it's the feed's bottle (afterNursing).
+ */
 function FeedCard({ feed, badge, plan, target }: { feed: PlanFeed; badge: string | null; plan: FeedingPlan; target: FeedTarget | null }) {
   let n = 0;
-  let nursed = false;
   return (
     <article aria-label={feed.name} className={cx(tone.card, "px-4 pt-3 pb-3.5")}>
       <div className="flex items-start justify-between gap-3">
@@ -465,8 +510,7 @@ function FeedCard({ feed, badge, plan, target }: { feed: PlanFeed; badge: string
       </div>
       <ol className="mt-2.5 space-y-2.5" aria-label={`${feed.name}: steps`}>
         {feed.steps.map((s, i) => {
-          const words = stepText(s, plan, target, { afterNurse: nursed });
-          if (s.do === "nurse") nursed = true;
+          const words = stepText(s, plan, target, { afterNurse: afterNursing(feed.steps, i) });
           if (s.do === "note") {
             return (
               <li key={i} className="pl-[34px] text-[14px] leading-snug text-mp-ink-2 [overflow-wrap:anywhere]">

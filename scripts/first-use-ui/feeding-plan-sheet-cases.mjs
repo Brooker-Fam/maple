@@ -1,8 +1,10 @@
 /**
  * The feeding plan's sheet (src/components/maple/feeding/FeedingPlanSheet.tsx): the plan laid out to read, the empty
  * state's two ways to add one, the form (the exact PATCH it sends, only what changed), a refusal shown at the top,
- * another phone's change loaded, removing it, a new plan from a starting shape, ounces sent as ml, and a viewer who
- * only reads it. The ways in are Settings (Doctor & care plan; Baby details for a viewer) and More.
+ * another phone's change loaded, removing it, a new plan from a starting shape, ounces sent as ml, the newer options
+ * (the night when hungry, turns by the clock, offering the breast, up to and at least, a cup or spoon, feeds and milk
+ * in 24 hours) read, kept through an edit and put in on the form, and a viewer who only reads it. The ways in are
+ * Settings (Doctor & care plan; Baby details for a viewer) and More.
  *
  * An invented plan, never any family's (scripts/maple-feeding-plan-check.ts's): by day every 2.5 to 3.5 hours, taking
  * turns between "Nurse + SNS" (12–18 min with a nipple shield, 20 ml of formula in the SNS, then pump 15) and "Nurse,
@@ -41,6 +43,43 @@ export function feedingPlanSheetCases({ fixture, freshState, assert }) {
     order: [1, 2],
     notes: "Weigh at the clinic on Friday.",
     night: { from: "23:00", to: "05:00", every: { min: 180, max: 180 }, wake: true, feed: 3 },
+  };
+  /**
+   * An invented plan with the newer options: "Nurse" up to 20 min each side; "Practice, then bottle" (the breast offered
+   * 5–10 min only if she wants to, then at least 60 ml of breast milk, paced); "Partner's bottle" (up to 90 ml, paced);
+   * "Cup feed" (20–30 ml by cup); "Nurse, spoon" (nursing, a 10–15 ml spoon top-up if still hungry, pump up to 15 min);
+   * by day every 2.5–3 hours; at night (10 PM–6 AM) every 3 hours, by the clock: "Partner's bottle" from 10 PM, then
+   * "Nurse" from 2 AM; at least 8 feeds and 450–550 ml in 24 hours.
+   */
+  const NEWER = {
+    v: 1,
+    from: "Feeding clinic",
+    unit: "ml",
+    day: { every: { min: 150, max: 180 } },
+    night: { from: "22:00", to: "06:00", every: { min: 180, max: 180 }, feed: "p1f3", order: ["p1f3", "p1f1"], starts: ["22:00", "02:00"] },
+    feeds: [
+      { id: "p1f1", name: "Nurse", steps: [{ do: "nurse", minutes: { min: 20, max: 20 }, up_to: true, each_side: true }] },
+      { id: "p1f2", name: "Practice, then bottle", steps: [{ do: "nurse", minutes: { min: 5, max: 10 }, if_needed: true }, { do: "bottle", ml: { min: 60, max: 60 }, at_least: true, milk: "breastmilk", via: "paced" }] },
+      { id: "p1f3", name: "Partner's bottle", steps: [{ do: "bottle", ml: { min: 90, max: 90 }, up_to: true, milk: "breastmilk", via: "paced" }] },
+      { id: "p1f4", name: "Cup feed", steps: [{ do: "bottle", ml: { min: 20, max: 30 }, milk: "breastmilk", by: "cup" }] },
+      { id: "p1f5", name: "Nurse, spoon", steps: [{ do: "nurse" }, { do: "bottle", ml: { min: 10, max: 15 }, by: "spoon", if_needed: true }, { do: "pump", minutes: { min: 15, max: 15 }, up_to: true }] },
+    ],
+    order: ["p1f1", "p1f2", "p1f4", "p1f5"],
+    per_day: { feeds: { min: 8 }, ml: { min: 450, max: 550 } },
+    notes: "Weigh at the clinic on Friday.",
+    rev: 3,
+    updated_at: "2026-10-27T12:00:00.000Z",
+  };
+  /** NEWER as this sheet sends it back untouched: every option as the plan's own keys, feeds by their place. */
+  const NEWER_SENT = {
+    from: "Feeding clinic",
+    unit: "ml",
+    day: { every: { min: 150, max: 180 } },
+    feeds: NEWER.feeds,
+    order: [1, 2, 4, 5],
+    per_day: { feeds: { min: 8 }, ml: { min: 450, max: 550 } },
+    notes: "Weigh at the clinic on Friday.",
+    night: { from: "22:00", to: "06:00", every: { min: 180, max: 180 }, order: [3, 1], starts: ["22:00", "02:00"] },
   };
   const planned = ({ plan = PLAN, target = { min: 50, max: 70 }, role } = {}) => {
     const state = freshState();
@@ -543,6 +582,144 @@ export function feedingPlanSheetCases({ fixture, freshState, assert }) {
         sent.order = [2];
         sent.night = { from: "23:00", to: "05:00", every: { min: 180, max: 180 }, wake: true, order: [3, 1] };
         assert.deepEqual(s.patches[0], { settings: { feeding_plan: { ...sent, base_rev: 3 } } });
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["Feeding plan sheet: the newer options read as the read-back says them: by the clock, in 24 hours, offering the breast, up to, at least, a cup and a spoon", async () => {
+      const f = await fixture({ state: planned({ plan: NEWER }), apiResponse: server().apiResponse });
+      try {
+        await metric(f);
+        const sheet = await fromMore(f);
+        const text = (await sheet.innerText()).replace(/\s+/g, " ");
+        assert.match(text, /At night 10 PM to 6 AM · by the clock 1 Partner's bottle from 10 PM 2 Nurse from 2 AM Every 3 hours/);
+        assert.match(text, /In 24 hours At least 8 feeds 450–550 ml/);
+        const steps = async (name) => (await sheet.getByRole("article", { name, exact: true }).getByRole("listitem").allTextContents()).map((s) => s.replace(/\s+/g, " ").trim());
+        assert.deepEqual(await steps("Nurse"), ["1Step 1: Nurse up to 20 min each side"]);
+        // After the breast offered only if she wants to, the bottle is the feed's, never a top-up.
+        assert.deepEqual(await steps("Practice, then bottle"), ["1Step 1: Offer the breast 5–10 min", "2Step 2: Bottle at least 60 ml, breast milk, paced bottle"]);
+        assert.deepEqual(await steps("Partner's bottle"), ["1Step 1: Bottle up to 90 ml, breast milk, paced bottle"]);
+        assert.deepEqual(await steps("Cup feed"), ["1Step 1: Cup 20–30 ml, breast milk"]);
+        assert.deepEqual(await steps("Nurse, spoon"), ["1Step 1: Nurse", "2Step 2: Top up 10–15 ml by spoon if still hungry", "3Step 3: Pump up to 15 min"]);
+        // A night feed by the clock says its time.
+        assert.match(await sheet.getByRole("article", { name: "Partner's bottle", exact: true }).textContent(), /Night from 10 PM/);
+        assert.match(await sheet.getByRole("article", { name: "Nurse", exact: true }).textContent(), /Turn 1 · night from 2 AM/);
+        assert.equal(await f.page.evaluate(() => document.documentElement.scrollWidth), 390, "nothing scrolls sideways");
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["Feeding plan sheet: a plan with the newer options, changed on the form, keeps every one of them", async () => {
+      const s = server();
+      const f = await fixture({ state: planned({ plan: NEWER }), apiResponse: s.apiResponse });
+      try {
+        await metric(f);
+        const form = await edit(f, await fromMore(f));
+        // The form opens on each as saved.
+        assert.equal(await form.getByRole("switch", { name: "By the clock", exact: true }).getAttribute("aria-checked"), "true");
+        assert.deepEqual([await form.getByLabel("Partner's bottle at night, from", { exact: true }).inputValue(), await form.getByLabel("Nurse at night, from", { exact: true }).inputValue()], ["22:00", "02:00"]);
+        assert.deepEqual([await box(form, "feeds in 24 hours, at least").inputValue(), await box(form, "feeds in 24 hours, up to").inputValue(), await box(form, "milk in 24 hours, in ml, at least").inputValue(), await box(form, "milk in 24 hours, in ml, up to").inputValue()], ["8", "", "450", "550"]);
+        await unfold(form, "Practice, then bottle");
+        assert.equal(await form.getByRole("switch", { name: "Practice, then bottle, step 1: only if River wants to", exact: true }).getAttribute("aria-checked"), "true");
+        assert.equal(await form.getByRole("group", { name: "Practice, then bottle, step 2: Bottle", exact: true }).count(), 1, "its bottle is the feed's, not a top-up");
+        assert.equal(await box(form, "Practice, then bottle, step 2, amount, at least, in ml").inputValue(), "60");
+        // Only the notes change.
+        await form.getByRole("textbox", { name: "Notes", exact: true }).fill("Weigh on Friday.");
+        await form.getByRole("button", { name: "Save the plan", exact: true }).click();
+        await waitFor(f, () => s.patches.length > 0, "the save");
+        const { base_rev: base, ...plan } = s.patches[0].settings.feeding_plan;
+        assert.equal(base, 3);
+        assert.deepEqual(plan, { ...NEWER_SENT, notes: "Weigh on Friday." });
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["Feeding plan sheet: the form takes the night when hungry, turns by the clock, offering the breast, up to, at least, a cup, and feeds in 24 hours", async () => {
+      const s = server();
+      const f = await fixture({ state: planned(), apiResponse: s.apiResponse });
+      try {
+        await metric(f);
+        const form = await edit(f, await fromMore(f));
+        // At night: On demand with nothing in Up to is whenever she's hungry, and Wake to feed at night goes.
+        const wake = form.getByRole("switch", { name: "Wake to feed at night", exact: true });
+        assert(await wake.isVisible());
+        assert.match((await form.innerText()).replace(/\s+/g, " "), /Leave empty to keep the day's\. For whenever River's hungry, pick On demand and leave Up to empty\./);
+        await form.getByRole("group", { name: "hours between feeds at night: how", exact: true }).getByRole("button", { name: "On demand, up to", exact: true }).click();
+        assert.equal(await box(form, "hours between feeds at night, up to").inputValue(), "3");
+        assert(await wake.isVisible(), "with a most, waking her stays");
+        await box(form, "hours between feeds at night, up to").fill("");
+        assert.equal(await shown(box(form, "hours between feeds at night, up to"), ""), "", "cleared, the box stays empty");
+        assert.match((await form.innerText()).replace(/\s+/g, " "), /Whenever River's hungry: no set time at night, and no waking River for a feed\./);
+        assert.equal(await wake.count(), 0, "no time to wake her by");
+        // The night's feeds by the clock: Pump + bottle from 11 PM, then Nurse + SNS from 2 AM.
+        await form.getByRole("button", { name: "Add Nurse + SNS to the night's turns", exact: true }).click();
+        await form.getByRole("switch", { name: "By the clock", exact: true }).click();
+        await form.getByRole("button", { name: "Save the plan", exact: true }).click();
+        assert.match(await form.getByRole("alert").first().textContent(), /Say when each of the night's feeds starts, or switch off By the clock\./);
+        assert.equal(s.patches.length, 0);
+        await form.getByLabel("Pump + bottle at night, from", { exact: true }).fill("23:00");
+        await form.getByLabel("Nurse + SNS at night, from", { exact: true }).fill("02:00");
+        // "Nurse, top up": the breast offered only if she wants to; its bottle then the feed's, at least 60 ml, by cup.
+        await unfold(form, "Nurse, top up");
+        assert.equal(await form.getByRole("group", { name: "Nurse, top up, step 2: Top-up", exact: true }).count(), 1);
+        await form.getByRole("switch", { name: "Nurse, top up, step 1: only if River wants to", exact: true }).click();
+        assert.equal(await form.getByRole("group", { name: "Nurse, top up, step 2: Bottle", exact: true }).count(), 1, "no longer a top-up");
+        await form.getByRole("group", { name: "Nurse, top up, step 2: how much", exact: true }).getByRole("button", { name: "At least", exact: true }).click();
+        assert.equal(await box(form, "Nurse, top up, step 2, amount, at least, in ml").inputValue(), "25", "at least starts from the range's From");
+        await box(form, "Nurse, top up, step 2, amount, at least, in ml").fill("60");
+        await form.getByRole("group", { name: "Nurse, top up, step 2: how it's given", exact: true }).getByRole("button", { name: "Cup", exact: true }).click();
+        assert.equal(await form.getByRole("group", { name: "Nurse, top up, step 2: Cup", exact: true }).count(), 1, "named for how it's given");
+        // "Nurse + SNS": pump up to 20 min.
+        await unfold(form, "Nurse + SNS");
+        await form.getByRole("button", { name: "Nurse + SNS, step 2, pump minutes: up to, the most", exact: true }).click();
+        assert.equal(await box(form, "Nurse + SNS, step 2, pump minutes, at most").inputValue(), "15");
+        await box(form, "Nurse + SNS, step 2, pump minutes, at most").fill("20");
+        // In 24 hours: at least 8 feeds, up to 700 ml.
+        await box(form, "feeds in 24 hours, at least").fill("8");
+        await box(form, "milk in 24 hours, in ml, up to").fill("700");
+        await form.getByRole("button", { name: "Save the plan", exact: true }).click();
+        await waitFor(f, () => s.patches.length > 0, "the save");
+        const sent = structuredClone(SENT);
+        sent.feeds[0].steps[1] = { do: "pump", minutes: { min: 20, max: 20 }, up_to: true };
+        sent.feeds[1].steps = [{ do: "nurse", minutes: { min: 8, max: 12 }, each_side: true, if_needed: true }, { do: "bottle", ml: { min: 60, max: 60 }, at_least: true, milk: "either", by: "cup" }];
+        sent.order = [2];
+        sent.night = { from: "23:00", to: "05:00", on_demand: true, order: [3, 1], starts: ["23:00", "02:00"] };
+        sent.per_day = { feeds: { min: 8 }, ml: { max: 700 } };
+        assert.deepEqual(s.patches[0], { settings: { feeding_plan: { ...sent, base_rev: 3 } } });
+        // Back to the plan, as saved.
+        const sheet = dialog(f, "Feeding plan");
+        await sheet.waitFor();
+        const text = (await sheet.innerText()).replace(/\s+/g, " ");
+        assert.match(text, /At night 11 PM to 5 AM · by the clock 1 Pump \+ bottle from 11 PM 2 Nurse \+ SNS from 2 AM When hungry/);
+        assert.match(text, /In 24 hours At least 8 feeds Up to 700 ml/);
+        assert.match(text, /Offer each breast 8–12 min/);
+        assert.match(text, /Cup at least 60 ml, formula or breast milk/);
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["Feeding plan sheet: a new plan's shapes start with the everyday ones, and Bottle is one bottle feed", async () => {
+      const s = server();
+      const f = await fixture({ state: planned({ plan: null, target: null }), apiResponse: s.apiResponse });
+      try {
+        await metric(f);
+        const sheet = await fromMore(f);
+        await sheet.getByRole("button", { name: "Add a plan", exact: true }).click();
+        const shapes = dialog(f, "New feeding plan");
+        const titles = await shapes.getByRole("button").evaluateAll((list) => list.map((b) => b.querySelector("span span")?.textContent).filter(Boolean));
+        assert.deepEqual(titles, ["Nurse", "Nurse, then top up", "Bottle", "Triple feed", "Pump and bottle", "Two feeds taking turns", "Blank"]);
+        await shapes.getByRole("button", { name: /^Bottle Formula or breast milk by bottle/ }).click();
+        const form = dialog(f, "New feeding plan");
+        await box(form, "Feed 1 name").waitFor();
+        assert.equal(await box(form, "Feed 1 name").inputValue(), "Bottle");
+        assert.equal(await form.getByRole("group", { name: "Bottle, step 1: Bottle", exact: true }).count(), 1);
+        await box(form, "Bottle, step 1, amount, in ml, from").fill("60");
+        await box(form, "Bottle, step 1, amount, in ml, up to").fill("90");
+        await form.getByRole("group", { name: "Bottle, step 1: milk", exact: true }).getByRole("button", { name: "Formula", exact: true }).click();
+        // A long note shows how many characters it holds, of 1,000.
+        await form.getByRole("textbox", { name: "Notes", exact: true }).fill("Burp halfway. ".repeat(60).trim());
+        await form.getByText("839 of 1,000 characters", { exact: true }).waitFor();
+        await form.getByRole("button", { name: "Save the plan", exact: true }).click();
+        await waitFor(f, () => s.patches.length > 0, "the save");
+        assert.deepEqual(s.patches[0], {
+          settings: { feeding_plan: { unit: "ml", day: {}, feeds: [{ name: "Bottle", steps: [{ do: "bottle", ml: { min: 60, max: 90 }, milk: "formula" }] }], order: [1], notes: "Burp halfway. ".repeat(60).trim() } },
+        });
         assert.deepEqual(f.errors, []);
       } finally { await f.close(); }
     }],
