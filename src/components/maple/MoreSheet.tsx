@@ -574,7 +574,7 @@ export default function MoreSheet({ open, onClose, earlierDay }: {
               ? { id: "bottle", label: "Bottle", sub: "Formula or breast milk", icon: "bottle" as const, color: KIND_COLOR.feed, onTap: () => go("feed", { method: "bottle" }) }
               : { id: "bottles-on", label: "Bottle", sub: turningOn ? "Turning on…" : "Turn on bottles: formula or breast milk", icon: "bottle" as const, color: KIND_COLOR.feed, onTap: () => void bottlesOn() },
             // The care team's feeding plan: what Today's Next feed card follows, or the way to add one.
-            { id: "feeding-plan", label: "Feeding plan", sub: planShortLine(feedingPlanOf(state?.baby.settings)), icon: "list-checks", color: KIND_COLOR.feed, onTap: () => later(() => plans.openPlan()) },
+            { id: "feeding-plan", label: "Feeding plan", sub: planShortLine(feedingPlanOf(state?.baby.settings)), icon: "list", color: KIND_COLOR.feed, onTap: () => later(() => plans.openPlan()) },
           ]} />
           <section aria-label={baby} className="space-y-3 pb-1">
             {mom.length > 0 && <GroupHeading>{baby}</GroupHeading>}

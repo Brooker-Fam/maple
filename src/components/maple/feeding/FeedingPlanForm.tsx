@@ -11,9 +11,11 @@ import {
   addFeed,
   amountMax,
   feedLabel,
+  feedSummary,
   isEmptyRange,
   move,
   newStep,
+  rangeOut,
   removeFeed,
   setNightFeed,
   shownAmount,
@@ -184,6 +186,10 @@ function FeedEditor({ feed, index, draft, change, watch, mark, hasTarget, onRemo
   const full = feed.steps.length >= PLAN_LIMITS.steps;
   const nurses = feed.steps.some((s) => s.do === "nurse");
   const feedProblem = mark && !mark.step ? mark.message : null;
+  // A saved feed starts folded to its steps in words, so changing one number isn't a long scroll; a new one starts open,
+  // and one a refusal is about opens (and stays open while it's fixed).
+  const [open, setOpen] = useState(!feed.id);
+  if (mark && !open) setOpen(true);
 
   const dropStep = (s: StepDraft, i: number) => {
     setSteps((list) => list.filter((x) => x.key !== s.key));
@@ -192,11 +198,29 @@ function FeedEditor({ feed, index, draft, change, watch, mark, hasTarget, onRemo
     );
   };
 
+  if (!open) {
+    return (
+      <div role="group" aria-label={`Feed ${index + 1}`} data-plan-feed={feed.key} className={cx(tone.card, "overflow-hidden")}>
+        <button type="button" aria-expanded={false} onClick={() => setOpen(true)} className={cx(tone.row, "min-h-[64px] items-start py-3")}>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[16px] leading-snug font-semibold text-mp-ink [overflow-wrap:anywhere]">{label}</span>
+            <span className={cx(tone.muted, "mt-0.5 block text-[14px] leading-snug [overflow-wrap:anywhere]")}>{feedSummary(feed, draft.unit, rangeOut(draft.target) ?? null)}</span>
+          </span>
+          <span className="mt-0.5 flex shrink-0 items-center gap-0.5 text-[14px] font-medium text-mp-accent-fg">
+            Change
+            <Icon name="chevron-down" size={16} />
+          </span>
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div role="group" aria-label={`Feed ${index + 1}`} data-plan-feed={feed.key} className={cx(tone.card, "space-y-3 px-4 py-3.5", feedProblem && "ring-2 ring-mp-danger/40")}>
-      <div className="flex min-h-[44px] items-center gap-2">
+      <div className="flex min-h-[44px] items-center gap-1">
         <p className={cx(tone.label, "flex-1")}>Feed {index + 1}</p>
         {draft.feeds.length > 1 && <IconButton icon="trash-2" label={`Take out ${label}`} onClick={onRemove} />}
+        {feed.id && <IconButton icon="chevron-up" label={`Fold ${label} to one line`} onClick={() => setOpen(false)} />}
       </div>
       <div className="-mt-2">
         <input
@@ -207,6 +231,7 @@ function FeedEditor({ feed, index, draft, change, watch, mark, hasTarget, onRemo
           placeholder="Its name, like “Nurse, then top up”"
           onChange={(e) => setFeed((f) => ({ ...f, name: e.target.value }))}
         />
+        {feedProblem && <div className="mt-1.5"><Problem>{feedProblem}</Problem></div>}
       </div>
       {feed.steps.length > 0 ? (
         <ol className="space-y-2.5" aria-label={`${label}: steps`}>
@@ -246,7 +271,6 @@ function FeedEditor({ feed, index, draft, change, watch, mark, hasTarget, onRemo
           {nurses && <p className={cx(tone.muted, "mt-1.5 text-[13px] leading-snug")}>One nursing step a feed: both sides go in it.</p>}
         </div>
       )}
-      <Problem>{feedProblem}</Problem>
     </div>
   );
 }
@@ -286,9 +310,7 @@ function StepEditor({ step, index, count, feedName, afterNurse, unit, hasTarget,
         <NumberRange label="Minutes" word="min" aria={`${name}, pump minutes`} value={step.minutes} max={MAX_MINUTES} onChange={(minutes) => onChange({ ...step, minutes })} watch={watch} wkey={`${step.key}:min`} />
       )}
       {step.do === "bottle" && <BottleFields step={step} name={name} unit={unit} hasTarget={hasTarget} watch={watch} onChange={onChange} />}
-      {step.do === "note" && (
-        <input className={tone.input} aria-label={`${name}, note`} value={step.text} maxLength={PLAN_LIMITS.note} placeholder="Like “Burp halfway”" onChange={(e) => onChange({ ...step, text: e.target.value })} />
-      )}
+      {step.do === "note" && <TextArea ariaLabel={`${name}, note`} value={step.text} maxLength={PLAN_LIMITS.note} placeholder="Like “Burp halfway”" onChange={(text) => onChange({ ...step, text })} />}
       <Problem>{problem}</Problem>
     </li>
   );

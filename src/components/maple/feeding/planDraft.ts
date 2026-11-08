@@ -14,7 +14,7 @@
  * step and leaves every minute and amount for the family to copy from their
  * plan.
  */
-import type { AtBreastVia, FeedingPlan, PlanBottleVia, PlanMilk, PlanStep, PlanUnit, Range } from "@/lib/maple/feeding-plan";
+import { stepText, type AtBreastVia, type FeedingPlan, type PlanBottleVia, type PlanMilk, type PlanStep, type PlanUnit, type Range } from "@/lib/maple/feeding-plan";
 import { ML_PER_FL_OZ, type FeedTarget } from "@/lib/maple/units";
 
 /** A from–to in minutes or ml; either end may be empty (one number is both ends). */
@@ -283,6 +283,27 @@ export function planShortLine(plan: FeedingPlan | null): string {
   if (!plan) return "Add your care team's plan";
   const n = plan.feeds.length;
   return [plan.from ? `From ${plan.from}` : null, `${n} ${n === 1 ? "feed" : "feeds"}`].filter(Boolean).join(" · ");
+}
+
+/**
+ * A feed's steps in one line, the way the plan reads them (feedText's words),
+ * for a folded feed on the form; a step still missing what its words need
+ * ("SNS", no amount yet) is just its name.
+ */
+export function feedSummary(f: FeedDraft, unit: PlanUnit, target: FeedTarget | null): string {
+  let nursed = false;
+  const parts = f.steps.map((s, i) => {
+    const out = stepOut(s);
+    let words: string;
+    try {
+      words = out.do === "note" ? out.text || "Note" : stepText(out as PlanStep, { unit }, target, { afterNurse: nursed });
+    } catch {
+      words = stepTitle(s, nursed);
+    }
+    if (s.do === "nurse") nursed = true;
+    return i === 0 ? words : `then ${words.charAt(0).toLowerCase()}${words.slice(1)}`;
+  });
+  return parts.length ? parts.join("; ") : "No steps yet";
 }
 
 /** A step's name on its card: a bottle after nursing is the top-up. */

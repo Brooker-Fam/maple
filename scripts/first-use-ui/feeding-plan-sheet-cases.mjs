@@ -114,6 +114,8 @@ export function feedingPlanSheetCases({ fixture, freshState, assert }) {
     return form;
   };
   const box = (form, name) => form.getByRole("textbox", { name, exact: true });
+  /** A saved feed starts folded to one line: open it to change it. */
+  const unfold = (form, name) => form.getByRole("button", { name: new RegExp(`^${name.replace(/[+]/g, "\\+")}`), expanded: false }).click();
 
   return [
     ["Feeding plan sheet: the plan reads as its care team wrote it, its feeds in the order they take turns", async () => {
@@ -175,6 +177,11 @@ export function feedingPlanSheetCases({ fixture, freshState, assert }) {
         assert.match(await row.textContent(), /From Feeding clinic · 3 feeds/);
         await row.click();
         const form = await edit(f, dialog(f, "Feeding plan"));
+        // Saved feeds start folded to their steps in the plan's words.
+        const folded = form.getByRole("button", { name: /^Pump \+ bottle/, expanded: false });
+        assert.match((await folded.innerText()).replace(/\s+/g, " "), /Pump \+ bottle Pump 20 min; then bottle up to 50–70 ml, pumped milk first, then formula to finish; then burp halfway Change/);
+        await unfold(form, "Nurse + SNS");
+        await unfold(form, "Nurse, top up");
         // One number reads as one box: "15 to [ ] min".
         assert.equal(await box(form, "Nurse + SNS, step 2, pump minutes, from").inputValue(), "15");
         assert.equal(await box(form, "Nurse + SNS, step 2, pump minutes, up to").inputValue(), "");
@@ -218,6 +225,7 @@ export function feedingPlanSheetCases({ fixture, freshState, assert }) {
         await metric(f);
         const form = await edit(f, await fromMore(f));
         // Checked here first, in the server's words: nothing is sent.
+        await unfold(form, "Nurse, top up");
         await box(form, "Feed 2 name").fill("");
         await form.getByRole("button", { name: "Save the plan", exact: true }).click();
         const alerts = form.getByRole("alert");
@@ -262,6 +270,7 @@ export function feedingPlanSheetCases({ fixture, freshState, assert }) {
         await alert.waitFor();
         assert.match(await alert.textContent(), /The feeding plan was changed on another phone just now, so this wasn't saved\./);
         await alert.getByRole("button", { name: "Load the latest", exact: true }).click();
+        await unfold(form, "Nurse both sides, top up");
         assert.equal(await box(form, "Feed 2 name").inputValue(), "Nurse both sides, top up");
         assert.equal(await form.getByRole("textbox", { name: "Notes", exact: true }).inputValue(), "Weigh at the clinic on Friday.");
         await form.getByRole("textbox", { name: "Notes", exact: true }).fill("Weigh on Friday.");

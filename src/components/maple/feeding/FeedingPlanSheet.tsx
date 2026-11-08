@@ -105,7 +105,9 @@ export default function FeedingPlanSheet({ open, edit: startEditing = false, onC
   }, [mode]);
   useEffect(() => {
     if (!problem && !conflict) return;
-    const marked = problem?.mark ? document.querySelector(`[data-plan-step="${problem.mark.step}"], [data-plan-feed="${problem.mark.feed}"]`) : null;
+    // A step's problem: the step (short enough to show whole); a feed's: its words, under the feed's name.
+    const mark = problem?.mark;
+    const marked = mark ? document.querySelector(mark.step ? `[data-plan-step="${mark.step}"]` : `[data-plan-feed="${mark.feed}"] [data-plan-problem]`) : null;
     (marked ?? alertRef.current)?.scrollIntoView({ block: "center" });
   }, [problem, conflict]);
 
@@ -286,7 +288,7 @@ export default function FeedingPlanSheet({ open, edit: startEditing = false, onC
             {(problem || conflict) && (
               <div ref={alertRef} className="scroll-mt-4">
                 {conflict ? (
-                  <div role="alert" className={cx(tone.inset, "space-y-3 px-4 py-3.5")}>
+                  <div role="alert" className={cx(tone.card, "space-y-3 px-4 py-3.5")}>
                     <p className="text-[15px] leading-relaxed text-mp-ink">
                       {conflict.latest
                         ? "The feeding plan was changed on another phone just now, so this wasn't saved."
