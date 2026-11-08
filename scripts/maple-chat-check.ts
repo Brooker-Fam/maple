@@ -93,20 +93,24 @@ function throws(fn: () => unknown, what: string) {
 
 const ALEX = { email: "alex@example.com", role: "owner" as const };
 const VI = { email: "vi@example.com", role: "viewer" as const };
-const READS = ["maple_status", "list_entries", "daily_summary", "get_moments", "list_doctor_questions", "recall_memories", "list_people", "sleep_plan"];
+const READS = ["maple_status", "list_entries", "daily_summary", "get_moments", "list_doctor_questions", "recall_memories", "list_people", "sleep_plan", "feeding_plan"];
 const SLEEP = ["bassinet_try", "holding", "set_sleep_plan", "sleep_goal", "sleep_plan"];
+const FEEDING_PLAN = ["feeding_plan", "set_feeding_plan"];
 const PEOPLE = ["cancel_invite", "change_access", "invite_person", "list_people", "remove_person"];
 const CHAT_CARDS = ["show_help", "ask_user", "show_chart", "search_entries", "open_screen", "get_settings", "propose_setting"];
 
 // ── the adapter ──────────────────────────────────────────────────────────
 
-check("captures every registered tool (29 Maple, 10 of hers, 5 family memory, 5 for the family's people, 5 for the sleep plan and its goals)", () => {
+check("captures every registered tool (29 Maple, 10 of hers, 5 family memory, 5 for the family's people, 5 for the sleep plan and its goals, 2 for the feeding plan)", () => {
   const { all, mom } = registrations();
-  eq(all.length, 54, "registrations");
-  eq(new Set(all.map((r) => r.name)).size, 54, "distinct names");
+  eq(all.length, 56, "registrations");
+  eq(new Set(all.map((r) => r.name)).size, 56, "distinct names");
   eq(all.filter((r) => SLEEP.includes(r.name)).map((r) => [r.name, r.ann.readOnlyHint]).sort(), [["bassinet_try", false], ["holding", false], ["set_sleep_plan", false], ["sleep_goal", false], ["sleep_plan", true]], "sleep tools, one read");
   const goal = all.find((r) => r.name === "sleep_goal")!;
   ok("confirmed" in goal.shape && /confirmed: true/.test(goal.description) && /ask_user/.test(goal.description), "sleep_goal: a model's yes after a read-back, one question at a time");
+  eq(all.filter((r) => FEEDING_PLAN.includes(r.name)).map((r) => [r.name, r.ann.readOnlyHint]), [["feeding_plan", true], ["set_feeding_plan", false]], "feeding plan tools, one read");
+  const set = all.find((r) => r.name === "set_feeding_plan")!;
+  ok("confirmed" in set.shape && "read_back" in set.shape && /confirmed: true and that read_back/.test(set.description), "set_feeding_plan: the sleep goals' read-back, a yes and its token");
   eq(all.filter((r) => r.name.endsWith("_memory") || r.name === "recall_memories").map((r) => [r.name, r.ann.readOnlyHint]), [["recall_memories", true], ["save_memory", false], ["correct_memory", false], ["resolve_memory", false], ["archive_memory", false]], "memory tools, one read");
   eq(all.map((r) => r.name).filter((n) => PEOPLE.includes(n)).sort(), PEOPLE, "the people tools");
   eq([...mom].sort(), ["add_mom_medicines", "add_mom_question", "fix_mom_entry", "log_mom_drink", "log_mom_food", "log_mom_medicine", "log_mom_temperature", "mom_nutrition", "mom_status", "set_mom_medicine"], "her tools");
@@ -116,7 +120,7 @@ check("captures every registered tool (29 Maple, 10 of hers, 5 family memory, 5 
 check("a member gets the allowed log tools and interactive app cards", () => {
   const names = registrations().all.map((r) => r.name);
   const born = Object.keys(chatTools(ALEX, { fam: 1, copy: FAMILY_ONE_COPY, born: true, care: true }));
-  eq(born.length, 54 - EXCLUDED_TOOLS.size - 1 + CHAT_CARDS.length, "count once born");
+  eq(born.length, 56 - EXCLUDED_TOOLS.size - 1 + CHAT_CARDS.length, "count once born");
   for (const n of names) ok(born.includes(n) === !(EXCLUDED_TOOLS.has(n) || n === "record_birth"), `${n} gated right`);
   ok(born.includes("show_help"), "show_help");
   ok(born.includes("ask_user") && born.includes("show_chart"), "interactive questions and charts");
@@ -257,6 +261,28 @@ check("toOutput: receipts only for entries this call created, duplicates, delete
   eq(failedCall.ok, false, "error result");
 });
 
+check("toOutput: a read-back waiting for their yes is pending (its line shows without a check); a save, an error and a read aren't", () => {
+  const readBack = toOutput({ content: text('Not saved yet: say yes to save the plan.\nRead every line…\n{"confirm_needed":true}'), structuredContent: { summary: "", confirm_needed: true, read_back: "rb0123456789" } }, { write: true, mom: false });
+  eq([readBack.pending, readBack.saved], [true, undefined], "a read-back");
+  eq(toOutput({ content: text("Saved the feeding plan.\nRevision 1."), structuredContent: { summary: "", saved: true, rev: 1 } }, { write: true, mom: false }).pending, undefined, "a save");
+  eq(toOutput({ isError: true, content: text("Nothing was saved."), structuredContent: { confirm_needed: true } }, { write: true, mom: false }).pending, undefined, "an error");
+  eq(toOutput({ content: text("x"), structuredContent: { confirm_needed: true } }, { write: false, mom: false }).pending, undefined, "a read");
+});
+
+check("the feeding plan in the instructions: build it only from what's written, a read-back and a clear yes, the plan not a memory, its own words for what's next", () => {
+  const mcp = mapleInstructions(FAMILY_ONE_COPY);
+  const chat = mapleInstructions(FAMILY_ONE_COPY, { entryNumbers: false, memories: "chat" });
+  for (const want of ["build it with set_feeding_plan", "never fill in a number that isn't there", "which feeds take turns, when night starts and ends", "save only on a clear yes", "the plan is the source, not a memory", "offer to turn it into the plan", "never a schedule of your own", "never suggest changing the plan"]) {
+    ok(mcp.includes(want) && chat.includes(want), `says "${want}"`);
+  }
+  ok(mcp.includes("maple_status's feeding_plan") && !mcp.includes("[App] lines' Feeding plan line"), "a connector reads maple_status's");
+  ok(chat.includes("the [App] lines' Feeding plan line"), "the chat reads its [App] line");
+  ok(CHAT_ADDENDUM.includes("the feeding plan's next feed when the family has saved one"), "the [App] lines say they carry it");
+  const images = systemBlocks({ viewer: false, care: true, model: "zai/glm-5.3-flash", copy: FAMILY_ONE_COPY, images: true })[1].content as string;
+  ok(/A photo of a feeding plan from their care team: build the plan from what's printed or written on it with set_feeding_plan/.test(images), "a photo of the plan sheet");
+  ok(!/[–—]/.test(CHAT_ADDENDUM) && !/[–—]/.test(images), "no dashes");
+});
+
 check("a long result is cut before the model reads it", () => {
   eq(forModel("short"), "short", "short stays");
   const cut = forModel("x".repeat(MODEL_TEXT_MAX + 500));
@@ -269,6 +295,7 @@ check("chat display hides old receipt, timer and care references while keeping t
   eq(chatDisplayText("The timer is running (#243). Paused the feed (timer #243). Nursing [timer #243]."), "The timer is running. Paused the feed. Nursing.", "ID-only asides");
   eq(chatDisplayText("Updated #244: bath. Deleted c245: Robin's question. Restored c245: question. Already saved c246: Examplex at 9:15 AM."), "Updated: bath. Deleted: Robin's question. Restored: question. Already saved: Examplex at 9:15 AM.", "other write results");
   eq(chatDisplayText("#247 was already deleted. Entry #248 is a feed. Nothing changed on #249. That #250 was stopped."), "This entry was already deleted. Entry is a feed. Nothing changed on this entry. That entry was stopped.", "standalone references");
+  eq(chatDisplayText('Next is "Nurse + SNS" (p2f1), then "Nurse, top up".'), 'Next is "Nurse + SNS", then "Nurse, top up".', "a feeding plan feed's id");
   eq(chatDisplayText("The feed (started at 4:20 AM; timer #251) goes on. Use delete_entry id 252 or fix_mom_entry id c253."), "The feed (started at 4:20 AM) goes on. Use delete_entry this entry or fix_mom_entry this entry.", "trailing asides and explicit tool IDs");
   eq(chatDisplayText("Saved g12: the sleep goal (g12, 28 days left) is set."), "Saved: the sleep goal (28 days left) is set.", "a sleep goal's ref");
 });

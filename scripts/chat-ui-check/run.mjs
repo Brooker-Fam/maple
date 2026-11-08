@@ -412,7 +412,31 @@ try {
   await noOverflow();
   console.log("PASS web search: a running search says so, and its card shows the exact phrase and opens each page in the browser");
 
-  for (const name of ["question", "activity", "growth", "receipt", "care-receipt", "care-food", "care-drink", "queue-panel", "people-invite", "people-owner", "people-remove", "people-invited", "web"]) {
+  // The feeding plan: a read-back that saved nothing shows its line without a check, the save with one, and a button to the plan.
+  const CHECK_PATH = "M20 6 9 17l-5-5";
+  const iconOf = (text) => page.locator("p", { hasText: text }).first().locator("svg").innerHTML();
+  await fixture("feeding-plan-read-back");
+  await page.getByText("Not saved yet: say yes to save the plan", { exact: true }).waitFor();
+  assert(!(await iconOf("Not saved yet: say yes to save the plan")).includes(CHECK_PATH), "A read-back waiting for a yes never shows a check");
+  assert.equal(await page.getByText(/read_back|confirm_needed|rb[0-9a-f]{10}/).count(), 0, "The read-back's token and instructions stay out of sight");
+  await page.getByText("Is that all right?").waitFor();
+  await noOverflow();
+  await page.screenshot({ path: path.join(screenshots, "feeding-plan-read-back-375-day.png") });
+  await fixture("feeding-plan-saved");
+  await page.getByText("Saved the feeding plan", { exact: true }).waitFor();
+  assert((await iconOf("Saved the feeding plan")).includes(CHECK_PATH), "The save shows its check");
+  assert.equal(await page.getByText(/Revision 1/).count(), 0, "Only the card's first line shows");
+  await noOverflow();
+  await page.screenshot({ path: path.join(screenshots, "feeding-plan-saved-375-day.png") });
+  await fixture("feeding-plan-open");
+  const openPlan = page.getByRole("button", { name: "Open Feeding plan", exact: true });
+  await openPlan.waitFor();
+  await tapTarget(openPlan);
+  await noOverflow();
+  await page.screenshot({ path: path.join(screenshots, "feeding-plan-open-375-day.png") });
+  console.log("PASS feeding plan: a read-back waits without a check, the save shows one, and the chat can offer a button to the plan");
+
+  for (const name of ["question", "activity", "growth", "receipt", "care-receipt", "care-food", "care-drink", "queue-panel", "people-invite", "people-owner", "people-remove", "people-invited", "web", "feeding-plan-read-back", "feeding-plan-saved", "feeding-plan-open"]) {
     await fixture(name);
     if (name === "receipt") await page.getByText("Feeding in the log", { exact: true }).waitFor();
     if (name === "care-receipt") await page.getByText("Example medicine · in the log", { exact: true }).waitFor();

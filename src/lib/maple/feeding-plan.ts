@@ -471,12 +471,13 @@ export function checkInText(key: string): string {
  * The whole plan as lines, the read-back before a save (chat, Claude) and the
  * sheet's summary: who it's from, the target, the day (how often, the turns),
  * each feed's steps, the night, notes. Every value the plan holds, nothing else.
+ * `words`: the baby's pronouns in the family's words ("him", "he's").
  */
-export function planLines(plan: FeedingPlan, target: FeedTarget | null): string[] {
+export function planLines(plan: FeedingPlan, target: FeedTarget | null, words: { her: string; sheIs: string } = { her: "her", sheIs: "she's" }): string[] {
   const out: string[] = [];
   if (plan.from || plan.check_in) out.push([plan.from ? `From: ${plan.from}` : null, plan.check_in ? `check in ${checkInText(plan.check_in)}` : null].filter(Boolean).join(" · "));
   out.push(target ? `Target: ${amountText(target, plan.unit)} a feed` : "Target: none set");
-  const day = plan.day.every ? `${everyText(plan.day.every)}${plan.day.wake ? ", waking her if she's asleep" : ""}` : "when hungry";
+  const day = plan.day.every ? `${everyText(plan.day.every)}${plan.day.wake ? `, waking ${words.her} if ${words.sheIs} asleep` : ""}` : "when hungry";
   const turns = plan.order.map((id) => feedById(plan, id)?.name).filter(Boolean) as string[];
   out.push(`${plan.night ? "Day" : "Feeds"}: ${day}${turns.length > 1 ? `, taking turns: ${turns.join(", then ")}` : turns.length === 1 ? `: ${turns[0]}` : ""}`);
   for (const f of plan.feeds) out.push(`• ${f.name}: ${feedText(f, plan, target)}`);
@@ -484,7 +485,7 @@ export function planLines(plan: FeedingPlan, target: FeedTarget | null): string[
     const n = plan.night;
     const how = n.every ? everyText(n.every) : plan.day.every ? `${everyText(plan.day.every)} (as by day)` : "when hungry";
     const feed = feedById(plan, n.feed)?.name;
-    out.push(`Night (${clockWords(n.from)}–${clockWords(n.to)}): ${how}${n.wake ? ", waking her" : ""}${feed ? `: ${feed}` : ", same turns as by day"}`);
+    out.push(`Night (${clockWords(n.from)}–${clockWords(n.to)}): ${how}${n.wake ? `, waking ${words.her}` : ""}${feed ? `: ${feed}` : ", same turns as by day"}`);
   }
   if (plan.notes) out.push(`Notes: ${plan.notes}`);
   return out;

@@ -141,10 +141,12 @@ check("every chat tool has one place in the map, and every mapped tool is a chat
   eq([...PLANNED_TOOLS], ["sleep_goal"], "planned");
   eq(groupOf("sleep_goal"), "sleep", "sleep_goal goes with the sleep plan");
   for (const name of EXCLUDED_TOOLS) eq(groupOf(name), null, `${name} never reaches the chat`);
-  const approved = ["maple_status", "log_feed", "log_diaper", "log_sleep", "start_timer", "stop_timer", "switch_side", "pause_nursing", "fix_nursing_time", "reopen_timer", "log_many", "update_entry", "delete_entry", "restore_entry", "undo_last", "list_entries", "daily_summary", "ask_user", "show_help", "recall_memories", "save_memory"];
+  // feeding_plan is core: "what do we do next?" never waits for a load (its answer also rides the [App] lines).
+  const approved = ["maple_status", "log_feed", "log_diaper", "log_sleep", "start_timer", "stop_timer", "switch_side", "pause_nursing", "fix_nursing_time", "reopen_timer", "log_many", "update_entry", "delete_entry", "restore_entry", "undo_last", "list_entries", "daily_summary", "ask_user", "show_help", "recall_memories", "save_memory", "feeding_plan"];
   // The approved core, plus load_tools and record_birth (there only before the birth).
   eq(groupNames("core").sort(), [...approved, LOAD_TOOLS, "record_birth"].sort(), "core");
-  eq(GROUP_ORDER, ["mom", "health", "sleep", "log_more", "app", "people", "memory_admin"], "groups");
+  eq(GROUP_ORDER, ["mom", "health", "sleep", "feeding", "log_more", "app", "people", "memory_admin"], "groups");
+  eq(groupNames("feeding"), ["set_feeding_plan"], "saving the feeding plan is its own small group");
 });
 
 check("a tool missing from the map still goes, with core: it never silently vanishes", () => {
@@ -353,6 +355,33 @@ check("other groups' words: health, more logging, the app, memories", () => {
   eq([search.groups, search.dropped], [["health", "app"], ["mom"]], "at the ceiling, what a medicine only implies goes first");
 });
 
+/** How a family talks about their care team's feeding plan: each loads set_feeding_plan by its words alone. */
+const FEEDING_PLAN_TALK = [
+  "here's the plan from our lactation consultant",
+  "our LC wants us doing triple feeding for now",
+  "can you save this feeding schedule?",
+  "the IBCLC changed the top-up to 40 ml",
+  "she's nursing with a nipple shield now, add that to the plan",
+  "the syringe goes at the breast while she nurses",
+  "change the SNS amount to 20 ml",
+  "update the plan: night is 10 PM to 6 AM now",
+  "we stopped supplementing at night",
+];
+/** A sleep or bassinet plan is the sleep group's, and plain logging stays with core. */
+const NOT_FEEDING_PLAN = ["How is the sleep plan going?", "Ask about this: stage 2 of the bassinet plan", "what's our back-to-work plan for nights", "she pooped", "who's in the family"];
+
+check("the care team's feeding plan: its words send set_feeding_plan; a sleep plan, plain logging and people don't; feeding_plan is always there", () => {
+  for (const said of FEEDING_PLAN_TALK) ok(predictGroups({ said }).includes("feeding"), `loads feeding: "${said}"`);
+  for (const said of [...NOT_FEEDING_PLAN, ...PLAIN]) ok(!predictGroups({ said }).includes("feeding"), `no feeding: "${said}"`);
+  ok(route(ALEX, "here's the plan from our lactation consultant").sel.active.includes("set_feeding_plan"), "an owner gets it on the first step");
+  ok(route(SAM, "change the top-up to 40 ml").sel.active.includes("set_feeding_plan"), "so does a member");
+  for (const who of [ALEX, SAM, VI]) ok(route(who, "what do we do next?").sel.active.includes("feeding_plan"), `${who.email}: feeding_plan with core, every turn`);
+  ok(!Object.keys(toolsFor(VI)).includes("set_feeding_plan"), "a viewer never has set_feeding_plan");
+  ok(!route(VI, "here's the plan from our lactation consultant").sel.active.includes("set_feeding_plan"), "nor gets it from words");
+  // A plan photo's read-back in the window keeps the group for the yes ("yes, save it" names nothing).
+  ok(route(ALEX, "yes", { before: earlier(1, "set_feeding_plan", { plan: { feeds: [] } }) }).sel.groups.includes("feeding"), "the read-back keeps it for the yes");
+});
+
 // ── what the window already holds ────────────────────────────────────────
 
 check("groups called in the window stay: a growth log earlier keeps health for a diaper", () => {
@@ -407,13 +436,15 @@ check("past the ceiling the least recently used group goes: those only wanted fi
   ok(three.tokens <= TOOL_CEILING, `${three.tokens} under the ceiling`);
   const older = selectTools({ sizes, predicted: ["mom"], recent: new Map<ToolGroup, number>([["log_more", 0], ["app", 2], ["memory_admin", 4]]) });
   eq([older.groups, older.dropped], [["mom", "app", "memory_admin"], ["log_more"]], "the oldest goes first");
-  const newer = selectTools({ sizes, predicted: ["mom"], recent: new Map<ToolGroup, number>([["app", 0], ["log_more", 2], ["memory_admin", 4]]) });
-  eq([newer.groups, newer.dropped], [["mom", "log_more", "memory_admin"], ["app"]], "by when, not by size");
+  // The smallest of three goes when it's the oldest: by when, not by size.
+  const newer = selectTools({ sizes, predicted: ["mom"], recent: new Map<ToolGroup, number>([["memory_admin", 0], ["app", 2], ["people", 4]]) });
+  ok(definitionTokens(sizes, groupNames("memory_admin")) < Math.min(definitionTokens(sizes, groupNames("app")), definitionTokens(sizes, groupNames("people"))), "memory_admin is the smallest of the three");
+  eq([newer.groups, newer.dropped], [["mom", "app", "people"], ["memory_admin"]], "by when, not by size");
   // Every group used this turn, in group order (mom first, memory_admin last): the ceiling still holds (coach review P2 #8:
   // they all stayed, 35,439 tokens), the least recently used going first, never the one used last.
   const kept = selectTools({ sizes, kept: GROUP_ORDER, predicted: ["mom"] });
   ok(kept.tokens <= TOOL_CEILING, `every group used this turn: ${kept.tokens} under the ceiling`);
-  eq([kept.groups, kept.dropped], [["log_more", "app", "people", "memory_admin"], ["sleep", "health", "mom"]], "the least recently used go, most recent kept");
+  eq([kept.groups, kept.dropped], [["log_more", "app", "people", "memory_admin"], ["feeding", "sleep", "health", "mom"]], "the least recently used go, most recent kept");
   ok(core.every((n) => kept.active.includes(n) && three.active.includes(n) && older.active.includes(n)), "core always");
   const kept2 = selectTools({ sizes, kept: ["mom", "health"], predicted: ["log_more", "app"] });
   eq([kept2.groups, kept2.dropped], [["mom", "health"], ["log_more", "app"]], "what was used this turn wins over what's predicted");

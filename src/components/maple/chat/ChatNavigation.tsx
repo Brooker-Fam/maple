@@ -4,6 +4,7 @@ import { DESTINATION_LABELS, destinationAllowed, navigationCardSchema, type Chat
 import { useAppNav } from "../AppNav";
 import { useCareNav } from "../care/CareNav";
 import { useCare } from "../care/useCare";
+import { useFeedingPlanNav } from "../feeding/FeedingPlanNav";
 import { Icon } from "../icons";
 import { useNotifications } from "../notify";
 import { requestSection } from "../sectionFocus";
@@ -17,6 +18,7 @@ export default function ChatNavigation({ navigation: raw }: { navigation: ChatNa
   const care = useCare();
   const notifications = useNotifications();
   const sheets = useSheets();
+  const feedingPlan = useFeedingPlanNav();
   const { readOnly } = useMaple();
   const parsed = navigationCardSchema.safeParse(raw);
   if (!parsed.success) return null;
@@ -35,6 +37,7 @@ export default function ChatNavigation({ navigation: raw }: { navigation: ChatNa
       case "mom_medicines": if (app.go("care")) requestSection("mom-medicines"); break;
       case "family_settings": app.go("family"); break;
       case "people": app.go("family/people"); break;
+      case "feeding_plan": feedingPlan.openPlan(); break;
       case "history": app.go("log"); break;
       default: app.go(destination);
     }

@@ -66,6 +66,8 @@ export type ChatToolOutput = {
   invite?: ChatInvite;
   /** What web_search sent and found (web-search.ts), for its card of links. */
   web?: ChatWebSearch;
+  /** A write's read-back (confirm_needed): nothing saved yet, so its line shows without a check. */
+  pending?: true;
 };
 
 /** A web page a search found: its title, link and site ("healthychildren.org"). */

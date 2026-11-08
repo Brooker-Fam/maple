@@ -900,7 +900,7 @@ function readBackKey(): string {
 
 const hourOf = (ctx: Ctx) => Math.floor(ctx.now.getTime() / 3600_000);
 
-function readBackToken(ctx: Ctx, what: unknown, hour = hourOf(ctx)): string {
+export function readBackToken(ctx: Ctx, what: unknown, hour = hourOf(ctx)): string {
   const mac = createHmac("sha256", `maple-read-back:${readBackKey()}`).update(JSON.stringify([ctx.fam.familyId, ctx.baby.id, ctx.who.id, hour, what])).digest("hex");
   return `rb${mac.slice(0, 10)}`;
 }
@@ -914,7 +914,7 @@ export function readBackMatches(ctx: Ctx, what: unknown, given: string | null | 
 }
 
 /** Why a confirmed call read back instead of saving: no token, or one for something else (or too old). */
-const rereadWhy = (a: { confirmed?: boolean | null; read_back?: string | null }, noun: string) =>
+export const rereadWhy = (a: { confirmed?: boolean | null; read_back?: string | null }, noun: string) =>
   a.confirmed !== true
     ? null
     : a.read_back?.trim()
