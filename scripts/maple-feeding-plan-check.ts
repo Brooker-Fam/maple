@@ -570,8 +570,13 @@ check("the night's second bottle: with the same plan feed it's that feed, counte
   // To the plan, formula logged late from the dock (55 minutes on, no plan feed on it) still finishes the night feed,
   // short of its amount until then: no new night feed asking for its pump.
   const evening = [nurse("L 20:30-20:45", { plan: SNS.id }), bottle("20:44", 20, { via: "sns" }), pump("20:50-21:05"), pump("23:20-23:40")];
-  const n = now(PLAN, [...evening, first, bottle("+1 00:40", 15, { milk: "formula" })], "+1 00:45");
+  let n = now(PLAN, [...evening, first, bottle("+1 00:40", 15, { milk: "formula" })], "+1 00:45");
   eq([n.focus.state, n.focus.feed.id, states(n.focus), clock(n.due!.base), clock(n.due!.from), n.missed], ["upcoming", NIGHT.id, ["todo", "todo", "info"], "23:45", "02:45", null]);
+  // One parent pumps on while the other gives the bottle: more formula soon after the pump ends is still that feed,
+  // though the first bottle already reached the target.
+  const together = [...evening.slice(0, 3), pump("23:30-+1d00:15"), bottle("23:45", 55, { milk: "breastmilk", plan: NIGHT.id }), bottle("+1 00:40", 15, { milk: "formula" })];
+  n = now(PLAN, together, "+1 00:45");
+  eq([n.focus.state, n.focus.feed.id, clock(n.due!.base), n.missed], ["upcoming", NIGHT.id, "23:45", null]);
 });
 
 // ── the night's edges, pumps, and when ──

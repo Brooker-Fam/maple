@@ -1106,11 +1106,15 @@ export function feedPlanNow(
       const nextDue = dueAt(pg.anchor, g.start);
       const late =
         !g.run && asTagged && ended !== null && g.start - ended <= PLAN_LATE_TOP_UP_MS && (!nextDue || g.start < nextDue.from) && wantsBottle(prev, target);
+      // A bottle soon after anything of a feed that began with a bottle (the night's: its pump can end after the bottle,
+      // one parent pumping while the other feeds): more of it, as a bottle soon after the bottle before is.
+      const bottleLed = pg.bottles.length > 0 && (pg.runs.length === 0 || t(pg.bottles[0].started_at) <= pg.runs[0].start);
+      const more = !g.run && asTagged && bottleLed && prev.lastAt !== null && g.start - prev.lastAt < PLAN_BOTTLE_JOIN_MS;
       // Nursing again soon after it (comfort nursing after the night's bottle, a re-latch, a cluster): more of that feed,
       // unless what was logged with it (a shield, milk at the breast) points to another of the plan's feeds. In the
       // night every feed is the night's, however she was fed, so nothing points elsewhere.
       const again = !!g.run && asTagged && prev.lastAt !== null && g.start - prev.lastAt < PLAN_RELATCH_MS && (!!nightFeed || !pointsElsewhere(plan, g, prev.feed));
-      if (late || again) {
+      if (late || more || again) {
         const runsIn = [...pg.runs, ...g.runs];
         const joined: PlanGroup = { ...pg, runs: runsIn, run: runsIn.length ? joinRuns(runsIn) : null, bottles: [...pg.bottles, ...g.bottles], pumps: [...pg.pumps] };
         for (const p of mine) if (joined.pumps.length < pumpSteps(prev.feed)) joined.pumps.push(p);
