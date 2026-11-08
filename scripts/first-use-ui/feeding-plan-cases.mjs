@@ -476,9 +476,9 @@ export function feedingPlanCases({ fixture, freshState, record, writes, assert }
         const tile = g.page.getByRole("region", { name: "Log something", exact: true }).getByRole("button", { name: /^Bottle/ });
         assert.equal((await tile.textContent()).replace(/[  ]/g, " "), "BottleTop-up");
         await tile.click();
-        const form = g.page.getByRole("dialog", { name: "Feed", exact: true });
+        const form = g.page.getByRole("dialog", { name: /^Top-up · 10:40\sAM feed$/ });
         await form.waitFor();
-        assert.match(await form.textContent(), /A top-up for the 10:40\sAM feed: part of that feed, not a feed of its own\./);
+        assert.match(await form.textContent(), /Part of that feed, not a feed of its own\./);
         assert.equal(await form.getByRole("textbox", { name: "millilitres", exact: true }).inputValue(), "25", "the plan's amount");
         assert.deepEqual(g.errors, []);
       } finally {
