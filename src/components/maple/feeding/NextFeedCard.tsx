@@ -1,11 +1,10 @@
 "use client";
 
-import { useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { minutesShort, other } from "@/lib/maple/feed";
-import { amountText, checkInText, dueStatus, feedingPlanOf, feedPlanNow, type PlanDue } from "@/lib/maple/feeding-plan";
-import { DEFAULT_TZ, formatTime } from "@/lib/maple/time";
-import type { Side } from "@/lib/maple/types";
-import { feedTargetOf } from "@/lib/maple/units";
+import { checkInText, dueStatus, type FeedingPlan, type PlanDue, type PlanFeed, type Range } from "@/lib/maple/feeding-plan";
+import { dayKey, formatDuration, formatTime } from "@/lib/maple/time";
+import type { Entry, Side } from "@/lib/maple/types";
 import { useBabyWords } from "../familyWords";
 import { SIDE_NAME } from "../FeedParts";
 import { Icon, type IconName } from "../icons";
@@ -15,28 +14,34 @@ import { useSheets } from "../sheets";
 import { focusNext, useTapGuard } from "../tapCooldown";
 import { holdTodayTaps } from "../tapShield";
 import { Button, cx, tone } from "../ui";
-import { useMaple, useNow } from "../useMaple";
+import { ApiError, useMaple } from "../useMaple";
 import { useTimerActions } from "../useTimerActions";
 import { useFeedingPlanNav } from "./FeedingPlanNav";
-import { cardDueWords, listWords, missedItems, stepRows, type OneTapLog, type StepAction, type StepRow } from "./nextFeed";
+import { cardDueWords, listWords, type StepAction } from "./nextFeed";
+import { usePlanLog, usePlanNow, type PlanRow } from "./usePlanNow";
 
 /**
  * Today's Next feed card: the family's feeding plan (settings.feeding_plan,
- * from their care team) read against the log (feedPlanNow), so nobody has to
- * ask what to do next. Before a feed: which feed is next ("Next feed", or
- * "Night feed" in the plan's night), when it's due (dueText, calm in every
- * state: "Due since 4:10 PM" is a fact, never an alarm), its steps in the
- * plan's words, and on the first step the one big action: Start Left (the
- * side the dock suggests) with the other side beside it, Start pumping, or
- * Log bottle (the bottle form, prefilled from the plan). The plan's other
- * feeds are quiet "Do … instead" picks, kept on this phone until a feed
+ * from their care team) read against the log (usePlanNow, the reading the dock
+ * and the running timer cards share), so nobody has to ask what to do next.
+ *
+ * Before a feed, compact so its one big action and the top of Last fed clear
+ * the dock on a small phone: which feed is next ("Next feed", or "Night feed"
+ * in the plan's night), when it's due and what that counts from ("10:30 AM–
+ * 11:30 AM, in 1h 00m · 2.5–3.5 h after the 8:00 AM feed"; calm in every
+ * state, "Due since 4:10 PM" is a fact, never an alarm), its first step in the
+ * plan's words with the action (Start Left, the side the dock suggests, with
+ * the other side beside it; Start pumping; Log bottle, the bottle form
+ * prefilled from the plan), its later steps on one line, and one quiet
+ * "Other feed" for the plan's other feeds, kept on this phone until a feed
  * starts or the plan's turn changes. While a feed is going ("Now"), each step
- * says whether it's logged, going or still to do, and the first one left
- * carries the action: milk at the breast in one tap ("Log 20 ml in the
- * SNS"), a top-up in the bottle form naming its feed (top_up_of), Start
- * pumping. A finished feed's step nobody logged (a top-up, the milk at the
- * breast, the pump) gets one quiet line with its fix, or Got it to set it
- * aside on this phone.
+ * says whether it's logged, going or still to do; the next physical step
+ * carries the action (milk at the breast in one tap, a top-up in the bottle
+ * form naming its feed, Start pumping), a step can carry a small second one
+ * beside it, and a short bottle step has a quiet "She's done" that sets it
+ * aside on this phone. "Not …?" says which plan feed it really was, for every
+ * phone (data.plan on its entries). A finished feed's steps nobody logged get
+ * one line with Fix, which opens each fix and Got it (set aside on this phone).
  *
  * Every amount, minute and time is the plan's or the log's, in the plan's
  * unit. Viewers see the same card with no buttons but Plan; photos-only
@@ -46,89 +51,95 @@ import { cardDueWords, listWords, missedItems, stepRows, type OneTapLog, type St
  * so a double tap never logs twice.
  */
 
-/** This phone's own memory for the card (a pick, a missed step set aside): sessionStorage, or this page's memory when it's blocked. */
-const memory = new Map<string, string>();
-function sessionRead(key: string): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    return window.sessionStorage.getItem(key) ?? memory.get(key) ?? null;
-  } catch {
-    return memory.get(key) ?? null;
-  }
-}
-function sessionWrite(key: string, value: string | null): void {
-  if (value === null) memory.delete(key);
-  else memory.set(key, value);
-  try {
-    if (value === null) window.sessionStorage.removeItem(key);
-    else window.sessionStorage.setItem(key, value);
-  } catch {
-    // Storage blocked (a private window): this page's memory carries it.
-  }
-}
-
-/** "Do … instead", for the plan's turn it was picked in (`turn`): a new turn (a feed logged, the night) drops it. */
-type Pick = { turn: string; id: string };
-const pickKey = (family: number) => `maple-plan-pick:${family}`;
-function readPick(family: number): Pick | null {
-  const raw = sessionRead(pickKey(family));
-  if (!raw) return null;
-  try {
-    const p = JSON.parse(raw) as Partial<Pick> | null;
-    return typeof p?.turn === "string" && typeof p.id === "string" ? { turn: p.turn, id: p.id } : null;
-  } catch {
-    return null;
-  }
-}
-/** A finished feed's unlogged steps, set aside on this phone (Got it), by the feed's start. */
-const missedKey = (family: number, start: number) => `maple-plan-missed:${family}:${start}`;
-
 const DUE_ICON: IconName = "clock-3";
+const MIN = 60_000;
+/** Keeps a part opened low on the card clear of the dock and tab bar when it's brought into view (the dock publishes its height). */
+const CLEAR_DOCK = "scroll-mt-4 scroll-mb-[calc(var(--maple-dock-h,0px)+72px+env(safe-area-inset-bottom))]";
+
+/** "2.5–3.5 h", "3 h", "2h 15m–3h 00m": a plan's interval, said short. */
+function hoursText(r: Range): string {
+  const h = (m: number) => (m % 30 === 0 ? String(m / 60) : null);
+  const [a, b] = [h(r.min), h(r.max)];
+  if (a !== null && b !== null) return a === b ? `${a} h` : `${a}–${b} h`;
+  const d = (m: number) => formatDuration(m * 60);
+  return r.min === r.max ? d(r.min) : `${d(r.min)}–${d(r.max)}`;
+}
+
+/**
+ * What a due window counts from: "2.5–3.5 h after the 8:00 AM feed" (the plan's interval from the last feed's start),
+ * or "after the 3:40 AM feed" when the window moved (a day feed waiting for the night to end).
+ */
+export function dueFromWords(d: PlanDue, plan: FeedingPlan, tz: string): string {
+  const every = d.night ? (plan.night?.every ?? plan.day.every) : plan.day.every;
+  const at = formatTime(d.base, tz);
+  const plain = !!every && d.from === d.base + every.min * MIN && d.to === d.base + every.max * MIN;
+  return plain && every ? `${hoursText(every)} after the ${at} feed` : `after the ${at} feed`;
+}
+
+/** A very short screen (an older small phone, under 600px tall): the card puts its big action before its later steps. */
+function useShortScreen(): boolean {
+  const [short, setShort] = useState(false);
+  useEffect(() => {
+    const check = () => setShort(window.innerHeight < 600);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+  return short;
+}
+
+/** The plan's other feeds that feed her (one that only pumps never comes up). */
+const feeding = (plan: FeedingPlan) => plan.feeds.filter((f) => f.steps.some((s) => s.do === "nurse" || s.do === "bottle"));
+
+const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 
 export default function NextFeedCard() {
-  const { state, summary, readOnly, log, now: clock } = useMaple();
+  const { state, summary, readOnly, update, toast } = useMaple();
   const w = useBabyWords();
-  const now = useNow(20_000);
   const night = useNightActive();
   const nav = useFeedingPlanNav();
   const sheets = useSheets();
   const actions = useTimerActions();
-  const settings = state?.baby.settings;
-  const plan = useMemo(() => feedingPlanOf(settings), [settings]);
-  const target = useMemo(() => feedTargetOf(settings), [settings]);
-  const tz = state?.baby.timezone ?? DEFAULT_TZ;
-  const family = state?.family?.id ?? 0;
-  const entries = state?.entries;
-  // Re-read this phone's pick and set-aside steps after a tap changes them.
-  const [, bump] = useReducer((n: number) => n + 1, 0);
-  // One action at a time: its buttons wait while it's out (a start, a one-tap log).
+  const p = usePlanNow();
+  const logOne = usePlanLog();
+  const short = useShortScreen();
+  // One action at a time: its buttons wait while it's out (a start, a one-tap log, a correction).
   const inFlight = useRef(false);
   const [busy, setBusy] = useState(false);
+  // What's open on the card: the missed line's fixes, the plan's other feeds (before a feed), or which feed it was (during
+  // one). Only for the card it was opened on: once the card moves on (a feed starts, the line is fixed), it's closed.
+  const [opened, setOpened] = useState<{ what: "fix" | "other" | "was"; on: string } | null>(null);
 
-  // The plan's own turn, then this phone's pick for that turn (cleared by a new turn: a feed logged, the night, a feed going).
-  const base = useMemo(() => (plan && entries ? feedPlanNow(plan, entries, now, { tz, target }) : null), [plan, entries, now, tz, target]);
-  const turn = base ? `${base.focus.state}|${base.focus.feed.id}|${summary?.lastFed?.at ?? ""}` : "";
-  const saved = base ? readPick(family) : null;
-  const choose =
-    base && base.focus.state === "upcoming" && saved && saved.turn === turn && saved.id !== base.focus.feed.id && plan?.feeds.some((f) => f.id === saved.id) ? saved.id : null;
-  const fp = useMemo(
-    () => (choose && plan && entries ? feedPlanNow(plan, entries, now, { tz, target, choose }) : base),
-    [choose, plan, entries, now, tz, target, base]
-  );
-
-  const missedStart = fp?.missed?.view.start ?? null;
-  const missedAside = missedStart !== null && sessionRead(missedKey(family, missedStart)) === "1";
-  const missed = fp && !missedAside ? missedItems(fp) : [];
-  const rows = fp ? stepRows(fp) : [];
-  const primary = rows.find((r) => r.action)?.action ?? null;
+  const fp = p?.fp ?? null;
+  const rows = p?.rows ?? [];
+  const primary = p?.primary ?? null;
+  const missed = p?.missed ?? [];
+  const on = fp ? [fp.focus.state, fp.focus.feed.id, fp.focus.start ?? "", p?.missedStart ?? ""].join("|") : "";
+  const open = opened && opened.on === on ? opened.what : null;
+  const setOpen = (to: typeof open | ((o: typeof open) => typeof open)) => {
+    const next = typeof to === "function" ? to(open) : to;
+    setOpened(next ? { what: next, on } : null);
+  };
+  /** Open or close a part of the card: what's under the thumb changes, so Today's taps wait out the cooldown. */
+  const toggle = (what: NonNullable<typeof open>) => {
+    holdTodayTaps();
+    setOpen((o) => (o === what ? null : what));
+  };
+  // An opened part low on the card comes up above the dock (instantly at night or with reduced motion).
+  const reveal = useCallback((el: HTMLElement | null) => {
+    if (!el) return;
+    const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches || document.documentElement.classList.contains("maple-night");
+    el.scrollIntoView({ block: "nearest", behavior: still ? "auto" : "smooth" });
+  }, []);
   // What's under the thumb: the feed, its state, the step with the action, the missed line. A change from elsewhere arms it again.
-  const guard = useTapGuard(fp ? [fp.focus.state, fp.focus.feed.id, rows.find((r) => r.action)?.key ?? "", primary?.kind ?? "", missed.length ? missedStart : ""].join("|") : null);
+  const guard = useTapGuard(fp ? [fp.focus.state, fp.focus.feed.id, primary?.row.key ?? "", primary?.action.kind ?? "", missed.length ? p?.missedStart : ""].join("|") : null);
 
-  if (!state || !summary || !plan || !fp || !base || !state.baby.born_at || state.me.role === "photos") return null;
+  if (!state || !summary || !p || !fp || !state.baby.born_at || state.me.role === "photos") return null;
 
+  const { plan, base, tz, now } = p;
   const focus = fp.focus;
   const underway = focus.state === "underway";
-  const chosen = focus.why === "chosen";
+  const chosen = !!p.chosen;
   const eyebrow = underway ? "Now" : focus.night ? "Night feed" : "Next feed";
   const due = fp.due;
   const dueHere = due && due.for === "focus" ? due : null;
@@ -136,6 +147,8 @@ export default function NextFeedCard() {
   // The side the dock and Last fed suggest (nextSideFor), else Left for a first feed.
   const first: Side = summary.next?.side ?? "L";
   const run = focus.group?.run ?? null;
+  const missedStart = p.missedStart;
+  const fixes = missed.filter((m) => m.fix);
 
   /** A tap that changes the card, and the page under the thumb: Today's taps wait out the cooldown; one at a time. */
   const act = (fn: () => Promise<unknown> | void) => {
@@ -168,26 +181,51 @@ export default function NextFeedCard() {
       toTop();
       await actions.startTimer("pump");
     });
-  const logOne = (l: OneTapLog) =>
-    act(async () => {
-      await log({ kind: "feed", ...(l.started_at ? { started_at: l.started_at } : {}), data: l.data }, { toast: `${l.toast} · ${formatTime(l.started_at ?? clock(), tz)}` });
-    });
   const openForm = (a: Extract<StepAction, { kind: "form" }>) => {
     if (inFlight.current) return;
     sheets.open({ kind: a.sheet, preset: a.preset });
   };
   const pickFeed = (id: string | null) =>
     act(() => {
-      sessionWrite(pickKey(family), id ? JSON.stringify({ turn, id } satisfies Pick) : null);
-      bump();
+      setOpen(null);
+      p.pick(id);
     });
   const setAside = () =>
     act(() => {
-      if (missedStart !== null) sessionWrite(missedKey(family, missedStart), "1");
-      bump();
+      setOpen(null);
+      p.setMissedAside();
     });
 
-  const actionView = (a: StepAction) => {
+  /**
+   * Which plan feed this one really was, for every phone: data.plan on its nursing entries (or its bottles), each
+   * made against the version shown; changed meanwhile (a Switch, the other phone), once more on what's there now.
+   */
+  const correct = (to: PlanFeed) =>
+    act(async () => {
+      setOpen(null);
+      const list: Entry[] = (run ? run.entries : (focus.group?.bottles ?? [])).filter((e) => e.id > 0 && e.data.plan !== to.id);
+      const save = (b: Entry) => update(b.id, { data: { plan: to.id }, expect_updated_at: b.updated_at }, { toast: "", throwOnError: true });
+      try {
+        for (const e of list) {
+          try {
+            await save(e);
+          } catch (err) {
+            const latest = err instanceof ApiError && err.status === 409 ? (err.body as { entry?: Entry } | null)?.entry : undefined;
+            if (!latest || latest.id !== e.id || latest.kind !== "feed") throw err;
+            if (latest.data.plan === to.id) continue;
+            await save(latest);
+          }
+        }
+        toast(`This feed is ${to.name} now`, { tone: "ok" });
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 409) toast("The feed just changed on another phone, so that wasn't saved. Try again.", { tone: "info" });
+        else if (err instanceof ApiError) toast(err.status < 500 ? err.message : "That wasn't saved. Try again in a moment.", { tone: "error" });
+        else toast("You're offline, so that wasn't saved. Try again when you're back online.", { tone: "error" });
+      }
+    });
+
+  /** One action's buttons: the card's big one (`big`), or a small one beside a row or in the missed line's fixes. */
+  const actionView = (a: StepAction, big: boolean): ReactNode => {
     if (a.kind === "nurse") {
       const second = other(first);
       const shield = a.shield ? ", with the nipple shield" : "";
@@ -218,42 +256,54 @@ export default function NextFeedCard() {
       );
     }
     if (a.kind === "pump") {
-      return (
+      return big ? (
         <div data-plan-primary>
           <Button size="lg" className="w-full" disabled={busy} onClick={startPump}>
             <Icon name="milk" size={19} />
             Start pumping
           </Button>
         </div>
+      ) : (
+        <Button variant="ghost" size="sm" disabled={busy} onClick={startPump} className="-ml-3">
+          Start pumping
+        </Button>
       );
     }
     if (a.kind === "form") {
-      return (
+      return big ? (
         <div data-plan-primary>
           <Button size="lg" className="w-full" disabled={busy} onClick={() => openForm(a)} aria-label={a.aria}>
             <Icon name={a.sheet === "pump" ? "milk" : "bottle"} size={19} />
             {a.label}
           </Button>
         </div>
+      ) : (
+        <Button variant="ghost" size="sm" disabled={busy} onClick={() => openForm(a)} aria-label={a.aria} className="-ml-3">
+          {a.label}
+        </Button>
       );
     }
     if (a.kind === "log") {
-      return (
+      return big ? (
         <div data-plan-primary>
-          <Button size="lg" className="w-full" disabled={busy} onClick={() => logOne(a.log)} aria-label={a.log.aria}>
+          <Button size="lg" className="w-full" disabled={busy} onClick={() => act(() => logOne(a.log))} aria-label={a.log.aria}>
             <Icon name="bottle" size={19} />
             {a.log.label}
           </Button>
         </div>
+      ) : (
+        <Button variant="ghost" size="sm" disabled={busy} onClick={() => act(() => logOne(a.log))} aria-label={a.log.aria} className="-ml-3">
+          {a.log.label}
+        </Button>
       );
     }
-    // Formula or breast milk, as the plan says: one tap each, neither the default.
+    // Formula or breast milk, as the plan says or as the family says: one tap each, neither the default.
     return (
-      <div data-plan-primary role="group" aria-label={a.prompt.replace(/:$/, "")}>
-        <p className="mb-1.5 text-[13px] font-medium text-mp-ink-2">{a.prompt}</p>
+      <div data-plan-primary={big || undefined} role="group" aria-label={a.prompt.replace(/:$/, "")}>
+        <p className={cx("mb-1.5 font-medium text-mp-ink-2", big ? "text-[13px]" : "text-[12px]")}>{a.prompt}</p>
         <div className="grid grid-cols-2 gap-2">
           {a.options.map((o) => (
-            <Button key={o.label} size="lg" variant="soft" disabled={busy} onClick={() => logOne(o)} aria-label={o.aria}>
+            <Button key={o.label} size={big ? "lg" : "md"} variant="soft" disabled={busy} onClick={() => act(() => logOne(o))} aria-label={o.aria}>
               {o.label}
             </Button>
           ))}
@@ -262,25 +312,42 @@ export default function NextFeedCard() {
     );
   };
 
-  // The faint footer: the target in the plan's unit, who the plan is from (the care team, when it doesn't say), the next check-in.
-  const footer = [
-    target ? `Aim for ${amountText(target, plan.unit)} a feed` : null,
-    plan.from ? `Plan from ${plan.from}` : "From your care team's plan",
-    plan.check_in ? `Check-in ${checkInText(plan.check_in)}` : null,
-  ].filter((x): x is string => !!x);
-  const fixes = missed.filter((m) => m.fix);
-  // The plan's own turn is "Back to …" while another one is picked here.
+  // The faint line: who the plan is from (the care team, when it doesn't say) and the check-in (was, once it's passed).
+  const today = dayKey(now, tz);
+  const checkIn = plan.check_in
+    ? plan.check_in < today
+      ? `Check-in was ${checkInText(plan.check_in)}`
+      : plan.check_in === today
+        ? "Check-in today"
+        : `Check-in ${checkInText(plan.check_in)}`
+    : null;
+  const footer = chosen ? "Picked on this phone, not the plan's turn" : [plan.from ? `Plan from ${plan.from}` : "From your care team's plan", checkIn].filter(Boolean).join(" · ");
+  // Before a feed: the plan's other feeds (the plan's own turn is "Back to …" while another one is picked here).
   const others = fp.others.filter((f) => !chosen || f.id !== base.focus.feed.id);
+  // During one: the plan's other feeds it might have been instead, when there's something of it to say it on.
+  const wasList = underway && (run || focus.group?.bottles.length) ? feeding(plan).filter((f) => f.id !== focus.feed.id) : [];
+  const canWas = !readOnly && wasList.length > 0 && !(run ?? { entries: focus.group?.bottles ?? [] }).entries.some((e) => e.id < 0);
+  const canOther = !readOnly && !underway && (chosen || others.length > 0);
+
+  // Before a feed: its first step and the action, the rest on one line. The first step is the one with the action.
+  const lead = underway ? -1 : Math.max(0, rows.findIndex((r) => (primary ? r === primary.row : r.state !== "note")));
+  const later = underway ? [] : rows.slice(lead + 1);
+  const laterSteps = later.filter((r) => r.state !== "note").map((r) => lowerFirst(r.text));
+  // "Then pump 15 min; then top up 25–35 ml, …", then the plan's notes ("Burp halfway").
+  const laterWords = [laterSteps.length ? `Then ${laterSteps.join("; then ")}` : null, ...later.filter((r) => r.state === "note").map((r) => r.text)].filter(Boolean).join(" · ");
 
   return (
-    <section data-next-feed aria-label={`${eyebrow}: ${focus.feed.name}`} {...guard.props} className={cx(tone.card, "px-4 pt-2.5 pb-3.5")}>
-      <div className="flex min-h-[32px] items-center justify-between gap-2">
+    <section data-next-feed aria-label={`${eyebrow}: ${focus.feed.name}`} {...guard.props} className={cx(tone.card, "px-4 pt-2.5", canOther || canWas ? "pb-1" : "pb-3.5")}>
+      <div className={cx("flex items-center justify-between gap-2", short ? "min-h-[26px]" : "min-h-[32px]")}>
         <p className="text-[13px] font-semibold tracking-[0.01em] text-mp-ink-2">{eyebrow}</p>
         <button
           type="button"
           onClick={() => nav.openPlan()}
           aria-label="Plan: open the feeding plan"
-          className="-mr-2 inline-flex min-h-[44px] shrink-0 items-center gap-0.5 rounded-xl px-2 text-[14px] font-medium text-mp-accent-fg transition active:bg-mp-ink/5 [@media(max-height:719px)]:-my-1.5"
+          className={cx(
+            "-mr-2 inline-flex min-h-[44px] shrink-0 items-center gap-0.5 rounded-xl px-2 text-[14px] font-medium text-mp-accent-fg transition active:bg-mp-ink/5",
+            short ? "-my-[9px]" : "[@media(max-height:719px)]:-my-1.5"
+          )}
         >
           Plan
           <Icon name="chevron-right" size={15} />
@@ -289,44 +356,85 @@ export default function NextFeedCard() {
       <h3 id="next-feed-title" className="text-[21px] leading-[1.2] font-semibold tracking-[-0.01em] text-mp-ink [overflow-wrap:anywhere]">
         {focus.feed.name}
       </h3>
-      {dueHere && <DueLine due={dueHere} now={now} tz={tz} her={w.him} />}
+      {dueHere && <DueLine due={dueHere} now={now} tz={tz} her={w.him} from={dueFromWords(dueHere, plan, tz)} />}
       {focus.extraNursing && run && (
         <p className="mt-1 text-[13px] leading-snug text-mp-ink-2">
           {w.He} nursed too · {minutesShort(run.min.total)}
         </p>
       )}
 
-      {missed.length > 0 && missedStart !== null && (
-        <div role="group" aria-label="Not logged" className={cx(tone.inset, "mt-3 px-3.5 pt-2.5", readOnly || !fixes.length ? "pb-2.5" : "pb-1")}>
-          <p className="text-[14px] leading-snug text-mp-ink">
-            <span className="font-semibold">{formatTime(missedStart, tz)} feed:</span> {listWords(missed.map((m) => m.what))} not logged
-          </p>
-          {!readOnly && (
-            <div className="-mx-2 flex flex-wrap">
-              {fixes.map((m) =>
-                m.fix!.kind === "form" ? (
-                  <Button key={m.key} variant="ghost" size="sm" disabled={busy} onClick={() => openForm(m.fix as Extract<StepAction, { kind: "form" }>)} aria-label={m.fix!.aria}>
-                    {m.fix!.label}
-                  </Button>
-                ) : m.fix!.kind === "log" ? (
-                  <Button key={m.key} variant="ghost" size="sm" disabled={busy} onClick={() => logOne((m.fix as Extract<StepAction, { kind: "log" }>).log)} aria-label={(m.fix as Extract<StepAction, { kind: "log" }>).log.aria}>
-                    {(m.fix as Extract<StepAction, { kind: "log" }>).log.label}
+      {underway ? (
+        <ol className="mt-3 space-y-3" aria-label={`${focus.feed.name}: steps`}>
+          {rows.map((r) => (
+            <Step
+              key={r.key}
+              row={r}
+              action={r.action && !readOnly ? actionView(r.action, true) : null}
+              secondary={r.secondary && !readOnly ? actionView(r.secondary, false) : null}
+              close={
+                r.close && !readOnly ? (
+                  <Button variant="ghost" size="sm" disabled={busy} onClick={() => act(() => p.closeRow(r.key))} className="-ml-3 font-medium text-mp-ink-2!">
+                    {r.close}
                   </Button>
                 ) : null
-              )}
-              <Button variant="ghost" size="sm" onClick={setAside} aria-label="Got it: set this aside on this phone">
+              }
+            />
+          ))}
+        </ol>
+      ) : (
+        <div className={short ? "mt-2" : "mt-2.5"}>
+          {/*
+            The feed's steps in one short paragraph: the first (the one the action starts) in full, the rest quieter after
+            it. On a very short screen the rest goes under the action, so the action clears the dock.
+          */}
+          <p className="text-[15px] leading-snug text-mp-ink [overflow-wrap:anywhere]">
+            {rows.slice(0, lead + 1).map((r, i) => (
+              <span key={r.key} className={r.state === "note" ? "text-mp-ink-2" : undefined}>
+                {i > 0 ? " · " : ""}
+                {r.text}
+              </span>
+            ))}
+            {laterWords && !(short && primary && !readOnly) && <span className="text-[14px] text-mp-ink-2">{`. ${laterWords}`}</span>}
+          </p>
+          {primary && !readOnly && <div className={short ? "mt-2" : "mt-2.5"}>{actionView(primary.action, true)}</div>}
+          {laterWords && short && primary && !readOnly && <p className="mt-1.5 text-[14px] leading-snug text-mp-ink-2 [overflow-wrap:anywhere]">{laterWords}</p>}
+        </div>
+      )}
+
+      {/*
+        A finished feed's steps nobody logged: one row under the next feed's action (so that stays above the dock), its
+        Fix opening each fix and Got it (set aside on this phone).
+      */}
+      {missed.length > 0 && missedStart !== null && (
+        <div role="group" aria-label="Not logged" className={cx(tone.inset, "mt-3 pl-3.5", readOnly ? "py-2.5 pr-3.5" : "pr-1")}>
+          <div className="flex items-center gap-1">
+            <p className="min-w-0 flex-1 py-1 text-[13px] leading-snug text-mp-ink">
+              <span className="font-semibold">{formatTime(missedStart, tz)} feed:</span> {listWords(missed.map((m) => m.what))} not logged
+            </p>
+            {!readOnly && (
+              <button
+                type="button"
+                aria-expanded={open === "fix"}
+                onClick={() => toggle("fix")}
+                className="inline-flex min-h-[44px] shrink-0 items-center gap-0.5 rounded-xl px-2.5 text-[14px] font-medium text-mp-accent-fg transition active:bg-mp-ink/5"
+              >
+                Fix
+                <Icon name="chevron-right" size={15} className={cx("transition", open === "fix" && "rotate-90")} />
+              </button>
+            )}
+          </div>
+          {!readOnly && open === "fix" && (
+            <div ref={reveal} className={cx("-ml-0.5 flex flex-wrap items-center gap-x-1 pb-1", CLEAR_DOCK)}>
+              {fixes.map((m) => (
+                <span key={m.key}>{actionView(m.fix!, false)}</span>
+              ))}
+              <Button variant="ghost" size="sm" onClick={setAside} aria-label="Got it: set this aside on this phone" className="-ml-1 text-mp-ink-2!">
                 Got it
               </Button>
             </div>
           )}
         </div>
       )}
-
-      <ol className="mt-3 space-y-3" aria-label={`${focus.feed.name}: steps`}>
-        {rows.map((r) => (
-          <Step key={r.key} row={r} action={r.action && !readOnly ? actionView(r.action) : null} />
-        ))}
-      </ol>
 
       {underway && fp.after && (
         <div className="mt-3 border-t border-mp-line pt-2.5 text-[13px] leading-snug text-mp-ink-2">
@@ -337,32 +445,70 @@ export default function NextFeedCard() {
         </div>
       )}
 
-      {!readOnly && !underway && (chosen || others.length > 0) && (
-        <div className="mt-3 border-t border-mp-line pt-1">
-          {chosen && <p className="pt-1.5 text-[13px] leading-snug text-mp-ink-2">Picked on this phone, not the plan&apos;s turn.</p>}
-          {/* The plan's other feeds, one quiet tap each: the card shows that one instead, on this phone. */}
-          <div className="-mx-3 flex flex-wrap" role="group" aria-label="The plan's other feeds">
-            {chosen && (
-              <Button variant="ghost" size="sm" disabled={busy} onClick={() => pickFeed(null)} className="text-left">
-                Back to {base.focus.feed.name}
-              </Button>
-            )}
-            {others.map((f) => (
-              <Button key={f.id} variant="ghost" size="sm" disabled={busy} onClick={() => pickFeed(f.id)} className="text-left">
-                Do {f.name} instead
-              </Button>
-            ))}
-          </div>
+      {/* The card's last line: the plan's other feeds (before one) or which one it was (during one), and the faint line. */}
+      {canOther || canWas ? (
+        <div className={cx("flex items-center gap-3", underway ? "mt-1" : "mt-0.5")}>
+          <button
+            type="button"
+            aria-expanded={open === "other" || open === "was"}
+            onClick={() => toggle(canWas ? "was" : "other")}
+            className="-ml-2 inline-flex min-h-[44px] shrink-0 items-center gap-0.5 rounded-xl px-2 text-[14px] text-mp-ink-2 transition active:bg-mp-ink/5"
+          >
+            {canWas ? `Not ${focus.feed.name}?` : "Other feed"}
+            {!canWas && <Icon name="chevron-right" size={15} className={cx("transition", open === "other" && "rotate-90")} />}
+          </button>
+          <p className="min-w-0 flex-1 text-right text-[12px] leading-snug text-mp-ink-3">{footer}</p>
         </div>
+      ) : (
+        <p className="mt-2 text-[12px] leading-snug text-mp-ink-3">{footer}</p>
       )}
-
-      {footer.length > 0 && <p className="mt-2 text-[12px] leading-snug text-mp-ink-3">{footer.join(" · ")}</p>}
+      {(open === "other" && canOther) || (open === "was" && canWas) ? (
+        <div ref={reveal} role="group" aria-label={open === "was" ? "Which feed it was" : "The plan's other feeds"} className={cx("-mx-2 mb-2 border-t border-mp-line pt-1", CLEAR_DOCK)}>
+          <p className="px-2 pt-1 text-[12px] leading-snug text-mp-ink-2">{open === "was" ? "Which feed was it? Every phone follows." : "Do another feed instead, on this phone:"}</p>
+          {open === "was"
+            ? wasList.map((f) => (
+                <ChooserRow key={f.id} disabled={busy} onClick={() => correct(f)} label={`It was ${f.name}`}>
+                  {f.name}
+                </ChooserRow>
+              ))
+            : [
+                ...(chosen
+                  ? [
+                      <ChooserRow key="back" disabled={busy} onClick={() => pickFeed(null)} label={`Back to ${base.focus.feed.name}`}>
+                        Back to {base.focus.feed.name}
+                      </ChooserRow>,
+                    ]
+                  : []),
+                ...others.map((f) => (
+                  <ChooserRow key={f.id} disabled={busy} onClick={() => pickFeed(f.id)} label={`Do ${f.name} instead`}>
+                    {f.name}
+                  </ChooserRow>
+                )),
+              ]}
+        </div>
+      ) : null}
     </section>
   );
 }
 
-/** When it's due, calm in every state: early quiet, due in the accent, past the window a warm mark, never an alarm. */
-function DueLine({ due, now, tz, her }: { due: PlanDue; now: Date; tz: string; her: string }) {
+/** One feed in a chooser: its name, a 44px row. */
+function ChooserRow({ children, onClick, disabled, label }: { children: ReactNode; onClick: () => void; disabled: boolean; label: string }) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      aria-label={label}
+      className="flex min-h-[44px] w-full items-center gap-2 rounded-xl px-2 text-left text-[15px] text-mp-ink transition active:bg-mp-ink/5 disabled:opacity-40 [overflow-wrap:anywhere]"
+    >
+      <span className="min-w-0 flex-1">{children}</span>
+      <Icon name="chevron-right" size={15} className="shrink-0 text-mp-ink-3" />
+    </button>
+  );
+}
+
+/** When it's due and what that counts from, calm in every state: early quiet, due in the accent, past the window a warm mark, never an alarm. */
+function DueLine({ due, now, tz, her, from }: { due: PlanDue; now: Date; tz: string; her: string; from: string }) {
   const status = dueStatus(due, now);
   const late = status === "late";
   return (
@@ -375,7 +521,11 @@ function DueLine({ due, now, tz, her }: { due: PlanDue; now: Date; tz: string; h
       )}
     >
       <Icon name={DUE_ICON} size={15} strokeWidth={2} className={cx("mt-[2px] shrink-0", late && "mp-kind-ink")} style={late ? { color: KIND_COLOR.feed } : undefined} />
-      <span className="min-w-0">{cardDueWords(due, now, tz, her)}</span>
+      <span className="min-w-0">
+        {cardDueWords(due, now, tz, her)}
+        {/* Past the window it already says how long since the last feed. */}
+        {!late && <span className="font-normal text-mp-ink-2"> · {from}</span>}
+      </span>
     </p>
   );
 }
@@ -393,8 +543,8 @@ function SideDot({ side }: { side: Side }) {
   );
 }
 
-/** One step: its number (a check once logged, a dot while going), the plan's words or what was logged, and its action. */
-function Step({ row, action }: { row: StepRow; action: React.ReactNode }) {
+/** One step: its number (a check once logged, a dot while going), the plan's words or what was logged, and its actions. */
+function Step({ row, action, secondary, close }: { row: PlanRow; action: ReactNode; secondary: ReactNode; close: ReactNode }) {
   if (row.state === "note") return <li className="pl-[34px] text-[14px] leading-snug text-mp-ink-2 [overflow-wrap:anywhere]">{row.text}</li>;
   const done = row.state === "done";
   const going = row.state === "running";
@@ -416,6 +566,13 @@ function Step({ row, action }: { row: StepRow; action: React.ReactNode }) {
             {row.text}
           </p>
           {row.status && <p className={cx("mt-0.5 text-[13px] leading-snug", going ? "font-semibold text-mp-accent-fg" : "text-mp-ink-2")}>{row.status}</p>}
+          {/* Beside the row, small: milk at the breast still to log once the nursing is over; She's done for a short bottle. */}
+          {(secondary || close) && (
+            <div className="-mb-1 flex flex-wrap items-center gap-x-3">
+              {secondary}
+              {close}
+            </div>
+          )}
         </div>
       </div>
       {/* The card's whole width: the biggest thing on it, and room for both sides at 320px. */}
