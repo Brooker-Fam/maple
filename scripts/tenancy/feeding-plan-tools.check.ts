@@ -173,6 +173,44 @@ async function main() {
     eq(planSpeak(wake, w(10, 30)), "Next from the feeding plan: Left, pump the right, waking her by 12:00 PM if she's still asleep.");
   });
 
+  await test("a bottle with no feed named is saved with a plan feed only as the plan itself reads it: never another turn's start, and with no interval too", async () => {
+    type Entry = import("../../src/lib/maple/types").Entry;
+    const { ledBottle, owedPart } = await import("../../src/lib/maple/feeding-plan-mcp");
+    const { zonedTimeToUtc } = await import("../../src/lib/maple/time");
+    const tz = "America/Chicago";
+    const T = (d: number, h: number, m: number) => zonedTimeToUtc(2026, 11, d, h, m, tz);
+    let next = 900;
+    const row = (kind: string, a: Date, b: Date | null, data: Record<string, unknown>) =>
+      ({ id: next++, kind, started_at: a.toISOString(), ended_at: b?.toISOString() ?? null, active: false, note: null, created_by: null, updated_by: null, source: "web", created_at: a.toISOString(), updated_at: a.toISOString(), data }) as unknown as Entry;
+    const target = { min: 50, max: 70 };
+    // The night's feeds taking turns: "Pump + bottle", then "Bottle only". A bottle soon after the first's full bottle is
+    // more of that feed by the plan's reading, so saving it as the next turn's would change what Today says: no plan feed.
+    const turns = parseFeedingPlan(
+      { ...INPUT, night: { ...INPUT.night, feed: undefined, order: ["Pump + bottle", "Bottle only"] }, feeds: [...INPUT.feeds, { name: "Bottle only", steps: [{ do: "bottle", to_target: true, milk: "either" }] }] },
+      null,
+      T(4, 12, 0)
+    );
+    const night = turns.feeds[2].id;
+    const log = [row("pump", T(5, 1, 0), T(5, 1, 20), {}), row("feed", T(5, 1, 25), null, { method: "bottle", amount_ml: 60, milk: "breastmilk", plan: night })];
+    eq(ledBottle(turns, log, T(5, 1, 45), { tz, target, data: { method: "bottle", amount_ml: 20 } }), null, "more of a full night feed: not saved as the next turn's");
+    eq(ledBottle(turns, log, T(5, 4, 25), { tz, target, data: { method: "bottle", amount_ml: 60 } })?.feed.name, "Bottle only", "the next turn, when it's due");
+    // A plan with no interval: a late top-up that finishes its feed still names it, and a bottle feed's next bottle is its.
+    const plain = parseFeedingPlan(
+      {
+        feeds: [
+          { name: "Nurse, top up", steps: [{ do: "nurse", minutes: [8, 12], each_side: true }, { do: "bottle", ml: [25, 35], via: "paced" }] },
+          { name: "Bottle feed", steps: [{ do: "bottle", to_target: true, milk: "breastmilk_first" }] },
+        ],
+      },
+      null,
+      T(5, 0, 0)
+    );
+    const fed = row("feed", T(5, 9, 0), T(5, 9, 20), { method: "breast", segments: [{ side: "L", start: T(5, 9, 0).toISOString(), end: T(5, 9, 20).toISOString() }], plan: plain.feeds[0].id });
+    eq(owedPart(plain, [fed], T(5, 10, 0), { tz, target, atBreast: false, data: { method: "bottle", amount_ml: 30, via: "paced" } })?.id, (fed as { id: number }).id, "the late top-up");
+    const milk = row("feed", T(5, 12, 0), null, { method: "bottle", amount_ml: 30, milk: "breastmilk", plan: plain.feeds[1].id });
+    eq(ledBottle(plain, [fed, milk], T(5, 12, 10), { tz, target, data: { method: "bottle", amount_ml: 25, milk: "formula" } })?.part, "its formula to finish", "the bottle feed's formula to finish");
+  });
+
   for (const shape of ["production", "final"] as Shape[]) {
     await freshDb({ shape });
     const s: Seed = await seedFamilies();

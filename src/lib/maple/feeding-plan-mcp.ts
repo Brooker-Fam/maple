@@ -343,16 +343,17 @@ const milkSaid = (milk: BottleStep["milk"], s: Said) => (milk ? stepText({ do: "
  * Each part of a step an edit changes, in stepText's words with what it was:
  * "nurse 10–15 min (was 12–18 min)", "no nipple shield (was with it)", "25 ml
  * of formula in the SNS (was 20 ml)", "top up 35–45 ml (was 25–35 ml)", "pump
- * 15 min if needed (was every time)". Null when a change in its words isn't
+ * only if needed (was every time)". Null when a change in its words isn't
  * one of these (the read-back then says the whole step as it was and is).
  */
 function stepChanges(a: PlanStep, b: PlanStep, was: Said, now: Said, afterNurse: boolean): string[] | null {
   if (a.do !== b.do) return null;
   const out: string[] = [];
   const changed = (x: string | null, y: string | null) => x !== y;
-  const time = (r: Range | undefined) => (r ? minutesRangeText(r) : "no time given");
+  const time = (r: Range | undefined) => (r ? minutesRangeText(r) : "with no time given");
   if (a.do === "nurse" && b.do === "nurse") {
-    const length = (s: NurseStep) => `${time(s.minutes)}${s.each_side ? " each side" : ""}`;
+    // As stepText says it: "10–15 min each side", "on each side" with no time given.
+    const length = (s: NurseStep) => (s.minutes ? `${minutesRangeText(s.minutes)}${s.each_side ? " each side" : ""}` : s.each_side ? "on each side" : time(undefined));
     if (changed(length(a), length(b))) out.push(`nurse ${length(b)} (was ${length(a)})`);
     const side = (s: NurseStep) => (s.side ? `on the ${s.side === "L" ? "left" : "right"}` : "either side");
     if (changed(side(a), side(b))) out.push(`${side(b)} (was ${side(a)})`);
@@ -845,8 +846,10 @@ export function owedPart(
   const id = newestNursingId(run);
   if (id == null) return null;
   if (opts.data) {
+    // Read with the bottle and no link, it's part of this very feed (a bottle on its own never reads as a nursing feed,
+    // so the same plan feed with its anchor unknown is this one).
     const home = probeHome(read([...before, probeBottle(at, { ...opts.data, ...(opts.tag ? { plan: opts.tag } : {}) })]));
-    if (!home || home.feed.id !== view.feed.id || home.anchor !== view.group!.anchor) return null;
+    if (!home || home.feed.id !== view.feed.id || (home.anchor !== null && home.anchor !== view.group!.anchor)) return null;
   }
   return { id, view, part: breast && (opts.atBreast || !bottle) ? "milk at the breast" : "top-up" };
 }
@@ -954,15 +957,17 @@ function probeBottle(at: Date, data: Record<string, unknown>): EntryOf<"feed"> {
  * The feed the would-be bottle is read as part of: its plan feed and what it
  * counts from (PlanGroup.anchor: a bottle feed's first bottle, a nursing
  * feed's nursing), which tells one feed from another of the same plan feed;
- * null when no reading shows it.
+ * null when no reading shows it. A feed the bottle finished is shown nowhere:
+ * it's the plan's last feed (relatch), whose anchor is what the next feed is
+ * due from, or null (unknown) with no interval in the plan.
  */
-function probeHome(n: FeedPlanNow): { feed: PlanFeed; anchor: number } | null {
+function probeHome(n: FeedPlanNow): { feed: PlanFeed; anchor: number | null } | null {
   const holds = (v: PlanFeedView) => !!v.group && [...v.group.bottles, ...(v.group.run?.topUps ?? [])].some((b) => b.id === PROBE_ID);
   if (n.focus.state === "underway" && holds(n.focus)) return { feed: n.focus.feed, anchor: n.focus.group!.anchor };
   if (n.missed && holds(n.missed.view)) return { feed: n.missed.view.feed, anchor: n.missed.view.group!.anchor };
-  // Done with it, so nothing shows it: the plan's last feed, which the next one counts from.
-  if (n.relatch && n.due?.for === "focus") return { feed: n.relatch.feed, anchor: n.due.base };
-  return null;
+  if (!n.relatch) return null;
+  if (n.due?.for === "focus") return { feed: n.relatch.feed, anchor: n.due.base };
+  return n.due ? null : { feed: n.relatch.feed, anchor: null };
 }
 
 /**
@@ -1008,10 +1013,13 @@ export function ledBottle(plan: FeedingPlan, entries: readonly Entry[], at: Date
     const home = probeHome(tagged);
     if (!home || home.feed.id !== t.view.feed.id) continue;
     // More of that very feed (underway, missed), or the start of it: after its pump (underway), or on its own (begins).
-    const joined = !!t.view.group && home.anchor === t.view.group.anchor;
-    const first = !t.view.group && home.anchor === atMs;
+    // A feed underway always takes the bottle it still wants, so with no interval to tell (the anchor unknown) it's that.
+    const anchor = home.anchor ?? (t.how === "underway" ? (t.view.group?.anchor ?? atMs) : null);
+    if (anchor === null) continue;
+    const joined = !!t.view.group && anchor === t.view.group.anchor;
+    const first = !t.view.group && anchor === atMs;
     if (!joined && !first) continue;
-    return { feed: t.view.feed, how: t.how, first, start: home.anchor, part: ledPartWords(t.step) };
+    return { feed: t.view.feed, how: t.how, first, start: anchor, part: ledPartWords(t.step) };
   }
   return null;
 }
