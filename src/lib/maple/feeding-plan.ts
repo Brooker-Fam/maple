@@ -5,8 +5,8 @@
  * shows it as written and never makes up a number: every amount, minute and
  * interval here came from the family.
  *
- * A plan names a few kinds of feed (`feeds`: "Shield + syringe", "Bare breast
- * + top-up", "Night: pump + bottle"), each a short list of steps (nurse, pump,
+ * A plan names a few kinds of feed (`feeds`: "Nurse + SNS", "Nurse, top
+ * up", "Pump + bottle"), each a short list of steps (nurse, pump,
  * bottle, a note), how often to feed by day and, optionally, at night (its
  * own window, interval and feed), and the order day feeds take turns in.
  *
@@ -80,7 +80,7 @@ export type FeedingPlan = {
   unit: PlanUnit;
   /** Start to start, in minutes. No `every`: when she's hungry. wake: wake her by the end of the window. */
   day: { every?: Range; wake?: boolean };
-  /** Night, from–to on the family's clock ("22:00"–"06:00"), with its own interval and feed (else the day's). */
+  /** Night, from–to on the family's clock ("23:00"–"05:00"), with its own interval and feed (else the day's). */
   night?: { from: string; to: string; every?: Range; wake?: boolean; feed?: string };
   feeds: PlanFeed[];
   /** The day feeds' turns, by id (one id: every day feed is that one). */
