@@ -144,11 +144,16 @@ export function usePhones() {
 
 /**
  * The alerts in the given tiers. Nudges are dismissed per occurrence (a feed-gap
- * nudge comes back after the next feed), on this phone only.
+ * nudge comes back after the next feed), on this phone only. `compact`: tiers
+ * shown folded to one line each (who to call and what it's about), each
+ * opening to its full card on a tap: Today with the feeding plan's card puts
+ * call-today warnings above it this way, so the card's action stays on screen.
  */
-export default function AlertStack({ tiers, onNavigate }: { tiers: AlertTier[]; onNavigate: (t: TabId) => void }) {
+export default function AlertStack({ tiers, onNavigate, compact = [] }: { tiers: AlertTier[]; onNavigate: (t: TabId) => void; compact?: AlertTier[] }) {
   const { summary, state, now } = useMaple();
   const [handled, setHandled] = useState<Set<string>>(() => new Set());
+  // Folded alerts opened on this page, by id.
+  const [unfolded, setUnfolded] = useState<Set<string>>(() => new Set());
   const [nudges, setNudges] = useState<Record<string, number>>({});
   useEffect(() => setNudges(readNudges()), []);
   if (!summary || !state) return null;
@@ -182,17 +187,53 @@ export default function AlertStack({ tiers, onNavigate }: { tiers: AlertTier[]; 
   return (
     <div className="space-y-3">
       <AnimatePresence initial={false}>
-        {shown.map((a) => (
-          <AlertCard
-            key={a.id}
-            alert={a}
-            onHandled={() => setHandled((h) => new Set(h).add(a.id))}
-            onDismissNudge={() => dismissNudge(a)}
-            onNavigate={onNavigate}
-          />
-        ))}
+        {shown.map((a) =>
+          compact.includes(a.tier) && !unfolded.has(a.id) ? (
+            <FoldedAlert key={a.id} alert={a} onOpen={() => setUnfolded((u) => new Set(u).add(a.id))} />
+          ) : (
+            <AlertCard
+              key={a.id}
+              alert={a}
+              onHandled={() => setHandled((h) => new Set(h).add(a.id))}
+              onDismissNudge={() => dismissNudge(a)}
+              onNavigate={onNavigate}
+            />
+          )
+        )}
       </AnimatePresence>
     </div>
+  );
+}
+
+/**
+ * An alert folded to one line in its tier's look: who to call and what it's about ("Call your pediatrician today: 4
+ * wet diapers in the last 24 hours", the title alone when it already says who), cut to the line with the whole of it
+ * in its name; a tap opens its full card (the numbers, We called).
+ */
+function FoldedAlert({ alert, onOpen }: { alert: Alert; onOpen: () => void }) {
+  const st = STYLE[alert.tier];
+  const words = /\bcall\b/i.test(alert.title) ? alert.title : `${TIER_LABEL[alert.tier]}: ${alert.title}`;
+  return (
+    <motion.section
+      layout
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, height: 0, marginTop: 0, marginBottom: 0 }}
+      role="alert"
+      className={cx("overflow-hidden rounded-[20px] border", st.card)}
+    >
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-expanded={false}
+        aria-label={`${words}. Show all of it`}
+        className="flex min-h-[48px] w-full items-center gap-2 px-4 py-2 text-left transition active:bg-mp-ink/5"
+      >
+        <Icon name={st.icon} size={16} strokeWidth={2} className={cx("shrink-0", st.mark)} />
+        <span className={cx("min-w-0 flex-1 truncate text-[14px] leading-snug font-semibold", st.ink)}>{words}</span>
+        <Icon name="chevron-down" size={16} className={cx("shrink-0", st.mark)} />
+      </button>
+    </motion.section>
   );
 }
 

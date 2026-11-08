@@ -3,15 +3,19 @@
  * against the log (feedPlanNow): each step's row at each state of a feed (upcoming, on the breast, off it with the
  * milk at the breast not logged, pumping, a bottle short of what it's up to), which row carries the one action (the
  * next physical step), a row's second link and its close ("She's done"), the bottle form's presets (milk and amount
- * said outright, null where the plan leaves them open), and what a finished feed left unlogged (missedItems).
- * Setting a row aside with "She's done" is the card's, on one phone: the engine never hears of it.
+ * said outright, null where the plan leaves them open), and what a finished feed left unlogged (missedItems). Then
+ * what Today takes from that with this phone's memory (planReading: the dock's Bottle, its word, the missed line's
+ * name for its feed), and the card's own words (a feed's base, numbers kept with their units). Setting a row aside
+ * with "She's done" is the card's, on one phone: the engine never hears of it.
  *
  *   npx tsx scripts/maple-feeding-plan-card-check.ts   (part of pnpm check:maple-feeding-plan)
  *
  * The plans here are invented examples, not any family's. One PASS/FAIL line per case, exit 1 on any failure.
  * Times are wall clock in America/New_York.
  */
-import { missedItems, stepRows, type StepAction, type StepRow } from "../src/components/maple/feeding/nextFeed";
+import { dueFromWords } from "../src/components/maple/feeding/NextFeedCard";
+import { keepTogether, missedItems, namedAt, nursedOnly, stepRows, type StepAction, type StepRow } from "../src/components/maple/feeding/nextFeed";
+import { planReading } from "../src/components/maple/feeding/usePlanNow";
 import { pause, startBreast, stopBreast, switchTo } from "../src/lib/maple/feed";
 import { bottleNeed, feedPlanNow, parseFeedingPlan, type BottleStep, type FeedingPlan } from "../src/lib/maple/feeding-plan";
 import { zonedTimeToUtc } from "../src/lib/maple/time";
@@ -68,13 +72,15 @@ const base = (kind: Entry["kind"], start: string, end: string | null, active: bo
 
 /**
  * A nursing timer built with the app's own taps (feed.ts): "L 08:00-08:12, R 08:12-" (an open last side: she's
- * still on; a gap between sides is a Pause, then back on). `paused`: the last side closed, the timer still going.
+ * still on; a gap between sides is a Pause, then back on), "L +1 00:30-00:50" the day after. `paused`: the last side
+ * closed, the timer still going.
  */
 function nurse(spec: string, extra: Partial<FeedData> = {}, opts: { paused?: boolean } = {}): EntryOf<"feed"> {
   const parts = spec.split(",").map((x) => {
-    const [side, r] = x.trim().split(/\s+/);
-    const [a, b] = r.split("-");
-    return { side: side as Side, a: D(a), b: b ? D(b) : null };
+    const [side, ...rest] = x.trim().split(/\s+/);
+    const day = rest.length > 1 ? `${rest[0]} ` : "";
+    const [a, b] = rest[rest.length - 1].split("-");
+    return { side: side as Side, a: D(day + a), b: b ? D(day + b) : null };
   });
   let data = startBreast(parts[0].side, parts[0].a);
   let end = parts[0].b;
@@ -150,7 +156,9 @@ const SHE = { Hes: "She's" };
 const shape = (rows: StepRow[]) => rows.map((r) => [r.state, r.text, r.status]);
 /** Which rows carry an action, a second link and a close. */
 const carry = (rows: StepRow[]) => rows.map((r) => [r.action?.kind ?? null, r.secondary?.kind ?? null, r.close]);
-const form = (a: StepAction | null) => (a?.kind === "form" ? { label: a.label, aria: a.aria, preset: a.preset } : a);
+const form = (a: StepAction | null) => (a?.kind === "form" ? { label: a.label, aria: a.aria, preset: a.preset, ...(a.hint ? { hint: a.hint } : {}) } : a);
+/** What Today takes from the plan now, with nothing set aside on this phone. */
+const reading = (fp: ReturnType<typeof at>, when: string) => planReading(fp, { now: D(when), tz: TZ, words: SHE });
 
 // The evening before the night: an SNS feed from the plan at 8:30 PM, its milk, its pump.
 const evening = () => [nurse("L 20:30-20:45", { plan: SNS.id }), bottle("20:44", 20, { via: "sns", milk: "formula", plan: SNS.id }), pump("20:50-21:05")];
@@ -168,7 +176,8 @@ check("upcoming: the plan's words, numbered; the first step carries the action a
   const night = at(PLAN, [], "09:00", { choose: NIGHT.id });
   const n = stepRows(night, night.focus, SHE);
   eq(shape(n), [["todo", "Pump 20 min", null], ["todo", "Bottle up to 50–70 ml, pumped milk first, then formula to finish", null], ["note", "Burp halfway", null]]);
-  eq([n.map((r) => r.n), carry(n)], [[1, 2, null], [["pump", null, null], [null, null, null], [null, null, null]]]);
+  // Its bottle beside its row, for whoever gives it (one parent pumps while the other gives the bottle).
+  eq([n.map((r) => r.n), carry(n)], [[1, 2, null], [["pump", null, null], [null, "form", null], [null, null, null]]]);
   eq([night.focus.steps.map((s) => s.need), night.focus.steps[1].status], [[null, { min: 50, max: 70 }, null], "todo"], "need: the target, before any bottle");
 });
 
@@ -253,7 +262,14 @@ check("a running pump leaves a bottle its action: one parent pumps while the oth
   let rows = stepRows(fp, fp.focus, SHE);
   eq([fp.focus.state, fp.focus.feed.id, shape(rows).slice(0, 2)], ["underway", NIGHT.id, [["running", "Pump 20 min", "Pumping now · 10m"], ["todo", "Bottle up to 50–70 ml, pumped milk first, then formula to finish", null]]]);
   eq(carry(rows), [[null, null, null], ["form", null, null], [null, null, null]]);
-  eq(form(rows[1].action), { label: "Log bottle", aria: "Log bottle: opens the bottle form", preset: { method: "bottle", amount_ml: 50, milk: "breastmilk", plan: NIGHT.id } }, "pumped milk first: breast milk, never the last bottle's milk");
+  // Pumped milk first: breast milk, never the last bottle's milk; how much was pumped is the family's to say, so no
+  // amount, and the hint says what the whole bottle is up to.
+  eq(form(rows[1].action), {
+    label: "Log bottle",
+    aria: "Log bottle: up to 50–70 ml in all, opens the bottle form",
+    preset: { method: "bottle", amount_ml: null, milk: "breastmilk", plan: NIGHT.id },
+    hint: "Up to 50–70 ml in all",
+  });
   // By day: off the breast, pumping, the top-up is next for whoever gives it.
   const fed = nurse("L 10:40-10:50, R 10:50-11:00", { plan: TOPUP.id });
   fp = at(PLAN, [fed, pump("11:01-")], "11:05");
@@ -519,6 +535,170 @@ check("in ounces: what's given, what it's up to and the rest, in the plan's unit
   const rows = stepRows(fp, fp.focus, SHE);
   eq(shape(rows)[1], ["todo", "Bottle up to 2–3 oz, pumped milk first, then formula to finish", "Gave 1 oz · up to 2–3 oz"]);
   eq(form(rows[1].action), { label: "Log formula to finish", aria: "Log formula to finish: 1 oz, opens the bottle form", preset: { method: "bottle", amount_ml: 29.5, milk: "formula", plan: oz.feeds[0].id } });
+});
+
+// ── the night's bottle before its pump ───────────────────────────────────
+
+/** The night's first feed, all logged: pump 11:20–11:40 PM, 55 ml of pumped milk at 11:45 and 10 ml of formula at 11:55. */
+const firstNight = () => [
+  ...evening(),
+  pump("23:20-23:40"),
+  bottle("23:45", 55, { milk: "breastmilk", plan: NIGHT.id }),
+  bottle("23:55", 10, { milk: "formula", plan: NIGHT.id }),
+];
+/** The night bottle's preset before anything's given: breast milk, no amount, the night feed. */
+const NIGHT_BOTTLE = () => ({
+  label: "Log bottle",
+  aria: "Log bottle: up to 50–70 ml in all, opens the bottle form",
+  preset: { method: "bottle", amount_ml: null, milk: "breastmilk", plan: NIGHT.id },
+  hint: "Up to 50–70 ml in all",
+});
+
+check("the night's bottle before its pump: a quiet second action once the feed is close, for whoever gives it; the dock opens the same", () => {
+  // Due at 2:45 AM (3 h after the 11:45 PM bottle). An hour and a quarter before, only Start pumping.
+  const early = at(PLAN, firstNight(), "+1 01:30");
+  eq([early.focus.state, early.focus.feed.id, early.due?.for], ["upcoming", NIGHT.id, "focus"]);
+  eq(carry(stepRows(early, early.focus, SHE, undefined, D("+1 01:30"))), [["pump", null, null], [null, null, null], [null, null, null]], "too early for the bottle");
+  eq(reading(early, "+1 01:30").bottle, null, "the dock's Bottle is a plain one");
+  // Forty minutes before (as a pump that early begins the feed): the bottle beside its row, and the dock opens it.
+  const close = at(PLAN, firstNight(), "+1 02:05");
+  const rows = stepRows(close, close.focus, SHE, undefined, D("+1 02:05"));
+  eq(carry(rows), [["pump", null, null], [null, "form", null], [null, null, null]]);
+  eq(form(rows[1].secondary), NIGHT_BOTTLE());
+  const r = reading(close, "+1 02:05");
+  eq([r.primary?.action.kind, r.bottle?.word, r.bottle?.primary, r.bottle?.preset], ["pump", "Night feed", false, NIGHT_BOTTLE().preset], "not the next step: whose bottle it is");
+  // Given first, short of the target (the pump still to start): Start pumping stays the big button, the rest beside the row.
+  const given = at(PLAN, [...firstNight(), bottle("+1 02:40", 40, { milk: "breastmilk" })], "+1 02:42");
+  eq([given.focus.state, given.focus.feed.id], ["underway", NIGHT.id]);
+  const g = stepRows(given, given.focus, SHE, undefined, D("+1 02:42"));
+  eq([shape(g)[1], carry(g)], [["todo", "Bottle up to 50–70 ml, pumped milk first, then formula to finish", "Gave 40 ml · up to 50–70 ml"], [["pump", null, null], [null, "form", "She's done"], [null, null, null]]]);
+  eq(form(g[1].secondary), { label: "Log formula to finish", aria: "Log formula to finish: 10 ml, opens the bottle form", preset: { method: "bottle", amount_ml: 10, milk: "formula", plan: NIGHT.id } });
+  eq([reading(given, "+1 02:42").bottle?.word, reading(given, "+1 02:42").bottle?.preset.amount_ml], ["Night feed", 10]);
+  // The pump running: the bottle is the next step, the dock's "Next step".
+  const pumping = at(PLAN, [...firstNight(), pump("+1 02:40-")], "+1 02:45");
+  eq([reading(pumping, "+1 02:45").bottle?.word, reading(pumping, "+1 02:45").bottle?.primary], ["Next step", true]);
+});
+
+check("a bottle feed left short: the dock opens the missed line's fix, at its last bottle, for 90 minutes; the line names it by its bottle, not its pump", () => {
+  const given = bottle("23:45", 40, { milk: "breastmilk", plan: NIGHT.id });
+  const log = [...evening(), pump("23:20-23:40"), given];
+  const fp = at(PLAN, log, "+1 00:40");
+  const r = reading(fp, "+1 00:40");
+  eq([r.missed.map((m) => m.what), r.missedName, fp.missed?.view.start], [["formula to finish"], Date.parse(T("23:45")), Date.parse(T("23:20"))], "named by its first bottle; kept by its start");
+  eq([r.bottle?.word, r.bottle?.primary, r.bottle?.preset], ["11:45 PM feed", false, { method: "bottle", amount_ml: 10, milk: "formula", plan: NIGHT.id, started_at: given.started_at }]);
+  // An hour and a half after its last bottle: the missed line still says so, the dock's Bottle is a plain one again.
+  const late = at(PLAN, log, "+1 01:20");
+  eq([reading(late, "+1 01:20").missed.length, reading(late, "+1 01:20").bottle], [1, null]);
+});
+
+// ── she only nursed, in the night feed's place ───────────────────────────
+
+check("she only nursed in a plan feed with no nursing: the plan's words, nothing to do, nothing owed", () => {
+  // The night's first feed all logged, then she nursed 12:30–12:50 AM (from the dock): the night feed's place, nursed.
+  const log = [...firstNight(), nurse("L +1 00:30-00:50")];
+  const fp = at(PLAN, log, "+1 01:00");
+  eq([fp.focus.feed.id, nursedOnly(fp.focus)], [NIGHT.id, true]);
+  const rows = stepRows(fp, fp.focus, SHE, undefined, D("+1 01:00"));
+  eq(shape(rows), [["todo", "Pump 20 min", null], ["todo", "Bottle up to 50–70 ml, pumped milk first, then formula to finish", null], ["note", "Burp halfway", null]]);
+  eq(carry(rows), [[null, null, null], [null, null, null], [null, null, null]]);
+  const r = reading(fp, "+1 01:00");
+  eq([r.primary, r.bottle, r.nurseNext], [null, null, false]);
+  // Later, nothing of it is "not logged".
+  const later = at(PLAN, log, "+1 01:45");
+  eq([missedItems(later), reading(later, "+1 01:45").missed, reading(later, "+1 01:45").bottle], [[], [], null]);
+  // The engine's word decides once it says (PlanFeedView.nursedOnly beside .named).
+  const said = { ...fp, focus: { ...fp.focus, named: Date.parse(T("+1 00:30")), nursedOnly: false } };
+  eq([nursedOnly(said.focus), carry(stepRows(said, said.focus, SHE))[0][0]], [false, "pump"]);
+  eq(nursedOnly({ ...fp.focus, named: Date.parse(T("+1 00:30")), nursedOnly: true }), true);
+  // Nursing with the night's bottle given isn't only nursing: she nursed too, the rest to do.
+  const both = at(PLAN, [...evening(), bottle("23:20", 30, { milk: "breastmilk", plan: NIGHT.id }), nurse("L 23:30-23:45")], "23:50");
+  eq([both.focus.feed.id, both.focus.extraNursing, nursedOnly(both.focus)], [NIGHT.id, true, false]);
+});
+
+// ── one name per feed ────────────────────────────────────────────────────
+
+check("a feed is named by its first nursing or bottle, never a pump begun before it, through a re-latch too", () => {
+  // The night's: pumped from 11:20, its bottle at 11:45: the 11:45 PM feed.
+  const night = at(PLAN, [...evening(), pump("23:20-23:40"), bottle("23:45", 40, { milk: "breastmilk", plan: NIGHT.id })], "23:50");
+  eq([night.focus.start, namedAt(night.focus)], [Date.parse(T("23:20")), Date.parse(T("23:45"))]);
+  // Pumping, no bottle yet: nothing to name it by.
+  eq(namedAt(at(PLAN, [...evening(), pump("23:20-")], "23:30").focus), null);
+  // A top-up feed she latched again for, 20 minutes after: one feed, named by its first nursing; its top-up still names
+  // the newest nursing (the one it tops up), and the form is told the feed's name.
+  const fed = nurse("L 10:40-10:50, R 10:50-11:00", { plan: TOPUP.id });
+  const again = nurse("L 11:20-11:28");
+  const fp = at(PLAN, [fed, again], "11:40");
+  eq([fp.focus.feed.id, namedAt(fp.focus)], [TOPUP.id, Date.parse(T("10:40"))]);
+  const r = reading(fp, "11:40");
+  eq(r.bottle?.preset, { method: "bottle", amount_ml: 25, milk: null, via: "paced", plan: TOPUP.id, top_up_of: again.id, feed_at: T("10:40") });
+  // Left unlogged, the line names it the same way.
+  const missed = reading(at(PLAN, [fed, again], "12:30"), "12:30");
+  eq([missed.missed.map((m) => m.what), missed.missedName], [["top-up"], Date.parse(T("10:40"))]);
+});
+
+check("the due line's base: a feed's start, the night's pump before its bottle, or when the feed underway was due", () => {
+  // The night feed is due at 11:30 PM (3 h after the 8:30 PM feed). Pumping from 11:40, no bottle yet: the feed after
+  // counts from the pump.
+  const pumping = at(PLAN, [...evening(), pump("23:40-")], "23:45");
+  eq([pumping.focus.start, namedAt(pumping.focus), pumping.due?.for, pumping.due?.base], [Date.parse(T("23:40")), null, "after", Date.parse(T("23:40"))]);
+  eq(plain(dueFromWords(pumping.due!, PLAN, TZ, "pump")), "3 h after the 11:40 PM pump");
+  // Pumping early, from 11:20: it counts from when this one was due.
+  const early = at(PLAN, [...evening(), pump("23:20-")], "23:30");
+  eq([early.focus.start, early.due?.base], [Date.parse(T("23:20")), Date.parse(T("23:30"))]);
+  eq(plain(dueFromWords(early.due!, PLAN, TZ, "time")), "3 h after 11:30 PM, when this one was due");
+  // Its bottle in: the feed's start, as every feed's.
+  const bottled = at(PLAN, [...evening(), pump("23:40-"), bottle("23:50", 40, { milk: "breastmilk", plan: NIGHT.id })], "23:55");
+  eq(plain(dueFromWords(bottled.due!, PLAN, TZ)), "3 h after the 11:50 PM feed");
+});
+
+// ── a feed's parts and their plan feed ───────────────────────────────────
+
+check("a feed's parts name the plan feed only when the log or the family said it: never for one Maple took for the order's turn", () => {
+  // From the dock, untagged, on Nurse + SNS's turn: the plan's SNS milk, tied to the feed, with no plan feed.
+  const dock = nurse("L 09:00-");
+  let fp = at(PLAN, [dock], "09:05");
+  eq([fp.focus.feed.id, fp.focus.why], [SNS.id, "order"]);
+  const log = stepRows(fp, fp.focus, SHE)[0].action;
+  eq(log?.kind === "log" ? log.log.data : log, { method: "bottle", amount_ml: 20, milk: "formula", via: "sns", top_up_of: dock.id });
+  // Started from the card (tagged): the plan's feed too.
+  const card = nurse("L 09:00-", { plan: SNS.id });
+  fp = at(PLAN, [card], "09:05");
+  const tagged = stepRows(fp, fp.focus, SHE)[0].action;
+  eq(tagged?.kind === "log" ? tagged.log.data : tagged, { method: "bottle", amount_ml: 20, milk: "formula", via: "sns", plan: SNS.id, top_up_of: card.id });
+  // A top-up on the order's turn, and a top-up nobody logged: tied to the feed, no plan feed.
+  const sns = [nurse("L 06:00-06:15", { plan: SNS.id }), bottle("06:10", 20, { via: "sns", milk: "formula", plan: SNS.id }), pump("06:20-06:35")];
+  const fed = nurse("L 09:00-09:10, R 09:10-09:20");
+  fp = at(PLAN, [...sns, fed], "09:25");
+  eq([fp.focus.feed.id, fp.focus.why], [TOPUP.id, "order"]);
+  eq(form(stepRows(fp, fp.focus, SHE)[1].action), { label: "Log top-up", aria: "Log top-up: opens the bottle form", preset: { method: "bottle", amount_ml: 25, milk: null, via: "paced", top_up_of: fed.id } });
+  eq(form(missedItems(at(PLAN, [...sns, fed], "10:30"))[0].fix), { label: "Log top-up", aria: "Log top-up: opens the bottle form", preset: { method: "bottle", amount_ml: 25, milk: null, via: "paced", top_up_of: fed.id } });
+  // A bottle feed's own bottle keeps the plan feed (the night's second bottle joins its first by it).
+  eq(form(stepRows(at(PLAN, [...evening(), pump("23:20-")], "23:30"))[1].action)?.preset, { method: "bottle", amount_ml: null, milk: "breastmilk", plan: NIGHT.id });
+});
+
+// ── the card's words ─────────────────────────────────────────────────────
+
+check("milk counted on a nursing step says how it was given: in the SNS, by bottle, or both", () => {
+  const fed = nurse("L 08:00-08:15", { plan: SNS.id });
+  // Logged as a plain bottle with the feed (the dock's form, Siri): its milk, by bottle.
+  let fp = at(PLAN, [fed, bottle("08:20", 20, { milk: "formula", top_up_of: fed.id })], "08:22");
+  eq(shape(stepRows(fp, fp.focus, SHE))[0], ["done", "Nursed 15m · 20 ml by bottle", null]);
+  // Some in the SNS, some by bottle.
+  fp = at(PLAN, [fed, bottle("08:10", 10, { via: "sns", milk: "formula", plan: SNS.id, top_up_of: fed.id }), bottle("08:20", 20, { milk: "formula", top_up_of: fed.id })], "08:22");
+  eq(shape(stepRows(fp, fp.focus, SHE))[0], ["done", "Nursed 15m · 10 ml in the SNS + 20 ml by bottle", null]);
+  // While she's on.
+  const on = nurse("L 08:00-", { plan: SNS.id });
+  fp = at(PLAN, [on, bottle("08:05", 20, { milk: "formula", top_up_of: on.id })], "08:08");
+  eq(stepRows(fp, fp.focus, SHE)[0].status, "Nursing now · 8m · 20 ml by bottle");
+});
+
+check("numbers keep their units on one line: each amount, minutes and hours whole", () => {
+  const keep = (t: string) => keepTogether(t).filter((p) => p.keep).map((p) => p.text);
+  eq(keep("Nurse 12–18 min, 20 ml of formula in the SNS"), ["12–18 min", "20 ml"]);
+  eq(keep("2.5–3.5 h after the 8:00 AM feed"), ["2.5–3.5 h"]);
+  eq(keep("Gave 0.68 oz · up to 2–3 oz, in 1h 05m"), ["0.68 oz", "2–3 oz", "1h 05m"]);
+  eq(keepTogether("Nursed 15m · 20 ml by bottle").map((p) => p.text).join(""), "Nursed 15m · 20 ml by bottle", "the words don't change");
+  eq(keep("Burp halfway"), []);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

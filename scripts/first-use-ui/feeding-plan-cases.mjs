@@ -312,7 +312,7 @@ export function feedingPlanCases({ fixture, freshState, record, writes, assert }
       }
     }],
 
-    ["Feeding plan: a night feed starts with the pump, and then its bottle is next", async () => {
+    ["Feeding plan: a night feed starts with the pump, its bottle a quiet second action for whoever gives it, then its bottle is next", async () => {
       const s = server();
       const evening = [nursing(71, 28, [["L", "20:30", "20:45"]], { plan: "p1f1" }), bottle(72, 28, "20:44", 20, { via: "sns", milk: "formula" }), pump(73, 28, "20:50", "21:05")];
       const f = await fixture({ state: planned({ now: at(28, "23:10"), entries: evening }), apiResponse: s.apiResponse, entryResponse: s.entryResponse });
@@ -325,17 +325,38 @@ export function feedingPlanCases({ fixture, freshState, record, writes, assert }
         // No sex set: the baby's name stands in for the pronoun.
         assert.match(text, /Wake River for it at 11:30 PM, in 20m/);
         assert.match(text, /Burp halfway/);
-        await c.getByRole("button", { name: "Start pumping", exact: true }).click();
+        // One parent pumps while the other gives the bottle: either can start. The bottle is a quiet link under Start
+        // pumping, and the dock's Bottle opens the same form, saying whose bottle it is (not the next step).
+        const start = c.getByRole("button", { name: "Start pumping", exact: true });
+        const quiet = c.getByRole("button", { name: /^Log bottle: up to 50–70 ml in all/ });
+        const [startBox, quietBox] = await Promise.all([start.boundingBox(), quiet.boundingBox()]);
+        assert(startBox && quietBox && quietBox.y >= startBox.y + startBox.height - 1, "Log bottle sits under Start pumping");
+        assert.equal(await c.locator("[data-plan-primary]").getByRole("button").count(), 1, "one big button");
+        const tile = f.page.getByRole("region", { name: "Log something", exact: true }).getByRole("button", { name: /^Bottle: Log bottle/ });
+        assert.equal((await tile.textContent()).replace(/[  ]/g, " "), "BottleNight feed");
+        assert.doesNotMatch(await tile.getAttribute("aria-label"), /next step/);
+        await quiet.click();
+        const bottleForm = f.page.getByRole("dialog", { name: "Feed", exact: true });
+        await bottleForm.waitFor();
+        assert.equal(await bottleForm.getByRole("textbox", { name: "millilitres", exact: true }).inputValue(), "", "how much was pumped is the family's to say");
+        assert.equal(await bottleForm.getByRole("region", { name: "Milk" }).getByRole("button", { name: "Breast milk", exact: true }).getAttribute("aria-pressed"), "true", "pumped milk first");
+        assert.match((await bottleForm.textContent()).replace(/[  ]/g, " "), /Target from your care team: 50–70 ml a feed/);
+        await bottleForm.getByRole("button", { name: "Close", exact: true }).click();
+        await bottleForm.waitFor({ state: "hidden" });
+        await f.page.waitForFunction(() => !document.querySelector("[data-taps-held]"));
+        await start.click();
         // The start moves the page under the thumb (its timer card comes in above): Today's taps wait out the cooldown.
         assert.equal(await f.page.locator("[data-today-page][data-taps-held]").count(), 1, "the start holds Today's taps for a moment");
         await waitFor(f, () => s.timer.length > 0, "the pump start");
         assert.deepEqual({ ...s.timer[0], client_id: undefined }, { action: "start", kind: "pump", client_id: undefined });
         await c.getByText("Pumping now", { exact: false }).waitFor();
+        // While the pump runs before any bottle, the next feed counts from the pump, and says so.
+        assert.match((await c.textContent()).replace(/[  ]/g, " "), /Then the night feed: Pump \+ bottle.*Wake River for it at 2:30 AM, in 3h 20m · 3 h after 11:30 PM, when this one was due/, "pumped early: it counts from when this one was due");
         await f.page.waitForFunction(() => !document.querySelector("[data-taps-held]"));
         await c.getByRole("button", { name: /^Log bottle/ }).click();
         const form = f.page.getByRole("dialog", { name: "Feed", exact: true });
         await form.waitFor();
-        assert.equal(await form.getByRole("textbox", { name: "millilitres", exact: true }).inputValue(), "50", "up to the target: its smaller amount");
+        assert.equal(await form.getByRole("textbox", { name: "millilitres", exact: true }).inputValue(), "", "the pumped milk's amount is the family's to say");
         assert.deepEqual(f.errors, []);
       } finally {
         await f.close();
@@ -492,11 +513,11 @@ export function feedingPlanCases({ fixture, freshState, record, writes, assert }
         await today(h);
         const tile = h.page.getByRole("region", { name: "Log something", exact: true }).getByRole("button", { name: /^Bottle: Log bottle/ });
         assert.match(await tile.getAttribute("aria-label"), /\(next step\)/);
-        assert.equal((await tile.textContent()).replace(/[  ]/g, " "), "BottleNext step");
+        assert.equal((await tile.textContent()).replace(/[  ]/g, " "), "BottleNext step");
         await tile.click();
         const form = h.page.getByRole("dialog", { name: "Feed", exact: true });
         await form.waitFor();
-        assert.equal(await form.getByRole("textbox", { name: "millilitres", exact: true }).inputValue(), "50");
+        assert.equal(await form.getByRole("textbox", { name: "millilitres", exact: true }).inputValue(), "", "the pumped milk's amount is the family's to say");
         assert.deepEqual(h.errors, []);
       } finally {
         await h.close();
@@ -535,13 +556,16 @@ export function feedingPlanCases({ fixture, freshState, record, writes, assert }
         await metric(g);
         await g.page.setViewportSize({ width: 375, height: 667 });
         await today(g);
-        const next = g.page.getByRole("region", { name: "Pumping timer", exact: true }).getByRole("button", { name: /^Next: Log bottle/ });
+        const timer = g.page.getByRole("region", { name: "Pumping timer", exact: true });
+        const next = timer.getByRole("button", { name: /^Next: Log bottle/ });
         const [box, dock] = await Promise.all([next.boundingBox(), g.page.getByRole("region", { name: "Log something", exact: true }).boundingBox()]);
         assert(box && dock && box.y + box.height <= dock.y, `Next: Log bottle (${box && box.y + box.height}) clears the dock (${dock?.y})`);
+        // What the bottle is up to, the pumped milk then formula to finish together.
+        assert.match((await timer.textContent()).replace(/[  ]/g, " "), /Next: Log bottleUp to 50–70 ml in all/);
         await next.click();
         const form = g.page.getByRole("dialog", { name: "Feed", exact: true });
         await form.waitFor();
-        assert.equal(await form.getByRole("textbox", { name: "millilitres", exact: true }).inputValue(), "50");
+        assert.equal(await form.getByRole("textbox", { name: "millilitres", exact: true }).inputValue(), "", "the pumped milk's amount is the family's to say");
         assert.deepEqual(g.errors, []);
       } finally {
         await g.close();

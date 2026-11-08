@@ -74,8 +74,11 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
         <Waiting />
       )}
       {readOnly && <LatestMoment />}
-      {/* With the feeding plan's card in Right now, a call-today warning stays up here with the urgent ones, above it. */}
-      <AlertStack tiers={feedPlan ? ["emergency", "now", "today"] : ["emergency", "now"]} onNavigate={onNavigate} />
+      {/*
+        With the feeding plan's card in Right now, a call-today warning stays up here with the urgent ones, above it,
+        folded to one line each (a tap opens the full card), so the card's action still clears the dock.
+      */}
+      <AlertStack tiers={feedPlan ? ["emergency", "now", "today"] : ["emergency", "now"]} compact={feedPlan ? ["today"] : []} onNavigate={onNavigate} />
 
       {(!nothingYet || timing || sleepNow || feedPlan) && (
         <section aria-labelledby="right-now">
