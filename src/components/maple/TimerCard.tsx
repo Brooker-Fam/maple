@@ -600,15 +600,19 @@ function FeedExtras({ entry, controls, disabled, compact, parts, plan }: { entry
         ) : plan?.milk?.kind === "log" ? (
           <MilkChip label={planWords} aria={plan.milk.log.aria} disabled={disabled || busy} onClick={() => logPlan((plan.milk as Extract<StepAction, { kind: "log" }>).log)} />
         ) : plan?.milk?.kind === "choose" ? (
-          // The plan's amount and way, its milk not named: formula or breast milk, one tap each.
-          <span role="group" aria-label={plan.milk.prompt.replace(/:$/, "")} className="flex flex-wrap items-center gap-x-2">
-            <span className="text-[13px] font-semibold text-mp-ink-2">+ {planWords}:</span>
+          // The plan's amount and way, its milk not named: formula or breast milk, one tap each. The words end this row
+          // and the two choices take the next one together, at any width (each choice's name says the whole thing).
+          <>
+            <span aria-hidden className="flex min-h-[44px] items-center text-[13px] font-semibold text-mp-ink-2">
+              + {planWords}:
+            </span>
+            <span aria-hidden className="h-0 basis-full" />
             {plan.milk.options.map((o) => (
               <button key={o.label} type="button" disabled={disabled || busy} onClick={() => logPlan(o)} aria-label={o.aria} className={CHIP_HIT}>
                 <span className={cx(CHIP, "bg-mp-sunken text-mp-ink")}>{o.label}</span>
               </button>
             ))}
-          </span>
+          </>
         ) : (
           <MilkChip label={planWords} aria={`${planWords}: opens the bottle form`} disabled={disabled || busy} onClick={planForm} />
         ))}

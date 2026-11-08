@@ -298,12 +298,27 @@ export default function NextFeedCard() {
       );
     }
     // Formula or breast milk, as the plan says or as the family says: one tap each, neither the default.
+    if (!big) {
+      // Beside a row or in the missed line's fixes: the words, then the two as quiet links on one row.
+      return (
+        <div role="group" aria-label={a.prompt.replace(/:$/, "")} className="w-full">
+          <p className="pt-1 text-[13px] leading-snug text-mp-ink-2">{a.prompt}</p>
+          <div className="-ml-3 flex flex-wrap">
+            {a.options.map((o) => (
+              <Button key={o.label} variant="ghost" size="sm" disabled={busy} onClick={() => act(() => logOne(o))} aria-label={o.aria}>
+                {o.label}
+              </Button>
+            ))}
+          </div>
+        </div>
+      );
+    }
     return (
-      <div data-plan-primary={big || undefined} role="group" aria-label={a.prompt.replace(/:$/, "")}>
-        <p className={cx("mb-1.5 font-medium text-mp-ink-2", big ? "text-[13px]" : "text-[12px]")}>{a.prompt}</p>
+      <div data-plan-primary role="group" aria-label={a.prompt.replace(/:$/, "")}>
+        <p className="mb-1.5 text-[13px] font-medium text-mp-ink-2">{a.prompt}</p>
         <div className="grid grid-cols-2 gap-2">
           {a.options.map((o) => (
-            <Button key={o.label} size={big ? "lg" : "md"} variant="soft" disabled={busy} onClick={() => act(() => logOne(o))} aria-label={o.aria}>
+            <Button key={o.label} size="lg" variant="soft" disabled={busy} onClick={() => act(() => logOne(o))} aria-label={o.aria}>
               {o.label}
             </Button>
           ))}
@@ -363,13 +378,15 @@ export default function NextFeedCard() {
         </p>
       )}
 
+      {/* On a very short screen the next step's action comes first, above the steps, so it clears the dock. */}
+      {underway && short && primary && !readOnly && <div className="mt-2">{actionView(primary.action, true)}</div>}
       {underway ? (
         <ol className="mt-3 space-y-3" aria-label={`${focus.feed.name}: steps`}>
           {rows.map((r) => (
             <Step
               key={r.key}
               row={r}
-              action={r.action && !readOnly ? actionView(r.action, true) : null}
+              action={r.action && !readOnly && !short ? actionView(r.action, true) : null}
               secondary={r.secondary && !readOnly ? actionView(r.secondary, false) : null}
               close={
                 r.close && !readOnly ? (
