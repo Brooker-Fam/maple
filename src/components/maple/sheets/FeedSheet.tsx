@@ -822,6 +822,42 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
             )
           ) : (
             <>
+              {/* What's in the bottle first: formula, breast milk or both is the first thing to say, and on a phone the
+                  last thing in the form sits below the fold. It starts on the last bottle's milk. */}
+              <section aria-label="Milk">
+                <Label>Milk</Label>
+                <div className="flex flex-wrap gap-2">
+                  {(Object.keys(MILK_LABEL) as Milk[]).map((m) => (
+                    <Chip
+                      key={m}
+                      selected={milk === m}
+                      onClick={() => {
+                        touch("milk");
+                        setMilk(milk === m ? undefined : m);
+                      }}
+                    >
+                      {MILK_LABEL[m]}
+                    </Chip>
+                  ))}
+                </div>
+                {splitShown && (
+                  // Mixed: how much of each (optional). Both set the amount; one and the amount give the other.
+                  <div className="mt-3">
+                    <p className={cx(tone.muted, "mb-1.5 text-[13px]")}>How much of each (optional)</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <MiniStepper key="breast-part" label="Breast milk" unit={units === "metric" ? "ml" : "oz"} ariaLabel={`breast milk, ${units === "metric" ? "millilitres" : "ounces"}`} value={breastPart} onChange={(v) => editPart("breast", v)} onInvalid={checks.watch("breast-part")} step={units === "metric" ? 5 : 0.25} decimals={units === "metric" ? 1 : 3} max={bottleLimit} />
+                      <MiniStepper key="formula-part" label="Formula" unit={units === "metric" ? "ml" : "oz"} ariaLabel={`formula, ${units === "metric" ? "millilitres" : "ounces"}`} value={formulaPart} onChange={(v) => editPart("formula", v)} onInvalid={checks.watch("formula-part")} step={units === "metric" ? 5 : 0.25} decimals={units === "metric" ? 1 : 3} max={bottleLimit} />
+                    </div>
+                    {partOver ? (
+                      <p role="alert" className="mt-1.5 text-[13px] text-mp-danger">{PART_OVER_HINT}</p>
+                    ) : restMl != null ? (
+                      <p className={cx(tone.muted, "mt-1.5 text-[13px]")}>
+                        The rest, {formatVolume(restMl, units)}, is {breastPart != null ? "formula" : "breast milk"}.
+                      </p>
+                    ) : null}
+                  </div>
+                )}
+              </section>
               <div>
                 <MiniStepper
                   key="amount"
@@ -877,40 +913,6 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                     </Chip>
                   ))}
                 </div>
-              </section>
-              <section aria-label="Milk">
-                <Label>Milk</Label>
-                <div className="flex flex-wrap gap-2">
-                  {(Object.keys(MILK_LABEL) as Milk[]).map((m) => (
-                    <Chip
-                      key={m}
-                      selected={milk === m}
-                      onClick={() => {
-                        touch("milk");
-                        setMilk(milk === m ? undefined : m);
-                      }}
-                    >
-                      {MILK_LABEL[m]}
-                    </Chip>
-                  ))}
-                </div>
-                {splitShown && (
-                  // Mixed: how much of each (optional). Both set the amount; one and the amount give the other.
-                  <div className="mt-3">
-                    <p className={cx(tone.muted, "mb-1.5 text-[13px]")}>How much of each (optional)</p>
-                    <div className="grid grid-cols-2 gap-3">
-                      <MiniStepper key="breast-part" label="Breast milk" unit={units === "metric" ? "ml" : "oz"} ariaLabel={`breast milk, ${units === "metric" ? "millilitres" : "ounces"}`} value={breastPart} onChange={(v) => editPart("breast", v)} onInvalid={checks.watch("breast-part")} step={units === "metric" ? 5 : 0.25} decimals={units === "metric" ? 1 : 3} max={bottleLimit} />
-                      <MiniStepper key="formula-part" label="Formula" unit={units === "metric" ? "ml" : "oz"} ariaLabel={`formula, ${units === "metric" ? "millilitres" : "ounces"}`} value={formulaPart} onChange={(v) => editPart("formula", v)} onInvalid={checks.watch("formula-part")} step={units === "metric" ? 5 : 0.25} decimals={units === "metric" ? 1 : 3} max={bottleLimit} />
-                    </div>
-                    {partOver ? (
-                      <p role="alert" className="mt-1.5 text-[13px] text-mp-danger">{PART_OVER_HINT}</p>
-                    ) : restMl != null ? (
-                      <p className={cx(tone.muted, "mt-1.5 text-[13px]")}>
-                        The rest, {formatVolume(restMl, units)}, is {breastPart != null ? "formula" : "breast milk"}.
-                      </p>
-                    ) : null}
-                  </div>
-                )}
               </section>
               <ContextNote>
                 {/* A target from their care team replaces the typical amount (it counts what's taken at the breast too). */}

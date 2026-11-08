@@ -169,7 +169,7 @@ export default function MoreSheet({ open, onClose, earlierDay }: {
   /** History opens the earlier picker directly for this family-local day. */
   earlierDay?: string;
 }) {
-  const { state, summary, log, memberName, now, units } = useMaple();
+  const { state, summary, log, memberName, now, units, api, refresh, toast } = useMaple();
   const sheets = useSheets();
   const care = useCare();
   const careNav = useCareNav();
@@ -206,6 +206,23 @@ export default function MoreSheet({ open, onClose, earlierDay }: {
     onClose();
     // Let this sheet start closing before the next one opens.
     window.setTimeout(() => sheets.open({ kind, preset, entry }), 120);
+  };
+  // Bottles off (Settings → On Today): a family that starts formula or expressed milk still finds bottles here. One tap
+  // turns the family's Bottles back on (the Bottle button returns to Today) and opens the bottle form.
+  const [turningOn, setTurningOn] = useState(false);
+  const bottlesOn = async () => {
+    if (turningOn) return;
+    setTurningOn(true);
+    try {
+      await api("/api/maple/baby", { method: "PATCH", body: JSON.stringify({ settings: { feeds_bottle: true } }) });
+      await refresh();
+      toast("Bottles are on: Bottle is back on Today.");
+      go("feed", { method: "bottle" });
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Couldn't turn on bottles. Try again.", { tone: "error" });
+    } finally {
+      setTurningOn(false);
+    }
   };
   const earlier = (kind: EntryKind, preset: Record<string, unknown> = {}) => () => {
     noteHeld();
@@ -549,7 +566,9 @@ export default function MoreSheet({ open, onClose, earlierDay }: {
         <>
           <Cells items={[
             { id: "earlier", label: "Log earlier", sub: "A feed, diaper, nap or other entry", icon: "clock-3", color: KIND_COLOR.note, onTap: () => setLoggingEarlier(true) },
-            ...(bottles ? [{ id: "bottle", label: "Bottle", sub: "Log an amount", icon: "bottle" as const, color: KIND_COLOR.feed, onTap: () => go("feed", { method: "bottle" }) }] : []),
+            bottles
+              ? { id: "bottle", label: "Bottle", sub: "Formula or breast milk", icon: "bottle" as const, color: KIND_COLOR.feed, onTap: () => go("feed", { method: "bottle" }) }
+              : { id: "bottles-on", label: "Bottle", sub: turningOn ? "Turning on…" : "Turn on bottles: formula or breast milk", icon: "bottle" as const, color: KIND_COLOR.feed, onTap: () => void bottlesOn() },
           ]} />
           <section aria-label={baby} className="space-y-3 pb-1">
             {mom.length > 0 && <GroupHeading>{baby}</GroupHeading>}

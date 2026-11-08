@@ -13,6 +13,50 @@ export function bottleMethodCases({ fixture, freshState, record, writes, assert 
   };
   const ml = (form, name) => form.getByRole("textbox", { name, exact: true });
   return [
+    ["Formula shows without scrolling on a small phone, and a formula bottle logs as one", async () => {
+      const f = await fixture({ entryResponse: reply });
+      try {
+        await f.page.setViewportSize({ width: 375, height: 667 });
+        const form = await openBottle(f);
+        const formula = form.getByRole("region", { name: "Milk" }).getByRole("button", { name: "Formula", exact: true });
+        const box = await formula.boundingBox();
+        assert(box && box.y >= 0 && box.y + box.height <= 667, `Formula is on screen at 375 × 667 without scrolling (top ${box?.y})`);
+        await formula.click();
+        await form.getByRole("textbox", { name: "ounces", exact: true }).fill("2");
+        await form.getByRole("button", { name: "Log 2 oz now", exact: true }).click();
+        await form.waitFor({ state: "hidden" });
+        assert.deepEqual(writes(f)[0]?.body.data, { method: "bottle", amount_ml: 59.1, milk: "formula" });
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["With Bottles off, More turns them on in one tap and opens the bottle form", async () => {
+      const state = freshState();
+      state.baby.settings = { ...state.baby.settings, feeds_bottle: false };
+      const patches = [];
+      const f = await fixture({
+        state,
+        apiResponse: ({ route, req, url }) => {
+          if (url.pathname !== "/api/maple/baby" || req.method() !== "PATCH") return route.fulfill({ status: 500, json: { error: "Unexpected synthetic endpoint" } });
+          patches.push(req.postDataJSON());
+          state.baby.settings = { ...state.baby.settings, ...req.postDataJSON().settings };
+          return route.fulfill({ json: { baby: state.baby } });
+        },
+      });
+      try {
+        await f.page.goto("https://first-use.example.test/#today");
+        await f.page.getByRole("button", { name: /^More/ }).click();
+        assert.equal(await f.page.getByRole("button", { name: /^Bottle/ }).count(), 1, "Bottles off: only More's row offers a bottle");
+        await f.page.getByRole("button", { name: /^Bottle.*Turn on bottles/ }).click();
+        const form = f.page.getByRole("dialog", { name: "Feed", exact: true });
+        await form.getByRole("region", { name: "Milk" }).getByRole("button", { name: "Formula", exact: true }).waitFor();
+        assert.deepEqual(patches, [{ settings: { feeds_bottle: true } }], "the family's Bottles switch, and nothing else");
+        await form.getByRole("button", { name: "Close", exact: true }).click();
+        await form.waitFor({ state: "hidden" });
+        await f.page.getByRole("button", { name: /^Bottle/ }).first().waitFor();
+        assert.deepEqual(writes(f), [], "turning bottles on logs nothing by itself");
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
     ["How it was given saves with the bottle, and nothing is chosen for you", async () => {
       const state = freshState();
       // The last bottle was paced: a new one still starts with no way of giving chosen.
