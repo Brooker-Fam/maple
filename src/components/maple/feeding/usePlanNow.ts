@@ -25,12 +25,14 @@ import { missedItems, nursingOf, stepRows, type MissedItem, type OneTapLog, type
  * The memory is sessionStorage (this tab), or this page's memory when that's
  * blocked, and every reader updates at once when it changes.
  *
- * What the dock takes from it: the start the card's own Start would make (the
- * plan's feed and its nipple shield, a pick included), only while the next step
- * is that nursing; and the plan's bottle when its current step is one (the
- * underway feed's next step, a top-up or milk at the breast still owed under
- * 90 minutes after its nursing, an upcoming feed that starts with a bottle), as
- * the form's preset the card's own button opens.
+ * What the dock takes from it: whether the next step is nursing (only then does
+ * it outline the next side); with a pick on this phone, the start the card's
+ * own Start would make (the picked feed and its nipple shield), while the next
+ * step is that nursing (without a pick a dock start names no plan feed: the log
+ * decides which it was); and the plan's bottle when its current step is one
+ * (the underway feed's next step, a top-up or milk at the breast still owed
+ * under 90 minutes after its nursing, an upcoming feed that starts with a
+ * bottle), as the form's preset the card's own button opens.
  */
 
 /** A step's row as the card shows it. `secondary` and `close` come from the view model (nextFeed.ts) where it has them. */
@@ -132,7 +134,9 @@ export type PlanNow = {
   /** A finished feed's steps nobody logged (minus those set aside here), and that feed's start. */
   missed: MissedItem[];
   missedStart: number | null;
-  /** What a nursing start carries (the plan's feed, its nipple shield) while the next step is that nursing; else null. */
+  /** The next step is nursing (the card's Start): the dock outlines the next side only then. */
+  nurseNext: boolean;
+  /** What the dock's nursing start carries: the picked plan feed and its nipple shield, with a pick on this phone; else null. */
   startWith: StartWith | null;
   /** The plan's bottle now, as the form's preset, or null. */
   bottle: PlanBottle | null;
@@ -257,10 +261,13 @@ export function usePlanNow(): PlanNow | null {
     const missedAside = missedAt !== null && sessionRead(missedKey(family, missedAt)) === "1";
     const missed = missedAside ? [] : missedItems(fp).filter((m) => !closed(missedAt, m.key));
     const nurse = primary?.action.kind === "nurse" ? primary.action : null;
-    const startWith: StartWith | null = nurse ? { ...(nurse.shield ? { shield: true } : {}), plan: fp.focus.feed.id } : null;
+    // A start from the dock names a plan feed only when this phone picked one ("Do … instead"), as the card's Start
+    // does: otherwise the log decides which feed it was (its shield, its milk at the breast, a top-up), since a tag
+    // would win over what was logged, and the dock's sides are just "she's on".
+    const startWith: StartWith | null = nurse && choose ? { ...(nurse.shield ? { shield: true } : {}), plan: fp.focus.feed.id } : null;
     const bottle = planBottle(fp, rows, missed, now.getTime());
-    return { rows, primary, missed, startWith, bottle };
-  }, [fp, family, focusStart, missedAt, now, seen, words.Hes]);
+    return { rows, primary, missed, nurseNext: !!nurse, startWith, bottle };
+  }, [fp, family, focusStart, missedAt, now, seen, words.Hes, choose]);
 
   if (!plan || !fp || !base || !derived) return null;
   return { plan, target, tz, family, now, base, fp, chosen: choose, ...derived, missedStart: missedAt, pick, setMissedAside, closeRow };

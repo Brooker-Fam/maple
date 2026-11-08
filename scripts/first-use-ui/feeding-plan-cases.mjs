@@ -395,22 +395,41 @@ export function feedingPlanCases({ fixture, freshState, record, writes, assert }
       }
     }],
 
-    ["Feeding plan: the dock's sides start the plan's feed with its shield, and with a pump first they outline no side", async () => {
-      // This plan's first feed nurses with a nipple shield.
+    ["Feeding plan: the dock's sides start a feed picked on this phone with its shield, else the log decides; with a pump first they outline no side", async () => {
+      // This plan's Nurse + SNS nurses with a nipple shield; after the 8:00 AM feed, Nurse, top up is the plan's turn.
       const plan = structuredClone(PLAN);
       plan.feeds[0].steps[0].shield = true;
       const s = server();
-      const f = await fixture({ state: planned({ plan }), apiResponse: s.apiResponse });
+      const f = await fixture({ state: planned({ plan, entries: morning() }), apiResponse: s.apiResponse });
       try {
         await metric(f);
         await today(f);
         const dock = f.page.getByRole("region", { name: "Log something", exact: true });
+        // No pick: the dock's start names no plan feed, so what's logged with it (a shield, a top-up) says which it was.
         await dock.getByRole("button", { name: /^Start nursing timer on Right/ }).click();
         await waitFor(f, () => s.timer.length > 0, "the timer start");
-        assert.deepEqual({ ...s.timer[0], client_id: undefined }, { action: "start", kind: "feed", side: "R", with: { shield: true, plan: "p1f1" }, client_id: undefined }, "the card's own start");
+        assert.deepEqual({ ...s.timer[0], client_id: undefined }, { action: "start", kind: "feed", side: "R", client_id: undefined });
         assert.deepEqual(f.errors, []);
       } finally {
         await f.close();
+      }
+      // Picked on this phone: the dock's start is the card's own, the picked feed with its nipple shield.
+      const p = server();
+      const e = await fixture({ state: planned({ plan, entries: morning() }), apiResponse: p.apiResponse });
+      try {
+        await metric(e);
+        const c = await today(e);
+        await c.getByRole("button", { name: "Other feed", exact: true }).click();
+        await e.page.waitForFunction(() => !document.querySelector("[data-taps-held]"));
+        await c.getByRole("button", { name: "Do Nurse + SNS instead", exact: true }).click();
+        await c.getByRole("heading", { name: "Nurse + SNS", exact: true }).waitFor();
+        await e.page.waitForFunction(() => !document.querySelector("[data-taps-held]"));
+        await e.page.getByRole("region", { name: "Log something", exact: true }).getByRole("button", { name: /^Start nursing timer on Right/ }).click();
+        await waitFor(e, () => p.timer.length > 0, "the timer start");
+        assert.deepEqual(p.timer[0].with, { shield: true, plan: "p1f1" });
+        assert.deepEqual(e.errors, []);
+      } finally {
+        await e.close();
       }
       // At night the next feed starts with the pump: the dock still starts nursing, but outlines neither side, and that
       // start isn't the plan's.
@@ -491,8 +510,8 @@ export function feedingPlanCases({ fixture, freshState, record, writes, assert }
         await today(f);
         const timer = f.page.getByRole("region", { name: "Nursing timer", exact: true });
         assert.match(await timer.textContent(), /Nurse \+ SNS · then pump 15 min/);
-        // The plan's feed has no shield and the feed hasn't either: the chip waits in the … menu.
-        assert.equal(await timer.getByRole("button", { name: "Nipple shield", exact: true }).count(), 0);
+        // The shield stays on every nursing feed, off here (a family off the plan still needs it).
+        assert.equal(await timer.getByRole("button", { name: "Nipple shield", exact: true }).getAttribute("aria-pressed"), "false");
         const chip = timer.getByRole("button", { name: "Log 20 ml in the SNS, formula", exact: true });
         assert.equal(await chip.textContent(), "20 ml SNS");
         await chip.dblclick();
@@ -501,10 +520,7 @@ export function feedingPlanCases({ fixture, freshState, record, writes, assert }
         assert.equal(writes(f).length, 1, "a double tap logs once");
         assert.deepEqual(writes(f)[0].body.data, { method: "bottle", amount_ml: 20, milk: "formula", via: "sns", plan: "p1f1", top_up_of: 51 }, "tagged with the plan's feed");
         await timer.getByRole("button", { name: /^Edit: 20 ml in the SNS/ }).waitFor();
-        await f.page.waitForFunction(() => !document.querySelector("[data-taps-held]"));
-        await timer.getByRole("button", { name: "More timer options", exact: true }).click();
-        const shield = timer.getByRole("button", { name: "Nipple shield", exact: true });
-        assert.equal(await shield.getAttribute("aria-pressed"), "false", "in the … menu");
+        assert.equal(await chip.count(), 0, "logged: the chip says what was given instead");
         assert.deepEqual(f.errors, []);
       } finally {
         await f.close();

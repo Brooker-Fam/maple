@@ -264,7 +264,6 @@ export default function TimerCard({ entry, ask }: { entry: Entry; ask?: ReactNod
                     confirm={discardQuestion}
                     onInfo={() => clusterInfo.open()}
                     onSwitchEarlier={() => openFix("current", "switch")}
-                    parts={isFeed && rp ? { now: parts, shown: chipsShown(parts, rp), milk: () => open({ kind: "feed", preset: parts.lastTimeMilk(rp.feedId) }) } : null}
                   />
                 )}
               </AnimatePresence>
@@ -399,15 +398,14 @@ const CHIP =
 /**
  * What the feeding plan says beside a running timer (usePlanNow, the reading
  * the Next feed card and the dock share): for a nursing feed the plan's feed,
- * its line ("Nurse + SNS · then pump 15 min"), whether its nursing uses the
- * nipple shield and its milk at the breast (the plan's own action for it,
- * while it's still to log); for a pump, the next step when it's a bottle.
+ * its line ("Nurse + SNS · then pump 15 min") and its milk at the breast (the
+ * plan's own action for it, while it's still to log); for a pump, the next
+ * step when it's a bottle.
  */
 type RunningPlan = {
   feedId: string;
   unit: PlanUnit;
   line: string | null;
-  shield: boolean;
   supplement: NurseStep["supplement"] | null;
   milk: StepAction | null;
   next: StepAction | null;
@@ -420,7 +418,7 @@ function runningPlan(p: PlanNow | null, entry: Entry): RunningPlan | null {
   const focus = p.fp.focus;
   if (focus.state !== "underway") return null;
   const isThis = (e: { id: number }) => e.id === entry.id;
-  const base = { feedId: focus.feed.id, unit: p.plan.unit, line: null, shield: false, supplement: null, milk: null, next: null };
+  const base = { feedId: focus.feed.id, unit: p.plan.unit, line: null, supplement: null, milk: null, next: null };
   if (entry.kind === "feed") {
     if (!focus.group?.run?.entries.some(isThis)) return null;
     const i = focus.steps.findIndex((s) => s.step.do === "nurse");
@@ -428,7 +426,7 @@ function runningPlan(p: PlanNow | null, entry: Entry): RunningPlan | null {
     const row = i >= 0 ? p.rows[i] : null;
     const then = p.rows.slice(i + 1).find((r) => r.state !== "note" && r.state !== "done");
     const milk = row ? ([row.action, row.secondary].find((a) => !!actionPreset(a)) ?? null) : null;
-    return { ...base, line: `${focus.feed.name}${then ? ` · then ${lowerFirst(then.text)}` : ""}`, shield: !!step?.shield, supplement: step?.supplement ?? null, milk };
+    return { ...base, line: `${focus.feed.name}${then ? ` · then ${lowerFirst(then.text)}` : ""}`, supplement: step?.supplement ?? null, milk };
   }
   if (entry.kind === "pump") {
     const i = focus.steps.findIndex((s) => s.step.do === "pump" && s.entries.some(isThis));
@@ -502,23 +500,18 @@ function useFeedParts(entry: Entry) {
 }
 type FeedPartsNow = ReturnType<typeof useFeedParts>;
 
-/** Which of the nursing card's chips show: the ones the plan's feed uses or the feed has (all of them without a plan); the rest are in the … menu. */
-function chipsShown(parts: FeedPartsNow, plan: RunningPlan | null) {
-  return { shield: !plan || plan.shield || parts.shield, milk: !plan || !!plan.supplement || parts.atBreast.length > 0 };
-}
-
 /**
- * A nursing feed's parts while she's on (the chips' row): the nipple shield,
- * filled while it's on; the milk at the breast given with it, each saying what
- * was given ("20 ml in the SNS") and opening it to change; and the milk at the
- * breast still to give. With a plan, the chips follow its feed (the shield
- * only when its nursing uses one or the feed has it, the milk only when it has
- * milk at the breast or some was given; the others are in the … menu), and the
- * milk is the plan's: "+ 20 ml SNS" in one tap when its amount is one number
- * and its milk is named, the two milk choices when only the milk isn't, else
- * the bottle form with the plan's amount and way, all tied to this feed and
- * the plan's feed. Without one, "Milk at the breast" opens the form as last
- * time. Viewers see what's on, with nothing to tap.
+ * A nursing feed's parts while she's on (the chips' row), on every nursing
+ * feed, plan or not (a family going off the plan still needs them): the nipple
+ * shield, filled while it's on; the milk at the breast given with it, each
+ * saying what was given ("20 ml in the SNS") and opening it to change; and the
+ * milk at the breast still to give. When the plan's feed has milk at the
+ * breast, that chip is the plan's: "+ 20 ml SNS" in one tap when its amount is
+ * one number and its milk is named, the two milk choices when only the milk
+ * isn't, else the bottle form with the plan's amount and way, all tied to this
+ * feed and the plan's feed. Otherwise "Milk at the breast" opens the form as
+ * last time (by syringe unless the last one went in an SNS, its amount and
+ * milk). Viewers see what's on, with nothing to tap.
  */
 function FeedExtras({ entry, controls, disabled, compact, parts, plan }: { entry: EntryOf<"feed">; controls: boolean; disabled: boolean; compact: boolean; parts: FeedPartsNow; plan: RunningPlan | null }) {
   const { state, units } = useMaple();
@@ -528,7 +521,6 @@ function FeedExtras({ entry, controls, disabled, compact, parts, plan }: { entry
   const [busy, setBusy] = useState(false);
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const { shield, given, atBreast } = parts;
-  const shown = chipsShown(parts, plan);
 
   if (!controls && !shield && !given.length) return null;
 
@@ -550,23 +542,22 @@ function FeedExtras({ entry, controls, disabled, compact, parts, plan }: { entry
 
   return (
     <div role="group" aria-label="With this feed" className={cx("-mb-1.5 flex flex-wrap items-center gap-x-2", compact ? "mt-0.5" : "mt-1")}>
-      {shown.shield &&
-        (controls ? (
-          <button type="button" disabled={disabled} aria-pressed={shield} aria-label="Nipple shield" onClick={() => void parts.setShield(!shield)} className={CHIP_HIT}>
-            {/* On is the filled pill; off is an outline. */}
-            <span className={cx(CHIP, shield ? "bg-mp-accent text-mp-on-accent" : "text-mp-ink-2 ring-[1.5px] ring-mp-ink-2/35 ring-inset")}>
-              {shield && <Icon name="check" size={14} strokeWidth={2.4} />}
-              Shield
-            </span>
-          </button>
-        ) : (
-          shield && (
-            <span className={cx(CHIP, "my-1.5 bg-mp-sunken text-mp-ink-2")}>
-              <Icon name="check" size={14} strokeWidth={2.4} />
-              Shield
-            </span>
-          )
-        ))}
+      {controls ? (
+        <button type="button" disabled={disabled} aria-pressed={shield} aria-label="Nipple shield" onClick={() => void parts.setShield(!shield)} className={CHIP_HIT}>
+          {/* On is the filled pill; off is an outline. */}
+          <span className={cx(CHIP, shield ? "bg-mp-accent text-mp-on-accent" : "text-mp-ink-2 ring-[1.5px] ring-mp-ink-2/35 ring-inset")}>
+            {shield && <Icon name="check" size={14} strokeWidth={2.4} />}
+            Shield
+          </span>
+        </button>
+      ) : (
+        shield && (
+          <span className={cx(CHIP, "my-1.5 bg-mp-sunken text-mp-ink-2")}>
+            <Icon name="check" size={14} strokeWidth={2.4} />
+            Shield
+          </span>
+        )
+      )}
       {given.map((b) => {
         // "20 ml in the SNS", "Milk in the syringe", "30 ml top-up": the row's words for it, without the "+".
         const part = feedPartWords(b, units).slice(2);
@@ -589,7 +580,6 @@ function FeedExtras({ entry, controls, disabled, compact, parts, plan }: { entry
       })}
       {controls &&
         !atBreast.length &&
-        shown.milk &&
         (!sup ? (
           <button type="button" disabled={disabled} onClick={() => open({ kind: "feed", preset: parts.lastTimeMilk(plan?.feedId ?? null) })} className={CHIP_HIT}>
             <span className={cx(CHIP, "bg-mp-sunken text-mp-ink-2")}>
@@ -654,7 +644,6 @@ function TimerMenu({
   confirm,
   onInfo,
   onSwitchEarlier,
-  parts,
 }: {
   entry: Entry;
   n: TimerNumbers;
@@ -663,8 +652,6 @@ function TimerMenu({
   confirm: string | null;
   onInfo: () => void;
   onSwitchEarlier: () => void;
-  /** With a feeding plan: the feed's parts the card's chips leave out (its plan feed doesn't use them), here instead. */
-  parts: { now: FeedPartsNow; shown: { shield: boolean; milk: boolean }; milk: () => void } | null;
 }) {
   const w = useBabyWords();
   const ref = useRef<HTMLDivElement>(null);
@@ -763,44 +750,6 @@ function TimerMenu({
                 }}
               />
             ))}
-          {parts && (!parts.shown.shield || !parts.shown.milk) && (
-            // The parts this plan feed doesn't use, one row: the nipple shield (on or off) and milk at the breast.
-            <div className="flex min-h-[60px] items-center gap-2 px-4 py-2">
-              <span className="min-w-0 flex-1">
-                <span className="block text-[15px] font-semibold text-mp-ink">With this feed</span>
-                <span className="block text-[13px] text-mp-ink-2">Not in the plan&apos;s feed</span>
-              </span>
-              {!parts.shown.shield && (
-                <button
-                  type="button"
-                  aria-pressed={parts.now.shield}
-                  aria-label="Nipple shield"
-                  onClick={() => {
-                    close();
-                    void parts.now.setShield(!parts.now.shield);
-                  }}
-                  className="inline-flex min-h-[44px] min-w-[52px] shrink-0 items-center justify-center gap-1 rounded-xl bg-mp-sunken px-2.5 text-[14px] font-semibold text-mp-ink active:scale-[0.97] [.maple-night_&]:text-[#E8A23F]"
-                >
-                  {parts.now.shield && <Icon name="check" size={14} strokeWidth={2.4} />}
-                  Shield
-                </button>
-              )}
-              {!parts.shown.milk && (
-                <button
-                  type="button"
-                  aria-label="Milk at the breast: opens the bottle form"
-                  onClick={() => {
-                    close();
-                    parts.milk();
-                  }}
-                  className="inline-flex min-h-[44px] min-w-[52px] shrink-0 items-center justify-center gap-1 rounded-xl bg-mp-sunken px-2.5 text-[14px] font-semibold text-mp-ink active:scale-[0.97] [.maple-night_&]:text-[#E8A23F]"
-                >
-                  <Icon name="plus" size={14} strokeWidth={2.2} />
-                  Milk
-                </button>
-              )}
-            </div>
-          )}
           {entry.kind === "feed" && (
             <MenuItem
               icon="moon"

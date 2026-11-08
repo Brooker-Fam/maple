@@ -181,7 +181,7 @@ export default function Dock() {
   const feedPending = !!feed && feed.id < 0;
   const sleepPending = !!sleep && sleep.id < 0;
   // With a plan, the next side is outlined only while the plan's next step is that nursing (not a night feed's pump first).
-  const next = planNow && !planNow.startWith ? null : summary.nextSide;
+  const next = planNow && !planNow.nurseNext ? null : summary.nextSide;
   // The last bottle given as a bottle: milk at the breast (a syringe, an SNS) is part of its nursing feed, never "last".
   const lastBottle = entries.find((e) => e.kind === "feed" && e.data.method === "bottle" && e.data.amount_ml && !atBreastOf(e.data));
   // The plan's bottle now (its next step, a top-up or milk at the breast still owed, a feed that starts with a bottle):
@@ -375,7 +375,7 @@ export default function Dock() {
       side === "L" ? "col1" : "col2",
       () => {
         toTop();
-        // The same start as the card's: the plan's feed and its nipple shield (this phone's pick too), while that's next.
+        // With a pick on this phone, the same start as the card's (the picked feed, its nipple shield); else the log decides.
         void actions.startFeed(side, planNow?.startWith ?? undefined);
       },
       { long: true, wide: !bottles }
