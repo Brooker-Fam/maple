@@ -6,6 +6,7 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { describeEntry } from "@/lib/maple/describe";
 import { feedClusters, nursingRuns, topUpIds, type FeedCluster, type NursingRun } from "@/lib/maple/feed";
+import { feedRowParts, partsShown, type FeedRowParts } from "@/lib/maple/feed-rows";
 import { statsFor, type DayStats } from "@/lib/maple/insights";
 import {
   DEFAULT_TZ,
@@ -448,10 +449,14 @@ export default function LogTab({
   const stats = useMemo(() => statsByDay(entries, oldestKey, todayKey, now, tz), [entries, oldestKey, todayKey, now, tz]);
   // The feeds (runs) worked out once from every loaded entry: the clusters (3+ feeds, each under 30 minutes after the
   // last) and which one each feed is in, so a day shows one Cluster row with the cluster's own feeds (never recounted
-  // from that row's), and the bottles given with a feed, which read "Top-up".
+  // from that row's), and the bottles given with a feed (its milk at the breast, its top-ups), which ride on that
+  // feed's row (feed-rows.ts), or read as part of it on a row of their own ("Top-up", "SNS at the breast").
   const runs = useMemo(() => nursingRuns(entries, now), [entries, now]);
   const clusters = useMemo(() => feedClusters(runs), [runs]);
   const topUps = useMemo(() => topUpIds(runs), [runs]);
+  const rowParts = useMemo(() => feedRowParts(runs), [runs]);
+  // A part of a feed still going rides on that feed's row under Happening now, not in its day.
+  const runningIds = useMemo(() => new Set((state?.entries ?? []).filter((e) => e.active).map((e) => e.id)), [state?.entries]);
   const clusterOf = useMemo(() => {
     const m = new Map<number, number>();
     clusters.forEach((c, i) => {
@@ -560,7 +565,7 @@ export default function LogTab({
         </div>
       )}
 
-      <RunningNow entries={running} />
+      <RunningNow entries={running} parts={rowParts} />
 
       {partialDays.length > 0 && (
         <p className={cx(tone.inset, tone.muted, "mb-5 flex gap-2.5 px-4 py-3 text-[13px] leading-snug")} role="status">
@@ -608,6 +613,8 @@ export default function LogTab({
               clusters={clusters}
               clusterOf={clusterOf}
               topUps={topUps}
+              rowParts={rowParts}
+              running={runningIds}
               onClusterInfo={clusterInfo.open}
               onAdd={() => addOnDay(d.key)}
             />
@@ -658,6 +665,8 @@ function DaySection({
   clusters,
   clusterOf,
   topUps,
+  rowParts,
+  running,
   onClusterInfo,
   onAdd,
 }: {
@@ -677,8 +686,12 @@ function DaySection({
   /** The clusters LogTab worked out from every loaded entry, and feed id → its cluster's index. */
   clusters: FeedCluster[];
   clusterOf: Map<number, number>;
-  /** Bottles given with a feed (feed.ts topUpIds, from every loaded entry): they read "Top-up". */
+  /** Bottles given with a feed (feed.ts topUpIds, from every loaded entry): on a row of their own, they read as part of it. */
   topUps: Set<number>;
+  /** Which feed's row shows each bottle given with it (feed-rows.ts, from every loaded entry). */
+  rowParts: FeedRowParts;
+  /** The entries still running (Happening now): their parts ride there. */
+  running: ReadonlySet<number>;
   onClusterInfo: (c?: FeedCluster | null) => void;
   onAdd: () => void;
 }) {
@@ -687,7 +700,15 @@ function DaySection({
   const label = formatDayLabel(key, todayKey, { long: false });
   // A cluster with two or more of this day's feeds is one row, where its newest feed would be (rows are newest first,
   // as Claude's list_entries places it), with the cluster's own finished feeds (runs) that have an entry on this day.
+  // A feed's parts (its milk at the breast, its top-ups) ride on its row when that row is listed here too (the same
+  // day, the same filter), or under Happening now while it's still going; otherwise a part keeps a row of its own.
   const items = useMemo(() => {
+    const listed = new Set(rows.map((e) => e.id));
+    const folded = (e: Entry) => {
+      const row = rowParts.rowOf.get(e.id);
+      return row !== undefined && (listed.has(row) || running.has(row));
+    };
+    const partsOf = (id: number) => partsShown(rowParts, id, listed);
     const byCluster = new Map<number, EntryOf<"feed">[]>();
     for (const e of rows) {
       const c = e.kind === "feed" ? clusterOf.get(e.id) : undefined;
@@ -696,22 +717,27 @@ function DaySection({
       list.push(e as EntryOf<"feed">);
       byCluster.set(c, list);
     }
-    const out: ({ type: "entry"; e: Entry } | { type: "cluster"; id: number; feeds: EntryOf<"feed">[]; runs: NursingRun[] })[] = [];
+    const out: (
+      | { type: "entry"; e: Entry; parts: EntryOf<"feed">[] }
+      | { type: "cluster"; id: number; feeds: EntryOf<"feed">[]; runs: NursingRun[]; parts: Map<number, EntryOf<"feed">[]> }
+    )[] = [];
     for (const e of rows) {
+      if (folded(e)) continue;
       const c = e.kind === "feed" ? clusterOf.get(e.id) : undefined;
       const feeds = c === undefined ? undefined : byCluster.get(c);
-      if (c === undefined || !feeds || feeds.length < 2) out.push({ type: "entry", e });
+      if (c === undefined || !feeds || feeds.length < 2) out.push({ type: "entry", e, parts: partsOf(e.id) });
       else if (feeds[0].id === e.id) {
         const here = new Set(feeds.map((f) => f.id));
         // From the cluster's finished feeds only: a side tapped under 10 minutes after its last Done is the same run, but
         // it's running (under Happening now), so its minutes and open end mustn't land on this row.
         const done = (clusters[c]?.entries ?? []).filter((x) => !x.active);
         const runs = nursingRuns(done, now).filter((r) => r.entries.some((x) => here.has(x.id)));
-        out.push({ type: "cluster", id: c, feeds, runs });
+        const parts = new Map(feeds.map((f) => [f.id, partsOf(f.id)] as const).filter(([, p]) => p.length));
+        out.push({ type: "cluster", id: c, feeds, runs, parts });
       }
     }
     return out;
-  }, [rows, clusters, clusterOf, now]);
+  }, [rows, clusters, clusterOf, now, rowParts, running]);
   const dst = dstNote(key, tz);
   const summary = total ? daySummaryParts(stats, units) : null;
   const groupLabel = KIND_GROUPS.find((g) => g.id === group)?.label.toLowerCase();
@@ -785,11 +811,13 @@ function DaySection({
                       open({ kind: e.kind, entry: e, preset: entryEditPreset(e, readOnly) });
                     }}
                     onInfo={() => onClusterInfo(null)}
+                    parts={it.parts}
                   />
                 </li>
               );
             }
             const e = it.e;
+            const withParts = it.parts.length > 0;
             return (
             <li
               key={e.id}
@@ -799,16 +827,24 @@ function DaySection({
               {/*
                 The day as one line: a hairline threads EntryRow's badges (36px, inset 16px)
                 from one row to the next, stopping short of each badge. The thread alone
-                separates the rows (no dividers).
+                separates the rows (no dividers). A feed with its parts under it draws its own,
+                down past them (EntryRow's thread).
               */}
-              {i > 0 && <span aria-hidden className="pointer-events-none absolute top-0 left-[33.25px] h-[calc(50%-22px)] w-[1.5px] bg-mp-line" />}
-              {i < items.length - 1 && (
+              {i > 0 && !withParts && <span aria-hidden className="pointer-events-none absolute top-0 left-[33.25px] h-[calc(50%-22px)] w-[1.5px] bg-mp-line" />}
+              {i < items.length - 1 && !withParts && (
                 <span aria-hidden className="pointer-events-none absolute bottom-0 left-[33.25px] h-[calc(50%-22px)] w-[1.5px] bg-mp-line" />
               )}
               <EntryRow
                 entry={e}
                 now={now}
                 topUp={topUps.has(e.id)}
+                parts={it.parts}
+                thread={{ up: i > 0, down: i < items.length - 1 }}
+                glow={glow}
+                onOpenPart={(b) => {
+                  onOpen(b);
+                  open({ kind: b.kind, entry: b });
+                }}
                 onClick={() => {
                   onOpen(e);
                   open({ kind: e.kind, entry: e, preset: entryEditPreset(e, readOnly) });
@@ -873,7 +909,8 @@ function QuickLog({ compact, day, onMore }: { compact?: boolean; day?: string; o
   );
 }
 
-function RunningNow({ entries }: { entries: Entry[] }) {
+/** The timers running now, a feed with what's been given with it so far (its milk at the breast). */
+function RunningNow({ entries, parts }: { entries: Entry[]; parts: FeedRowParts }) {
   const now = useNow(1000);
   const { readOnly } = useMaple();
   const { open } = useSheets();
@@ -883,7 +920,14 @@ function RunningNow({ entries }: { entries: Entry[] }) {
       <SectionTitle>Happening now</SectionTitle>
       <div className={cx(tone.card, tone.divide, "overflow-hidden")}>
         {entries.map((e) => (
-          <EntryRow key={e.id} entry={e} now={now} onClick={() => open({ kind: e.kind, entry: e, preset: entryEditPreset(e, readOnly) })} />
+          <EntryRow
+            key={e.id}
+            entry={e}
+            now={now}
+            parts={parts.byRow.get(e.id)}
+            onOpenPart={(b) => open({ kind: b.kind, entry: b })}
+            onClick={() => open({ kind: e.kind, entry: e, preset: entryEditPreset(e, readOnly) })}
+          />
         ))}
       </div>
     </section>
