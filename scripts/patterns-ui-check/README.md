@@ -39,7 +39,8 @@ newly logged activity appears immediately and true future events stay excluded. 
 minute apart, back on 6 minutes after coming off, back and forth, a bottle and an evening cluster) checks
 Between feeds under the clock (every gap, the ranges, the cluster's band), the gaps in Daily totals' table
 and charts, and the card at 320 pixels by day and at night; `lateCluster=1` checks a cluster across
-midnight on both days.
+midnight on both days; `planDay=1` checks a feeding plan's night bottles of one feed (pumped milk, then
+formula to finish) on one row of Between feeds, and Compare days naming milk at the breast as the log does.
 
 Screenshots in `test-results/maple-patterns-ui` contain example records only and
 are ignored by Git. These component checks do not exercise server persistence,

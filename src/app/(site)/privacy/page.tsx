@@ -100,9 +100,10 @@ export default function Privacy() {
         top-up can name the feed it was given for. Maple shows the plan to everyone in your family who can see the log and
         works out what&rsquo;s next from the log. The plan changes only when an owner or member saves it: by hand, or by saying
         yes after Maple&rsquo;s chat or a connected assistant reads it back to them. The chat and assistants are told to keep
-        mom&rsquo;s own medicines and health out of the plan; her page keeps those. On Today, a pick of another feed to do
-        next, Got it on a step that wasn&rsquo;t logged, and saying a bottle is done before its full amount are remembered
-        only by that phone&rsquo;s browser, until the app or tab closes. Removing the plan deletes it. The target per feed
+        mom&rsquo;s own medicines and health out of the plan; her page keeps those. On Today, Got it on a step that
+        wasn&rsquo;t logged, saying a bottle is done before its full amount, and Not needed on a step that&rsquo;s only
+        if needed are remembered only by that phone&rsquo;s browser, for a day; a pick of another feed to do next is
+        remembered there until the app or tab closes. Removing the plan deletes it. The target per feed
         stays in Settings until you clear it, and the plan&rsquo;s words already in a chat stay in that person&rsquo;s chat
         history until it&rsquo;s deleted; while they&rsquo;re among its latest messages, they still go to the AI model with
         the conversation.

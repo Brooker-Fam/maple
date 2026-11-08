@@ -6,8 +6,10 @@
  * feed, and the feed form saves a shield and milk at the breast with a feed logged afterwards, and lists a saved
  * feed's. A part's form says what it is ("Milk at the breast", "SNS at the breast", "Top-up"), a bottle's "last bottle"
  * is never milk at the breast, a plan feed's milk at the breast is the plan's (in its unit), a feed's form says which
- * of the plan's feeds it was, and While you slept counts a feed still going once. Made-up feeds and amounts on the
- * fixture's clock (9:30 AM in the family's zone), in ml; the plan is the invented one in feeding-plan-cases.mjs.
+ * of the plan's feeds it was, a part's form opened for a feed offers "A feed of its own" for a full bottle, Last fed
+ * adds up the night's bottles of one feed, and While you slept counts a feed still going once, with what was given
+ * after a pause. Made-up feeds and amounts on the fixture's clock (9:30 AM in the family's zone, or a later one the
+ * case sets), in ml; the plan is the invented one in feeding-plan-cases.mjs.
  */
 export function feedPartsCases({ fixture, freshState, record, writes, assert }) {
   const metric = (f) => f.page.addInitScript(() => localStorage.setItem("maple-units", "metric"));
@@ -399,6 +401,232 @@ export function feedPartsCases({ fixture, freshState, record, writes, assert }) 
         assert.deepEqual(f.errors, []);
       } finally { await f.close(); }
     }],
+    ["Feed parts: a late top-up's form offers A feed of its own once the amount is more than the plan gives, and saves a bottle on its own", async () => {
+      /** "08:15" on Oct 28 (EDT) as an ISO instant. */
+      const at = (hhmm) => { const [h, m] = hhmm.split(":").map(Number); return new Date(Date.UTC(2026, 9, 28, h + 4, m)).toISOString(); };
+      // 10:40–11:00 AM, Nurse, top up from the plan, its 25–35 ml top-up not logged; the target per feed is 50–70 ml.
+      const fed = record(61, "feed", { method: "breast", segments: [{ side: "R", start: at("10:40"), end: at("10:50") }, { side: "L", start: at("10:50"), end: at("11:00") }], first_side: "R", last_side: "L", plan: "p1f2" }, at("10:40"), { ended_at: at("11:00"), updated_at: at("11:00") });
+      const planned = (now) => {
+        const state = freshState();
+        state.now = now;
+        state.baby.settings = { show_alerts: false, feeding_plan: PLAN, feed_target_ml: { min: 50, max: 70 } };
+        state.entries = [fed];
+        return state;
+      };
+      const tile = (f) => f.page.getByRole("region", { name: "Log something", exact: true }).getByRole("button", { name: /^Bottle/ });
+      // 12:20 PM, 80 minutes after: the dock's Bottle is that feed's top-up, but she's having a full bottle.
+      let state = planned(at("12:20"));
+      let f = await fixture({ state, records: state.entries, entryResponse: saved(state, [99]) });
+      try {
+        await metric(f);
+        await f.page.goto("https://first-use.example.test/#today");
+        await tile(f).click();
+        let form = f.page.getByRole("dialog", { name: /^Top-up · 10:40\sAM feed$/ });
+        await form.waitFor();
+        const amount = form.getByRole("textbox", { name: "millilitres", exact: true });
+        const own = form.getByRole("switch", { name: "A feed of its own", exact: true });
+        // Up to the plan's amount it's the top-up: no way out offered. Over it, the plan reads a bottle as a feed of its own.
+        await amount.fill("35");
+        assert.equal(await own.count(), 0, "35 ml is the top-up");
+        await amount.fill("40");
+        await own.waitFor();
+        assert.match(await form.textContent(), /40 ml is more than the plan's 25–35 ml top-up\./);
+        await amount.fill("60");
+        assert.equal(await own.getAttribute("aria-checked"), "false");
+        assert.match(await form.textContent(), /60 ml is more than the plan's 25–35 ml top-up\./);
+        const before = await own.boundingBox();
+        await own.click();
+        // Now a bottle on its own: titled so, saying so where it said which feed, and its button a bottle's.
+        form = f.page.getByRole("dialog", { name: "Bottle", exact: true });
+        await form.waitFor();
+        const switched = form.getByRole("switch", { name: "A feed of its own", exact: true });
+        assert.equal(await switched.getAttribute("aria-checked"), "true");
+        const after = await switched.boundingBox();
+        assert(before && after && Math.abs(after.y - before.y) < 2, `the switch stays put (${before?.y} → ${after?.y})`);
+        assert.match(await form.textContent(), /A feed of its own, not that feed's top-up\./);
+        assert.doesNotMatch(await form.textContent(), /Part of that feed/);
+        assert(await form.getByRole("region", { name: "Plan feed" }).isVisible(), "which plan feed it was is the family's to say, not set");
+        await form.getByRole("button", { name: "Log 60 ml now", exact: true }).click();
+        await form.waitFor({ state: "hidden" });
+        const { data, started_at } = writes(f)[0].body;
+        assert.deepEqual(data, { method: "bottle", amount_ml: 60, via: "paced" }, "no top_up_of, no plan feed");
+        assert(Math.abs(Date.parse(started_at) - Date.parse(at("12:20"))) < 60_000, `now (${started_at})`);
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+      // 11:20 AM, 20 minutes after: a bottle then is that feed's top-up whatever its size (feed.ts), so there's no way out.
+      state = planned(at("11:20"));
+      f = await fixture({ state, records: state.entries });
+      try {
+        await metric(f);
+        await f.page.goto("https://first-use.example.test/#today");
+        await tile(f).click();
+        const form = f.page.getByRole("dialog", { name: /^Top-up · 10:40\sAM feed$/ });
+        await form.getByRole("textbox", { name: "millilitres", exact: true }).fill("60");
+        await form.getByRole("button", { name: "Log 60 ml top-up", exact: true }).waitFor();
+        assert.equal(await form.getByRole("switch", { name: "A feed of its own", exact: true }).count(), 0);
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+      // A top-up up to the target gives the target (over 70 ml is a feed of its own); one with no amount at all, a
+      // feed's worth from the target's smaller end (50 ml).
+      for (const [step, under, over, why] of [
+        [{ do: "bottle", to_target: true, milk: "either", via: "paced" }, "70", "75", "75 ml is more than the plan's 50–70 ml top-up."],
+        [{ do: "bottle", milk: "either", via: "paced" }, "45", "50", "50 ml reaches the target per feed, 50–70 ml."],
+      ]) {
+        state = planned(at("12:20"));
+        state.baby.settings.feeding_plan = { ...PLAN, feeds: PLAN.feeds.map((x) => (x.id === "p1f2" ? { ...x, steps: [x.steps[0], step] } : x)) };
+        f = await fixture({ state, records: state.entries });
+        try {
+          await metric(f);
+          await f.page.goto("https://first-use.example.test/#today");
+          await tile(f).click();
+          const form = f.page.getByRole("dialog", { name: /^Top-up · 10:40\sAM feed$/ });
+          const amount = form.getByRole("textbox", { name: "millilitres", exact: true });
+          await amount.fill(under);
+          await form.getByRole("button", { name: `Log ${under} ml top-up`, exact: true }).waitFor();
+          assert.equal(await form.getByRole("switch", { name: "A feed of its own", exact: true }).count(), 0, `${under} ml is the top-up`);
+          await amount.fill(over);
+          await form.getByRole("switch", { name: "A feed of its own", exact: true }).waitFor();
+          assert(((await form.textContent()) ?? "").includes(why), why);
+          assert.deepEqual(f.errors, []);
+        } finally { await f.close(); }
+      }
+    }],
+    ["Feed parts: milk at the breast's form, opened for a feed, offers A feed of its own for a full bottle, logged now as a bottle", async () => {
+      const at = (hhmm) => { const [h, m] = hhmm.split(":").map(Number); return new Date(Date.UTC(2026, 9, 28, h + 4, m)).toISOString(); };
+      // 10:40–10:55 AM, Nurse + SNS from the plan, its pump after; its 20 ml in the SNS not logged. It's 12:20 PM.
+      const planned = () => {
+        const state = freshState();
+        state.now = at("12:20");
+        state.baby.settings = { show_alerts: false, feeding_plan: PLAN, feed_target_ml: { min: 50, max: 70 } };
+        state.entries = newest([
+          record(51, "feed", { method: "breast", segments: [{ side: "L", start: at("10:40"), end: at("10:55") }], first_side: "L", last_side: "L", plan: "p1f1" }, at("10:40"), { ended_at: at("10:55"), updated_at: at("10:55") }),
+          record(52, "pump", {}, at("10:57"), { ended_at: at("11:12") }),
+        ]);
+        return state;
+      };
+      const state = planned();
+      const f = await fixture({ state, records: state.entries, entryResponse: saved(state, [99]) });
+      try {
+        await metric(f);
+        await f.page.goto("https://first-use.example.test/#today");
+        await f.page.getByRole("region", { name: "Log something", exact: true }).getByRole("button", { name: /^Bottle/ }).click();
+        let form = f.page.getByRole("dialog", { name: "Milk at the breast", exact: true });
+        await form.waitFor();
+        const amount = form.getByRole("textbox", { name: "in the SNS, millilitres", exact: true });
+        assert.equal(await amount.inputValue(), "20", "the plan's SNS");
+        const own = form.getByRole("switch", { name: "A feed of its own", exact: true });
+        assert.equal(await own.count(), 0);
+        await amount.fill("60");
+        await own.waitFor();
+        assert.match(await form.textContent(), /60 ml is more than the plan's 20 ml in the SNS\./);
+        const before = await own.boundingBox();
+        await own.click();
+        form = f.page.getByRole("dialog", { name: "Bottle", exact: true });
+        await form.waitFor();
+        // The switch stays under the thumb, and the bottle is said as a bottle: how it was given, its amount, at now.
+        const after = await form.getByRole("switch", { name: "A feed of its own", exact: true }).boundingBox();
+        assert(before && after && Math.abs(after.y - before.y) < 2, `the switch stays put (${before?.y} → ${after?.y})`);
+        assert.match((await form.textContent()).replace(/[  ]/g, " "), /A feed of its own, not part of the 10:40 AM feed\./);
+        const how = form.getByRole("radiogroup", { name: "How it was given" });
+        assert.deepEqual(await how.getByRole("radio").allTextContents(), ["Bottle", "Paced bottle"]);
+        assert.equal(await form.getByRole("textbox", { name: "millilitres", exact: true }).inputValue(), "60");
+        assert.equal(await form.getByRole("button", { name: "Now", exact: true }).getAttribute("aria-pressed"), "true", "given now, not at that feed's end");
+        const shots = process.env.MAPLE_FEED_PARTS_SHOTS;
+        if (shots) {
+          await form.screenshot({ path: `${shots}/own-sns-on.png` });
+          await f.page.setViewportSize({ width: 320, height: 640 });
+          await f.page.evaluate(() => { localStorage.setItem("maple-night", "always"); window.dispatchEvent(new Event("maple-night-pref")); });
+          await f.page.waitForTimeout(300);
+          await f.page.screenshot({ path: `${shots}/own-sns-on-320-night.png` });
+          await f.page.evaluate(() => { localStorage.removeItem("maple-night"); window.dispatchEvent(new Event("maple-night-pref")); });
+          await f.page.setViewportSize({ width: 390, height: 844 });
+        }
+        // Switched off again: the SNS with that feed, at its end, as it was opened.
+        await form.getByRole("switch", { name: "A feed of its own", exact: true }).click();
+        form = f.page.getByRole("dialog", { name: "Milk at the breast", exact: true });
+        await form.waitFor();
+        assert.equal(await form.getByRole("radiogroup", { name: "How it was given" }).getByRole("radio", { name: "SNS", exact: true }).getAttribute("aria-checked"), "true");
+        assert.match((await form.textContent()).replace(/[  ]/g, " "), /With the 10:40 AM feed: part of it, not a feed of its own\./);
+        assert.equal(await form.getByRole("button", { name: "Now", exact: true }).getAttribute("aria-pressed"), "false", "back at that feed's end");
+        if (shots) await form.screenshot({ path: `${shots}/own-sns-off.png` });
+        await form.getByRole("switch", { name: "A feed of its own", exact: true }).click();
+        form = f.page.getByRole("dialog", { name: "Bottle", exact: true });
+        await form.waitFor();
+        await form.getByRole("button", { name: "Log 60 ml now", exact: true }).click();
+        await form.waitFor({ state: "hidden" });
+        const { data, started_at } = writes(f)[0].body;
+        assert.deepEqual(data, { method: "bottle", amount_ml: 60, milk: "formula" }, "no SNS, no top_up_of, no plan feed");
+        assert(Math.abs(Date.parse(started_at) - Date.parse(at("12:20"))) < 60_000, `now, not when that feed ended (${started_at})`);
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+      // At 320 px too, the switch stays under the thumb.
+      const again = planned();
+      const g = await fixture({ state: again, records: again.entries });
+      try {
+        await metric(g);
+        await g.page.setViewportSize({ width: 320, height: 640 });
+        await g.page.goto("https://first-use.example.test/#today");
+        await g.page.getByRole("region", { name: "Log something", exact: true }).getByRole("button", { name: /^Bottle/ }).click();
+        const form = g.page.getByRole("dialog", { name: "Milk at the breast", exact: true });
+        await form.getByRole("textbox", { name: "in the SNS, millilitres", exact: true }).fill("60");
+        const own = g.page.getByRole("switch", { name: "A feed of its own", exact: true });
+        const before = await own.boundingBox();
+        await own.click();
+        await g.page.getByRole("dialog", { name: "Bottle", exact: true }).waitFor();
+        const after = await own.boundingBox();
+        assert(before && after && Math.abs(after.y - before.y) < 2, `the switch stays put at 320 px (${before?.y} → ${after?.y})`);
+        assert.deepEqual(g.errors, []);
+      } finally { await g.close(); }
+    }],
+    ["Feed parts: Last fed on a plan's bottle feed adds its formula to finish, says each, and opens the first bottle", async () => {
+      const state = freshState();
+      state.baby.settings = { show_alerts: false, feeding_plan: PLAN, feed_target_ml: { min: 50, max: 70 } };
+      // Pump + bottle: pumped 8:35–8:55, then 30 ml of pumped milk at 9:00 and 20 ml of formula to finish at 9:12, both
+      // its own (p1f3), logged from the card with no end: one feed.
+      state.entries = newest([
+        record(71, "pump", {}, "2026-10-28T12:35:00.000Z", { ended_at: "2026-10-28T12:55:00.000Z" }),
+        record(72, "feed", { method: "bottle", amount_ml: 30, milk: "breastmilk", plan: "p1f3" }, "2026-10-28T13:00:00.000Z"),
+        record(73, "feed", { method: "bottle", amount_ml: 20, milk: "formula", plan: "p1f3" }, "2026-10-28T13:12:00.000Z"),
+      ]);
+      const f = await fixture({ state, records: state.entries });
+      try {
+        await metric(f);
+        for (const width of [375, 320]) {
+          await f.page.setViewportSize({ width, height: 740 });
+          await f.page.goto("https://first-use.example.test/#today");
+          const block = f.page.getByRole("button", { name: /^Last feed started 30m ago, started 9:00\sAM\./ });
+          await block.waitFor();
+          const line = block.locator("xpath=..").locator("p", { hasText: "bottle" }).first();
+          assert.equal((await line.innerText()).replace(/\s+/g, " ").trim(), "50 ml bottle (30 ml breast milk + 20 ml formula) · target 50–70 ml");
+          // Inside the card at both widths, broken only between the bottles.
+          const fits = await line.evaluate((p) => {
+            const card = p.closest("div.overflow-hidden") ?? document.body;
+            const edge = card.getBoundingClientRect().right;
+            return [...p.querySelectorAll("span.whitespace-nowrap")].every((s) => s.getBoundingClientRect().right <= edge + 0.5);
+          });
+          assert(fits, `Last fed's line stays inside the card at ${width}px`);
+          // MAPLE_FEED_PARTS_SHOTS=<folder>: the card by day and in the night look, to look at.
+          const shots = process.env.MAPLE_FEED_PARTS_SHOTS;
+          if (shots) {
+            // Tall enough that the dock sits below the card.
+            await f.page.setViewportSize({ width, height: 1200 });
+            const lastFed = block.locator("xpath=..");
+            await lastFed.screenshot({ path: `${shots}/last-fed-bottles-${width}-day.png` });
+            await f.page.evaluate(() => { localStorage.setItem("maple-night", "always"); window.dispatchEvent(new Event("maple-night-pref")); });
+            await f.page.waitForTimeout(300);
+            await lastFed.screenshot({ path: `${shots}/last-fed-bottles-${width}-night.png` });
+            await f.page.evaluate(() => { localStorage.removeItem("maple-night"); window.dispatchEvent(new Event("maple-night-pref")); });
+          }
+        }
+        await f.page.getByRole("button", { name: /^Last feed started 30m ago/ }).click();
+        // The feed it opens is its first bottle (the pumped milk).
+        const sheet = f.page.getByRole("dialog", { name: "Bottle", exact: true });
+        await sheet.waitFor();
+        assert.equal(await sheet.getByRole("textbox", { name: "millilitres", exact: true }).inputValue(), "30");
+        assert.deepEqual(writes(f), []);
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
     ["Feed parts: While you slept counts a feed still going once, with its milk at the breast, never as a feed of its own", async () => {
       const helper = { email: "helper@example.test", display_name: "Alex", role: "member", emoji: null, color: null };
       const state = freshState();
@@ -421,6 +649,33 @@ export function feedPartsCases({ fixture, freshState, record, writes, assert }) 
         const note = (await f.page.locator("#wys-more").innerText()).replace(/[\u00a0\u202f]/g, " ");
         assert.match(note, /1 feed, at 6:00 AM\./);
         assert.match(note, /Nursing now, since 9:10 AM, 20 ml in the SNS\./);
+        assert.deepEqual(writes(f), []);
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["Feed parts: While you slept says a feed paused 10+ minutes and back on with its milk at the breast from after the pause", async () => {
+      const helper = { email: "helper@example.test", display_name: "Alex", role: "member", emoji: null, color: null };
+      const state = freshState();
+      // Sam last looked at 1:00 AM; Alex nursed on the Left from 8:50, paused at 9:00, went back on at 9:12 (still on),
+      // and gave 20 ml in the SNS at 9:15: one feed still going, in two parts as feeds are counted.
+      state.seen_at = "2026-10-28T05:00:00.000Z";
+      state.members.push(helper);
+      const by = { created_by: helper.email };
+      const segments = [{ side: "L", start: "2026-10-28T12:50:00.000Z", end: "2026-10-28T13:00:00.000Z" }, { side: "L", start: "2026-10-28T13:12:00.000Z", end: null }];
+      state.entries = newest([
+        { ...record(41, "feed", { method: "breast", segments, first_side: "L", last_side: "L" }, "2026-10-28T12:50:00.000Z", by), active: true },
+        record(42, "feed", { method: "bottle", amount_ml: 20, milk: "formula", via: "sns", top_up_of: 41 }, "2026-10-28T13:15:00.000Z", by),
+      ]);
+      const f = await fixture({ state, records: state.entries });
+      try {
+        await metric(f);
+        await f.page.goto("https://first-use.example.test/#today");
+        const recap = f.page.getByRole("button", { name: /^While you slept/ });
+        assert.match(await recap.innerText(), /While you slept · nursing now · by Alex/);
+        await recap.click();
+        const note = (await f.page.locator("#wys-more").innerText()).replace(/[  ]/g, " ");
+        assert.match(note, /Nursing now, since 8:50 AM, 20 ml in the SNS\./);
+        assert.doesNotMatch(note, /\d feeds?,/, "a feed still going is never counted as a feed done");
         assert.deepEqual(writes(f), []);
         assert.deepEqual(f.errors, []);
       } finally { await f.close(); }

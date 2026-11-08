@@ -5,6 +5,7 @@ import AccountMenu from "./AccountMenu";
 import dynamic from "next/dynamic";
 import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { clockFraction, clockSpans } from "@/lib/maple/clock-spans";
+import { describeEntry } from "@/lib/maple/describe";
 import {
   feedClusters,
   feedGaps,
@@ -590,7 +591,10 @@ export function buildRibbon(
       } else if (e.kind === "feed" && e.data.method === "bottle") {
         if (s < start || s >= end) continue;
         const eEnd = Math.min(entryEnd(e, now), nowMs);
-        const title = `${topUps.has(e.id) ? "Top-up" : "Bottle"}${e.data.amount_ml ? ` ${formatVolume(e.data.amount_ml, units)}` : ""} · ${when(s, eEnd)}`;
+        // In the log's words (describeEntry): a feed's top-up is "Top-up", milk given at the breast with it "Syringe at
+        // the breast" or "SNS at the breast" (never a top-up), any other "Bottle".
+        const what = describeEntry(e, { units, topUp: topUps.has(e.id) }).title;
+        const title = `${what}${e.data.amount_ml ? ` ${formatVolume(e.data.amount_ml, units)}` : ""} · ${when(s, eEnd)}`;
         const pieces = spans(s, eEnd);
         // A bottle without a duration is a point, not an invented ten minutes.
         if (eEnd === s) {

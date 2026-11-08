@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { atBreastOf, describeEntry, feedPartWords, milkWords, planUnitsOf } from "@/lib/maple/describe";
 import { feedRowParts } from "@/lib/maple/feed-rows";
-import { AT_BREAST_WORDS, feedById, feedingPlanOf, type AtBreastVia, type FeedingPlan, type Range } from "@/lib/maple/feeding-plan";
+import { AT_BREAST_WORDS, bottleNeed, feedById, feedingPlanOf, type AtBreastVia, type FeedingPlan, type Range } from "@/lib/maple/feeding-plan";
 import {
   addPart,
   edgeBounds,
@@ -27,7 +27,7 @@ import {
 } from "@/lib/maple/feed";
 import { bottleCues, feedCues, typicalBottle } from "@/lib/maple/guidelines";
 import { formatRange, formatTime } from "@/lib/maple/time";
-import { feedTargetOf, formatVolume, formatVolumeRange, ML_PER_FL_OZ, mlToOz, ozToMl } from "@/lib/maple/units";
+import { feedTargetOf, formatVolume, formatVolumeRange, ML_PER_FL_OZ, mlToOz, ozToMl, type FeedTarget } from "@/lib/maple/units";
 import {
   BOTTLE_VIAS,
   type BottleVia,
@@ -112,6 +112,11 @@ import {
  * "Top-up · 12:20 PM feed", its quick amounts the plan's range. A saved part
  * opens as "Syringe at the breast" or "Top-up". With a plan saved, a part's
  * amounts (and a plan step's) are in the plan's unit, the app's beside them.
+ * A part whose amount is more than the plan gives for it (one with no amount
+ * of its own: at the target per feed) offers "A feed of its own" where the
+ * time rule leaves it one (a full bottle the dock's tile or a Fix opened as
+ * the part): a bottle with no top_up_of or plan feed, given now unless its
+ * time was moved, milk at the breast becoming Bottle or Paced bottle.
  *
  * A nursing feed's parts: "Nipple shield" (data.shield, on the feed itself;
  * an edit sends it against the version shown, as the other fields), and milk
@@ -198,9 +203,13 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const [forBreast] = useState(() => !e && (pstr(preset, "via") === "sns" || pstr(preset, "via") === "syringe"));
   // Opened for a nursing feed's top-up by bottle (the plan's card names the feed it's for): titled for that feed.
   const [forTopUp] = useState(() => !e && !forBreast && pstr(preset, "method") === "bottle" && pnum(preset, "top_up_of") != null);
+  // Either of those said to be "A feed of its own" instead (its amount is more than the plan gives for that part): a
+  // bottle on its own, with no feed or plan feed named.
+  const [own, setOwn] = useState(false);
+  const atBreastForm = forBreast && !own;
   const lastBottle = useMemo(
-    () => state?.entries.find((x): x is EntryOf<"feed"> => x.kind === "feed" && x.data.method === "bottle" && x.id !== e?.id && !!atBreastOf(x.data) === forBreast) ?? null,
-    [state, e?.id, forBreast]
+    () => state?.entries.find((x): x is EntryOf<"feed"> => x.kind === "feed" && x.data.method === "bottle" && x.id !== e?.id && !!atBreastOf(x.data) === atBreastForm) ?? null,
+    [state, e?.id, atBreastForm]
   );
   // The plan's unit when one is saved: a feed's part's amount is typed in it ("20 ml in the syringe", as its card), and
   // said with the app's beside it (partVolume).
@@ -455,7 +464,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const [breastPart, setBreastPart] = useState<number | null>(() => (e?.data.method === "bottle" ? shownMl(e.data.breastmilk_ml) : null));
   const [formulaPart, setFormulaPart] = useState<number | null>(() => (e?.data.method === "bottle" ? shownMl(e.data.formula_ml) : null));
   const [when, setWhen] = useState<Date | null>(() => (e ? new Date(e.started_at) : fromPreset));
-  const fieldsDirty = useDraftChanged({ manualTimeInvalid, method, when, note: notePatch.note, amount, milk, via, breastPart, formulaPart, left, right, both, first, range, shield, milkOn, milkVia, milkAmount, milkKind, planPick, invalid: checks.invalid });
+  const fieldsDirty = useDraftChanged({ manualTimeInvalid, method, when, note: notePatch.note, amount, milk, via, breastPart, formulaPart, left, right, both, first, range, shield, milkOn, milkVia, milkAmount, milkKind, planPick, own, invalid: checks.invalid });
   const amountMl = !touched.amount ? initialAmountMl : amount == null ? undefined : Math.round((vu === "metric" ? amount : ozToMl(amount)) * 10) / 10;
   const partMl = (v: number | null) => (v == null ? undefined : Math.round((vu === "metric" ? v : ozToMl(v)) * 10) / 10);
   const hadSplit = e?.data.method === "bottle" && (e.data.breastmilk_ml != null || e.data.formula_ml != null);
@@ -501,15 +510,62 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   // The feed this bottle tops up, even late (data.top_up_of): named by the plan's card, or a saved one's own link (the
   // log reads it the same way, feed.ts nursingRuns).
   const [linkTo] = useState(() => (e ? (e.data.method === "bottle" ? e.data.top_up_of : undefined) : pnum(preset, "top_up_of")));
-  const topUpOf = method === "bottle" ? topUpRunFor(otherRuns, (when ?? now()).getTime(), now(), linkTo) : null;
-  const bottleWord = topUpOf ? "top-up" : "bottle";
-  const target = feedTargetOf(state?.baby.settings);
   // Milk given at the breast, by this bottle form: it reads as what it is ("20 ml in the SNS"), part of the feed.
   const breastVia = method === "bottle" && (via === "sns" || via === "syringe") ? via : null;
+  // Logged late, milk at the breast is the feed's before it as feed.ts reads it: an SNS always, a syringe a plan's step gave.
+  const lateVia = breastVia === "sns" || (breastVia === "syringe" && !!planPick) ? breastVia : null;
+  // A feed of its own names no feed: only the time rule (during a feed, or just after) makes it part of one.
+  const topUpOf = method === "bottle" ? topUpRunFor(otherRuns, (when ?? now()).getTime(), now(), own ? undefined : linkTo, lateVia) : null;
+  const bottleWord = topUpOf ? "top-up" : "bottle";
+  const target = feedTargetOf(state?.baby.settings);
   // Its amount, quick amounts and button said as milk at the breast ("In the syringe", "Log 20 ml in the syringe"):
   // opened for it, or a saved one. Picked by hand in a bottle's own form, it stays that form (How and the line under
   // When say the rest).
-  const atBreastShown = breastVia && (forBreast || !!e) ? breastVia : null;
+  const atBreastShown = breastVia && (atBreastForm || !!e) ? breastVia : null;
+
+  // ── A feed of its own ──
+  // A feed's part opened for its feed (milk at the breast, a top-up: no Breast or Bottle to choose, and it says which
+  // feed it's with) can be said to be a bottle on its own instead, when its amount is more than the plan gives for
+  // that part (partGives: a top-up up to the target gives the target; with no amount at all, once it reaches the
+  // target per feed): a full bottle the dock's tile or a Fix opened as the part. It then names no feed and no plan feed (top_up_of,
+  // plan), so it counts as a feed, the plan reading it as one too (feeding-plan.ts fitsWanted, by the same amounts),
+  // and milk at the breast becomes a bottle (Bottle or Paced bottle), given now unless its time was moved. Only where
+  // the time rule wouldn't make it part of a feed anyway (feed.ts).
+  const partOpened = !e && method === "bottle" && (forBreast || forTopUp);
+  const [openVia] = useState<AtBreastVia | null>(() => (forBreast ? (pstr(preset, "via") as AtBreastVia) : null));
+  const partRun = partOpened && linkTo != null ? otherRuns.find((r) => r.entries.some((x) => x.id === linkTo)) ?? null : null;
+  const partPlanId = pstr(preset, "plan") ?? partRun?.entries.find((x) => x.data.plan)?.data.plan;
+  const partAmount = partOpened ? partGives(plan, partPlanId, forBreast ? (breastVia ?? openVia ?? "syringe") : "top-up", target) : null;
+  const over = amountMl != null && amountMl > 0 && (partAmount ? amountMl > partAmount.max : !!target && amountMl >= target.min);
+  const whenMoved = (when?.getTime() ?? null) !== (fromPreset?.getTime() ?? null);
+  const ownFits = topUpRunFor(otherRuns, (whenMoved && when ? when : now()).getTime(), now()) === null;
+  const ownShown = partOpened && !readOnly && (own || (over && ownFits));
+  const overWhy = !over
+    ? null
+    : partAmount
+      ? `${amountLabel} is more than the plan's ${formatVolumeRange(partAmount, vu)} ${forBreast ? AT_BREAST_WORDS[breastVia ?? openVia ?? "syringe"].inThe : "top-up"}.`
+      : target
+        ? `${amountLabel} reaches the target per feed, ${formatVolumeRange(target, vu)}.`
+        : null;
+  // What a feed of its own changed, put back when it's switched off again: the part's way in at the breast and its
+  // plan feed, and its time unless one was picked since.
+  const [ownUndo, setOwnUndo] = useState<{ when: Date | null; via: BottleVia | undefined; planPick: string | undefined } | null>(null);
+  const sayOwn = (on: boolean) => {
+    setOwn(on);
+    if (on) {
+      setOwnUndo({ when, via, planPick });
+      if (!whenMoved) setWhen(null);
+      if (breastVia) setVia(undefined);
+      setPlanPick(undefined);
+      return;
+    }
+    if (ownUndo) {
+      if (when === null) setWhen(ownUndo.when);
+      if (forBreast) setVia(ownUndo.via);
+      setPlanPick(ownUndo.planPick);
+    }
+    setOwnUndo(null);
+  };
   // What a saved bottle was when it opened, for its title (kept while it's edited): milk at the breast, a top-up, or a bottle.
   const [savedTopUp] = useState(() => e?.data.method === "bottle" && !!state && topUpIds(nursingRuns(state.entries, now())).has(e.id));
   // The feed it goes with ("the 10:15 AM feed"), and the plan feed it's part of: the bottle's own, else its feed's.
@@ -518,7 +574,15 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   // Quick amounts: a feed's part from the plan's own amount for it (its syringe's, its top-up's range), else small
   // ones for milk at the breast and the usual bottle sizes for a bottle.
   const planRange = method === "bottle" ? partRange(plan, partPlan, breastVia ? atBreastShown : topUpOf ? "top-up" : null) : null;
-  const chips = planRange ? rangeChips(planRange, vu) : atBreastShown ? (vu === "metric" ? [5, 10, 15, 20] : [0.25, 0.5, 0.75, 1]) : vu === "metric" ? [30, 60, 90, 120] : [1, 2, 3, 4];
+  // A feed's part said to be a feed of its own: three bottle sizes, one row at 320 px like the part's, so the switch
+  // under them stays put.
+  const chips = planRange
+    ? rangeChips(planRange, vu)
+    : atBreastShown
+      ? vu === "metric" ? [5, 10, 15, 20] : [0.25, 0.5, 0.75, 1]
+      : own
+        ? vu === "metric" ? [30, 60, 90] : [1, 2, 3]
+        : vu === "metric" ? [30, 60, 90, 120] : [1, 2, 3, 4];
   // A new nursing feed's own milk at the breast, in ml (blank: given, the amount not said).
   const milkMl = milkAmount == null ? undefined : Math.round((pu === "metric" ? milkAmount : ozToMl(milkAmount)) * 10) / 10;
   const zeroMilk = method === "breast" && !e && milkOn && milkMl === 0;
@@ -563,8 +627,9 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
               milk,
               via,
               ...split,
-              // Only while it still tops up that feed (a time moved past the next feed drops the link).
-              ...(linkTo && topUpOf?.entries.some((x) => x.id === linkTo) ? { top_up_of: linkTo } : {}),
+              // Only while it still tops up that feed (a time moved past the next feed drops the link), and never once
+              // it's said to be a feed of its own.
+              ...(linkTo && !own && topUpOf?.entries.some((x) => x.id === linkTo) ? { top_up_of: linkTo } : {}),
               ...(planPick ? { plan: planPick } : {}),
             },
             note: note.trim() || null,
@@ -812,7 +877,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const addOnly = addPending && !dirty && !("note" in notePatch);
   // A bottle says what it is, and the title stays put while it's edited: a saved one as it opened ("Syringe at the
   // breast", "Top-up", "Bottle"); a new one as it was opened ("Milk at the breast", "Top-up · 12:20 PM feed" for that
-  // feed's top-up, "Feed" while Breast or Bottle is a choice).
+  // feed's top-up, "Feed" while Breast or Bottle is a choice), or "Bottle" once it's said to be a feed of its own.
   const savedAtBreast = e?.data.method === "bottle" ? atBreastOf(e.data) : null;
   const bottleTitle = e
     ? savedAtBreast
@@ -820,18 +885,20 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       : savedTopUp
         ? "Top-up"
         : "Bottle"
-    : forBreast
-      ? "Milk at the breast"
-      : forTopUp
-        ? feedClock
-          ? `Top-up · ${feedClock} feed`
-          : "Bottle"
-        : "Feed";
+    : own
+      ? "Bottle"
+      : forBreast
+        ? "Milk at the breast"
+        : forTopUp
+          ? feedClock
+            ? `Top-up · ${feedClock} feed`
+            : "Bottle"
+          : "Feed";
   const title = e ? (running ? "Nursing now" : timed && preset?.editTime ? "Edit nursing times" : e.data.method === "bottle" ? bottleTitle : describeEntry(e).title) : method === "bottle" ? bottleTitle : "Feed";
   // "Log 20 ml in the syringe", "Log 30 ml top-up", "Log 2 oz now".
   const logBottle = atBreastShown
     ? `Log ${amountLabel ?? "milk"} ${AT_BREAST_WORDS[atBreastShown].inThe}`
-    : forTopUp && topUpOf
+    : forTopUp && !own && topUpOf
       ? amountLabel
         ? `Log ${amountLabel} top-up`
         : "Log top-up"
@@ -839,8 +906,9 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
         ? `Log ${amountLabel}${when ? "" : " now"}`
         : "Log bottle";
   const primary = e ? (timed && (dirty || preset?.editTime) ? "Save time" : "Save") : method === "bottle" ? logBottle : "Log it";
-  // A feed's part opened for its feed: no Breast or Bottle to choose, and it says which feed it's with, on top.
-  const asPart = !e && method === "bottle" && (forBreast || forTopUp);
+  // A feed's part opened for its feed: no Breast or Bottle to choose, and it says which feed it's with, on top (until
+  // it's said to be a feed of its own).
+  const asPart = partOpened && !own;
   // Which of the plan's feeds it was: a nursing feed, or a bottle on its own (a feed's part goes with its feed).
   const planFeedShown = !!plan && !running && (method === "breast" || (!breastVia && !topUpOf));
   const changedBy = liveFeed ? memberLabel(liveFeed.updated_by) : null;
@@ -998,12 +1066,29 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   // ── A bottle's fields (milk at the breast and a top-up are bottles too, each said as what it is) ──
   const unitWord = vu === "metric" ? "ml" : "oz";
   const unitName = vu === "metric" ? "millilitres" : "ounces";
-  // A feed's part opened for its feed: the feed it goes with, first (or, its time moved off any feed, what it is then).
-  const partLine = asPart ? (
+  // A feed's part opened for its feed: the feed it goes with, first (or, its time moved off any feed, what it is then);
+  // said to be a feed of its own, that it isn't that feed's (as long as the line it replaces, so nothing under it
+  // moves), the feed named as the plan's card names it (the preset's feed_at) when it says.
+  const partClock = partRun ? clock(pstr(preset, "feed_at") ?? partRun.start) : null;
+  const partLine = partOpened ? (
     <p className="flex items-start gap-2 text-[15px] leading-snug text-mp-ink">
-      <Icon name="baby" size={18} className="mp-kind-ink mt-px shrink-0" style={{ color: DETAIL_COLOR.nursing }} />
+      {own ? (
+        <Icon name="bottle" size={18} className="mp-kind-ink mt-px shrink-0" style={{ color: DETAIL_COLOR.bottle }} />
+      ) : (
+        <Icon name="baby" size={18} className="mp-kind-ink mt-px shrink-0" style={{ color: DETAIL_COLOR.nursing }} />
+      )}
       <span className="min-w-0">
-        {!topUpOf ? (
+        {own ? (
+          forTopUp ? (
+            "A feed of its own, not that feed's top-up."
+          ) : partClock ? (
+            <>
+              A feed of its own, not part of the <span className="font-semibold whitespace-nowrap">{partClock}</span> feed.
+            </>
+          ) : (
+            "A feed of its own."
+          )
+        ) : !topUpOf ? (
           "No nursing feed then, so it counts as a feed of its own."
         ) : forTopUp && !breastVia ? (
           "Part of that feed, not a feed of its own."
@@ -1014,6 +1099,16 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
         )}
       </span>
     </p>
+  ) : null;
+  // "A feed of its own", right under the amount that brought it (and the plan's amount it's more than).
+  const ownRow = ownShown ? (
+    <div className="mt-3">
+      <div className="flex min-h-[44px] items-center justify-between gap-4">
+        <Label className="mb-0">A feed of its own</Label>
+        <FormSwitch checked={own} onChange={sayOwn} label="A feed of its own" />
+      </div>
+      {overWhy && <p className={cx(tone.muted, "text-[13px] leading-snug")}>{overWhy}</p>}
+    </div>
   ) : null;
   const milkSection = (
     <section aria-label="Milk">
@@ -1077,9 +1172,10 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       </div>
       {/* In the plan's unit while the app shows the other: the app's beside it, so it can be checked either way. */}
       {vu !== units && amountMl != null && amountMl > 0 && <p className={cx(tone.muted, "mt-1.5 text-xs")}>That&apos;s {formatVolume(amountMl, units)}.</p>}
+      {ownRow}
       {lastBottle?.data.amount_ml != null && !e && (
         <p className={cx(tone.muted, "mt-1.5 text-xs")}>
-          {forBreast ? "Last at the breast" : "Last bottle"}: {formatVolume(lastBottle.data.amount_ml, vu)}
+          {atBreastForm ? "Last at the breast" : "Last bottle"}: {formatVolume(lastBottle.data.amount_ml, vu)}
           {lastBottle.data.milk ? ` of ${MILK_LABEL[lastBottle.data.milk].toLowerCase()}` : ""} at {clock(lastBottle.started_at)}
         </p>
       )}
@@ -1165,8 +1261,9 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
         <RunningNote kind="feed" />
       ) : (
         <>
-          {/* Bottles off (Family → On Today): a new feed is nursing, no choice to make. A feed's part is what it is. */}
-          {!e && !asPart && (bottlesOn || method === "bottle") && (
+          {/* Bottles off (Family → On Today): a new feed is nursing, no choice to make. A feed's part is what it is (and
+              said to be a feed of its own, a bottle). */}
+          {!e && !partOpened && (bottlesOn || method === "bottle") && (
             <Segmented
               aria-label="Feed type"
               value={method}
@@ -1257,10 +1354,24 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                   ]}
                 />
               )}
-              {!atBreastShown && milkSection}
+              {/* Milk at the breast said to be a feed of its own: a bottle, given by bottle or paced, in the same place
+                  and the same order, so the switch it was turned into one with stays under the thumb. */}
+              {own && forBreast && (
+                <Segmented<"bottle" | "paced" | "unsaid">
+                  aria-label="How it was given"
+                  value={via === "bottle" || via === "paced" ? via : "unsaid"}
+                  onChange={(v) => v !== "unsaid" && setVia(v)}
+                  options={[
+                    { value: "bottle", label: VIA_LABEL.bottle },
+                    { value: "paced", label: VIA_LABEL.paced },
+                  ]}
+                />
+              )}
+              {!(atBreastShown || (own && forBreast)) && milkSection}
               {amountSection}
-              {atBreastShown && milkSection}
-              <WhenField value={when} onChange={setWhen} onInvalidChange={setManualTimeInvalid} tz={tz} />
+              {(atBreastShown || (own && forBreast)) && milkSection}
+              {/* Started over when a feed of its own moves the time to now (or back), so it shows what's set. */}
+              <WhenField key={own ? "own" : "part"} value={when} onChange={setWhen} onInvalidChange={setManualTimeInvalid} tz={tz} />
               {!asPart && topUpOf && (
                 <p className={cx(tone.muted, "-mt-2 text-[13px] leading-snug")}>
                   {breastVia
@@ -1268,7 +1379,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                     : `A top-up for the ${feedClock} feed: part of that feed, not a feed of its own.`}
                 </p>
               )}
-              {!(asPart && atBreastShown) && (
+              {!(asPart && atBreastShown) && !(own && forBreast) && (
                 <section aria-label="How it was given">
                   <Label>How</Label>
                   <div className="flex flex-wrap gap-2">
@@ -1334,6 +1445,23 @@ function partRange(plan: FeedingPlan | null, feedId: string | undefined, part: A
   for (const s of feed.steps) {
     if (s.do === "nurse") nursed = true;
     else if (s.do === "bottle" && nursed && s.ml) return s.ml;
+  }
+  return null;
+}
+
+/**
+ * What the plan gives for one of a feed's parts, as feeding-plan.ts reads a late bottle against it (fitsWanted): its
+ * milk at the breast's amount, or its top-up's (the bottle step after the nursing: its own amount, or the target per
+ * feed it's up to, bottleNeed). Null when the plan gives none: then a bottle at the target is a feed's worth.
+ */
+function partGives(plan: FeedingPlan | null, feedId: string | undefined, part: AtBreastVia | "top-up", target: FeedTarget | null): Range | null {
+  if (part !== "top-up") return partRange(plan, feedId, part);
+  const feed = plan ? feedById(plan, feedId) : null;
+  if (!feed) return null;
+  let nursed = false;
+  for (const s of feed.steps) {
+    if (s.do === "nurse") nursed = true;
+    else if (s.do === "bottle" && nursed) return bottleNeed(s, target) ?? s.ml ?? null;
   }
   return null;
 }

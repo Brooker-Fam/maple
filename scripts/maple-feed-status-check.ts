@@ -3,12 +3,12 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
-import { feedClusters, lastFedAnchor, lastFedRule, minutesShort, nursingRuns, spanText, topUpMl, typicalFeedGapMin } from "../src/lib/maple/feed";
-import { feedPartsList, planUnitsOf } from "../src/lib/maple/describe";
+import { feedClusters, lastFedAnchor, lastFedRule, minutesShort, nursingRuns, sameFeedBottleIds, spanText, topUpMl, typicalFeedGapMin, type LastFed } from "../src/lib/maple/feed";
+import { bottleFeedWords, feedPartsList, planUnitsOf } from "../src/lib/maple/describe";
 import { formatDuration, formatRelative, formatTime } from "../src/lib/maple/time";
 import { feedTargetOf, formatVolume, formatVolumeRange } from "../src/lib/maple/units";
 import { makeVoice } from "../src/lib/maple/voice";
-import type { EntryOf, Segment } from "../src/lib/maple/types";
+import type { EntryOf, FeedData, Segment } from "../src/lib/maple/types";
 
 type Element = { type: unknown; props: Record<string, unknown>; children: unknown[] };
 const h = (type: unknown, props: Record<string, unknown> | null, ...children: unknown[]): Element => ({ type, props: props ?? {}, children });
@@ -53,10 +53,10 @@ function feed(id: number, segments: Segment[]): EntryOf<"feed"> {
   };
 }
 const part = (start: string, end: string, side: Segment["side"] = "L"): Segment => ({ start: at(start), end: at(end), side });
-function bottle(id: number, start: string, end: string, ml: number): EntryOf<"feed"> {
+function bottle(id: number, start: string, end: string, ml: number, extra: Partial<FeedData> = {}): EntryOf<"feed"> {
   return {
     id, kind: "feed", started_at: at(start), ended_at: at(end), active: false,
-    data: { method: "bottle", amount_ml: ml }, note: null, source: "web",
+    data: { method: "bottle", amount_ml: ml, ...extra }, note: null, source: "web",
     created_by: null, updated_by: null, created_at: at(start), updated_at: at(end),
   };
 }
@@ -66,10 +66,20 @@ const history = () => Array.from({ length: 9 }, (_, i) => {
   return feed(10 + i, [{ start: iso(start), end: iso(start + 15 * 60_000), side: "L" }]);
 });
 
-function render(entries: EntryOf<"feed">[], clock: string, sleeping = false, { info = false, settings = {} as Record<string, unknown> } = {}) {
+type RenderOptions = {
+  info?: boolean;
+  settings?: Record<string, unknown>;
+  /** A bottle feed's later bottles, as feed.ts's LastFed carries them (a feeding plan's formula to finish). */
+  more?: EntryOf<"feed">[];
+  /** What the block's tap opens. */
+  open?: (sheet: unknown) => void;
+};
+
+function render(entries: EntryOf<"feed">[], clock: string, sleeping = false, { info = false, settings = {}, more, open = noop }: RenderOptions = {}) {
   const now = new Date(at(clock));
   const runs = nursingRuns(entries, now);
-  const lastFed = lastFedAnchor(entries, now, runs);
+  const anchor = lastFedAnchor(entries, now, runs);
+  const lastFed: (LastFed & { more?: EntryOf<"feed">[] }) | null = anchor && more ? { ...anchor, more } : anchor;
   const summary = {
     lastFed, lastFeed: entries.at(-1), next: null, cluster: feedClusters(runs).at(-1), born: false,
     active: sleeping ? [{ kind: "sleep", started_at: at(clock) }] : [],
@@ -77,9 +87,9 @@ function render(entries: EntryOf<"feed">[], clock: string, sleeping = false, { i
   const helpers = { isSide: (side: unknown) => side === "L" || side === "R", SIDE_NAME: { L: "Left", R: "Right" } };
   const card = fn<() => Element>("StatusCard", {
     useMaple: () => ({ state: { entries, baby: { timezone: "UTC", settings }, me: { email: "synthetic@example.test" } }, summary, log: noop, memberLabel: noop, readOnly: false, units: "metric", isNight: () => false }),
-    // The info button's state: open for this one render when `info`.
-    useVoice: () => voice, useSheets: () => ({ open: noop }), useNow: () => now, useState: () => [info, noop], useClusterInfo: () => ({ open: noop, sheet: null }),
-    DEFAULT_TZ: "UTC", typicalFeedGapMin, topUpMl, feedPartsList, planUnitsOf, feedTargetOf, formatVolumeRange, formatRelative, formatTime, formatDuration, formatVolume, minutesShort, spanText, lastFedRule,
+    // The info button's state: open for this one render when `info`. No feeding plan saved: no plan side.
+    useVoice: () => voice, useSheets: () => ({ open }), useNow: () => now, useState: () => [info, noop], useClusterInfo: () => ({ open: noop, sheet: null }), usePlanNow: () => null,
+    DEFAULT_TZ: "UTC", typicalFeedGapMin, topUpMl, feedPartsList, bottleFeedWords, planUnitsOf, feedTargetOf, formatVolumeRange, formatRelative, formatTime, formatDuration, formatVolume, minutesShort, spanText, lastFedRule,
     ts: (entry: { started_at: string }) => Date.parse(entry.started_at), since: String, sidesLabel: fn("sidesLabel", helpers),
     cx: (...classes: unknown[]) => classes.filter(Boolean).join(" "), tone: {}, DETAIL_COLOR: {}, KIND_COLOR: {},
     Icon: "Icon", NextSide: "NextSide", Since: "Since", AnimatePresence: "AnimatePresence", motion: { p: "p" },
@@ -175,4 +185,41 @@ test("adjusted long-feed anchors remain Last fed while their finish is explicit"
   assert.equal(side.summary.lastFed?.rule, "side");
   assert.match(side.text, /Finished just now/);
   assert.doesNotMatch(side.text, /Last feed started/);
+});
+
+test("Last fed on a bottle feed with later bottles adds them up and says each, and opens its first bottle", () => {
+  // The invented plan's night feed, Pump + bottle (plan feed p1f3): 30 ml of pumped milk, then 20 ml of formula to
+  // finish, each logged from the card with no end; a target of 50–70 ml. feed.ts counts one feed: the second is more of it.
+  const first = { ...bottle(1, "10:22", "10:22", 30, { milk: "breastmilk", plan: "p1f3" }), ended_at: null };
+  const finish = { ...bottle(2, "10:35", "10:35", 20, { milk: "formula", plan: "p1f3" }), ended_at: null };
+  const entries = [first, finish];
+  assert.deepEqual([...sameFeedBottleIds(entries, new Date(at("10:40")))], [2]);
+  const settings = { feed_target_ml: { min: 50, max: 70 } };
+  const opened: unknown[] = [];
+  const result = render(entries, "10:40", false, { settings, more: [finish], open: (sheet) => opened.push(sheet) });
+  const line = detailsLine(result.rendered);
+  assert.equal(text(line), "50 ml bottle (30 ml breast milk + 20 ml formula) · target 50–70 ml");
+  assert.match(result.text, /Last feed started18m ago/);
+  // A narrow line breaks between the bottles, never between an amount and its unit.
+  const unbroken = elements(line).filter((node) => /whitespace-nowrap/.test(classes(node))).map(text);
+  for (const piece of ["50 ml bottle", "(30 ml breast milk", "+ 20 ml formula)"]) assert.ok(unbroken.some((t) => t.startsWith(piece)), `"${piece}" stays on one line`);
+  // The whole block opens the feed's first bottle.
+  const block = elements(result.rendered).find((node) => node.type === "button" && /^Last feed started/.test(String(node.props["aria-label"] ?? "")));
+  (block?.props.onClick as () => void)();
+  // (Made inside the card's context, so compared field by field.)
+  assert.equal(opened.length, 1);
+  const sheet = opened[0] as { kind: string; entry: EntryOf<"feed"> };
+  assert.equal(sheet.kind, "feed");
+  assert.equal(sheet.entry, first);
+  // A bottle on its own reads as before; with an amount not said, no total that would read short.
+  assert.equal(text(detailsLine(render([first], "10:40", false, { settings }).rendered)), "30 ml bottle · target 50–70 ml");
+  const unsaid = { ...finish, data: { method: "bottle" as const, milk: "formula" as const, plan: "p1f3" } };
+  const unsaidLine = detailsLine(render([first, unsaid], "10:40", false, { more: [unsaid] }).rendered);
+  assert.equal(text(unsaidLine), "bottle (30 ml breast milk + formula)");
+  // The info button keeps to the last bottle's words, so a wrap never leaves it alone on a line.
+  const keeper = elements(unsaidLine)
+    .filter((x) => /whitespace-nowrap/.test(classes(x)) && elements(x).some((n) => n.props["aria-label"] === "How this is counted"))
+    .at(-1);
+  assert.equal(keeper && text(keeper), "+ formula)");
+  assert.deepEqual(bottleFeedWords([first, finish], "us"), ["1.69 oz bottle", "(1.01 oz breast milk", "+ 0.68 oz formula)"]);
 });

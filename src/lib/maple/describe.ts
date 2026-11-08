@@ -145,6 +145,32 @@ export function feedPartsList(parts: readonly EntryOf<"feed">[], units: UnitSyst
   return out;
 }
 
+/** A bottle's milk in a word or two ("breast milk", "formula", "mixed"), or null when it wasn't said. */
+const milkWord = (d: FeedData): string | null => (d.milk === "breastmilk" ? "breast milk" : d.milk ?? null);
+
+/**
+ * A bottle feed in words, for Last fed, as pieces a narrow line may break
+ * between (never inside an amount); `.join(" ")` reads it. One bottle is
+ * "50 ml bottle" ("bottle" with no amount said). A bottle feed with later
+ * bottles of the same feed (a feeding plan's pumped milk, then formula to
+ * finish: feed.ts LastFed.more) is their total, then each bottle in order with
+ * its milk: "50 ml bottle", "(30 ml breast milk", "+ 20 ml formula)". With an
+ * amount not said there's no total, never a short one: "bottle (30 ml breast
+ * milk + formula)".
+ */
+export function bottleFeedWords(bottles: readonly EntryOf<"feed">[], units: UnitSystem = "us"): string[] {
+  const amounts = bottles.map((b) => bottleAmount(b.data));
+  const known = amounts.every((ml) => ml != null);
+  const total = known && amounts.length ? amounts.reduce<number>((a, ml) => a + (ml ?? 0), 0) : null;
+  const head = total ? `${formatVolume(total, units)} bottle` : "bottle";
+  if (bottles.length < 2) return [head];
+  const each = bottles.map((b, i) => {
+    const ml = amounts[i];
+    return [ml != null ? formatVolume(ml, units) : null, milkWord(b.data)].filter(Boolean).join(" ") || "more";
+  });
+  return [head, ...each.map((w, i) => (i === 0 ? `(${w}` : `+ ${w}`) + (i === each.length - 1 ? ")" : ""))];
+}
+
 /** feedPartsList in one line ("+ 20 ml in the syringe · + 30 ml top-up"), or null for a feed with no parts. */
 export function feedPartsSummary(parts: readonly EntryOf<"feed">[], units: UnitSystem = "us", planUnits?: UnitSystem | null): string | null {
   const list = feedPartsList(parts, units, planUnits);

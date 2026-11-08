@@ -3,12 +3,12 @@
 import { useVoice } from "./familyWords";
 import { AnimatePresence, motion } from "framer-motion";
 import { Fragment, useState } from "react";
-import { feedPartsList, planUnitsOf } from "@/lib/maple/describe";
+import { bottleFeedWords, feedPartsList, planUnitsOf } from "@/lib/maple/describe";
 import { lastFedRule, minutesShort, spanText, typicalFeedGapMin, type NextSide as NextSideInfo, type NursingRun } from "@/lib/maple/feed";
 import { byBottle, type DayStats, type Summary } from "@/lib/maple/insights";
 import { DEFAULT_TZ, formatDuration, formatRelative, formatTime } from "@/lib/maple/time";
 import { feedTargetOf, formatVolume, formatVolumeRange } from "@/lib/maple/units";
-import type { Side, StretchSide } from "@/lib/maple/types";
+import type { EntryOf, Side, StretchSide } from "@/lib/maple/types";
 import { usePlanNow } from "./feeding/usePlanNow";
 import { Icon, type IconName } from "./icons";
 import { useNightActive } from "./nightLook";
@@ -152,15 +152,19 @@ export default function StatusCard() {
 
   // The big answer: how long since she last ate. Under it, one line that starts with the finish, then what that feed
   // was: its length and sides, a bottle's amount, or the cluster it closed. Its clock times and the usual gap are under ⓘ.
-  let feedSub: string[] | null = null;
+  // A bit is said whole, or (a bottle feed's bottles) in pieces a narrow line breaks between.
+  let feedSub: (string | string[])[] | null = null;
   if (!nursing && last) {
-    const bits: string[] = [];
+    const bits: (string | string[])[] = [];
     if (cluster) {
       // "Cluster 6:02–8:40 PM · 4 feeds · nursed 1h 52m" ("Cluster" opens the Cluster feeding sheet).
       bits.push(spanText(cluster.start, cluster.end, tz), `${cluster.feeds} feeds`, `nursed ${minutesShort(cluster.min.total)}`);
     } else if (last.data.method === "bottle") {
-      bits.push(last.data.amount_ml ? `${formatVolume(last.data.amount_ml, units)} bottle` : "bottle");
-      // A bottle on its own is the whole feed: its care team's target, when they gave one, sits beside it.
+      // A bottle feed is its first bottle (the one that opens) and any later bottles of the same feed (feed.ts LastFed's
+      // `more`: a feeding plan's formula to finish), added up, each said: "50 ml bottle (30 ml breast milk + 20 ml formula)".
+      const more = fed?.kind === "bottle" ? ((fed as typeof fed & { more?: EntryOf<"feed">[] }).more ?? []) : [];
+      bits.push(bottleFeedWords([last, ...more], units));
+      // A bottle feed is the whole feed: its care team's target, when they gave one, sits beside it.
       const target = feedTargetOf(state.baby.settings);
       if (target) bits.push(`target ${formatVolumeRange(target, units)}`);
     } else if (fed?.run) {
@@ -252,7 +256,26 @@ export default function StatusCard() {
                   {finished && "\u00a0· "}
                   {feedSub.map((bit, i) => {
                     const lead = i === 0 && clusterButton ? <>{clusterButton} </> : null;
-                    if (i < feedSub.length - 1) {
+                    const last = i === feedSub.length - 1;
+                    if (Array.isArray(bit)) {
+                      // In pieces ("50 ml bottle", "(30 ml breast milk", "+ 20 ml formula)"): a wrap falls only between
+                      // them, the "·" (or, last, the info button) staying with the last piece.
+                      return (
+                        <Fragment key={i}>
+                          {bit.map((piece, j) => (
+                            <Fragment key={j}>
+                              <span className="whitespace-nowrap">
+                                {j === 0 && lead}
+                                {piece}
+                                {j === bit.length - 1 && (last ? infoButton : "\u00a0·")}
+                              </span>
+                              {(j < bit.length - 1 || !last) && " "}
+                            </Fragment>
+                          ))}
+                        </Fragment>
+                      );
+                    }
+                    if (!last) {
                       // A wrap falls between bits, each "·" staying with the bit before it.
                       return (
                         <Fragment key={i}>
