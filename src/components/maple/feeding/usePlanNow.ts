@@ -19,14 +19,16 @@ import { missedItems, nursingOf, stepRows, type MissedItem, type OneTapLog, type
  *   plan's turn it was picked in, so a new turn (a feed logged, the night)
  *   drops it;
  * - a finished feed's unlogged steps set aside (Got it), by that feed's start;
- * - a step said to be finished as it is (a row's `close`, "She's done"), by the
- *   feed's start and the step: from then on it reads as done on this phone.
+ * - a step said to be finished as it is (a row's `close`, "She's done", "Not
+ *   needed"), by the feed's start and the step: from then on it reads as done
+ *   on this phone, and the next step's turn comes.
  *
  * The memory is sessionStorage (this tab), or this page's memory when that's
  * blocked, and every reader updates at once when it changes.
  *
  * What the dock takes from it: whether the next step is nursing (only then does
- * it outline the next side); with a pick on this phone, the start the card's
+ * it outline the next side, the plan's own when that nursing is on one side
+ * only, as Last fed does); with a pick on this phone, the start the card's
  * own Start would make (the picked feed and its nipple shield), while the next
  * step is that nursing (without a pick a dock start names no plan feed: the log
  * decides which it was); and the plan's bottle when its current step is one

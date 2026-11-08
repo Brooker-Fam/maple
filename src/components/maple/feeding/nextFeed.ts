@@ -10,8 +10,10 @@
  * the breast nobody logged becomes a small second link on the nursing row
  * once the action has moved on, and a bottle short of its amount ("up to
  * 50–70 ml", pumped milk then formula to finish) says what's given, offers
- * the rest, and a quiet "She's done" to leave it as it is. For a finished
- * feed with a step nobody logged: what isn't logged and the fix for each.
+ * the rest, and a quiet "She's done" to leave it as it is. A step only if
+ * needed ("if still hungry") never takes the big button from one that isn't,
+ * and has a quiet "Not needed". For a finished feed with a step nobody logged
+ * (never one only if needed): what isn't logged and the fix for each.
  *
  * Every amount and minute here is the plan's or the log's, in the plan's
  * unit: nothing is made up. A bottle preset from the plan says its milk and
