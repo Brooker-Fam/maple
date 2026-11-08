@@ -573,7 +573,7 @@ check("the night's bottle before its pump: a quiet second action once the feed i
   const g = stepRows(given, given.focus, SHE, undefined, D("+1 02:42"));
   eq([shape(g)[1], carry(g)], [["todo", "Bottle up to 50–70 ml, pumped milk first, then formula to finish", "Gave 40 ml · up to 50–70 ml"], [["pump", null, null], [null, "form", "She's done"], [null, null, null]]]);
   eq(form(g[1].secondary), { label: "Log formula to finish", aria: "Log formula to finish: 10 ml, opens the bottle form", preset: { method: "bottle", amount_ml: 10, milk: "formula", plan: NIGHT.id } });
-  eq([reading(given, "+1 02:42").bottle?.word, reading(given, "+1 02:42").bottle?.preset.amount_ml], ["Night feed", 10]);
+  eq([reading(given, "+1 02:42").bottle?.word, reading(given, "+1 02:42").bottle?.preset.amount_ml], ["To finish", 10]);
   // The pump running: the bottle is the next step, the dock's "Next step".
   const pumping = at(PLAN, [...firstNight(), pump("+1 02:40-")], "+1 02:45");
   eq([reading(pumping, "+1 02:45").bottle?.word, reading(pumping, "+1 02:45").bottle?.primary], ["Next step", true]);
@@ -585,7 +585,7 @@ check("a bottle feed left short: the dock opens the missed line's fix, at its la
   const fp = at(PLAN, log, "+1 00:40");
   const r = reading(fp, "+1 00:40");
   eq([r.missed.map((m) => m.what), r.missedName, fp.missed?.view.start], [["formula to finish"], Date.parse(T("23:45")), Date.parse(T("23:20"))], "named by its first bottle; kept by its start");
-  eq([r.bottle?.word, r.bottle?.primary, r.bottle?.preset], ["11:45 PM feed", false, { method: "bottle", amount_ml: 10, milk: "formula", plan: NIGHT.id, started_at: given.started_at }]);
+  eq([r.bottle?.word, r.bottle?.primary, r.bottle?.preset], ["To finish", false, { method: "bottle", amount_ml: 10, milk: "formula", plan: NIGHT.id, started_at: given.started_at }]);
   // An hour and a half after its last bottle: the missed line still says so, the dock's Bottle is a plain one again.
   const late = at(PLAN, log, "+1 01:20");
   eq([reading(late, "+1 01:20").missed.length, reading(late, "+1 01:20").bottle], [1, null]);

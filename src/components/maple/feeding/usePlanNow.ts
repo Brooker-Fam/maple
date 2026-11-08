@@ -138,8 +138,8 @@ export type PlanBottle = {
   preset: Record<string, unknown>;
   /**
    * What it is, in a word or two for the dock's tile: "Top-up", "Syringe", "SNS", "Next step" (only the card's own
-   * big button), else whose bottle it is: "Night feed" (the night's bottle before its pump), "2:00 AM feed" (a
-   * finished feed's formula to finish).
+   * big button), else what it's for: "To finish" (formula to finish, the rest of a bottle), "Night feed" (the night's
+   * bottle before its pump), "Not logged" (a finished feed's bottle nobody logged).
    */
   word: string;
   /** Its accessible name ("Log top-up: opens the bottle form"). */
@@ -216,20 +216,24 @@ export function withFeedAt(preset: Record<string, unknown>, at: number | null): 
 
 const actionAria = (a: StepAction): string => (a.kind === "form" ? a.aria : a.kind === "log" ? a.log.aria : a.kind === "choose" ? a.prompt.replace(/:$/, "") : "");
 
-/** The dock tile's word for a plan bottle: milk at the breast by how it goes in, a top-up, else `own` (whose it is). */
-function bottleWord(preset: Record<string, unknown>, own: string): string {
+/**
+ * The dock tile's word for a plan bottle, short enough for the tile's one line: milk at the breast by how it goes in,
+ * a top-up, the rest of a bottle ("To finish"), else `own` (the card's next step, or whose bottle it is).
+ */
+function bottleWord(a: StepAction, preset: Record<string, unknown>, own: string): string {
   const via = preset.via;
   if (via === "syringe" || via === "sns") return AT_BREAST_WORDS[via].name;
-  return typeof preset.top_up_of === "number" ? "Top-up" : own;
+  if (typeof preset.top_up_of === "number") return "Top-up";
+  return a.kind === "form" && /^Log (?:formula to finish|the rest of)/.test(a.label) ? "To finish" : own;
 }
 
 /**
  * The plan's bottle now: the first step (or its secondary) whose action is a bottle, else a top-up, milk at the
  * breast or the rest of a bottle the feed still owes under 90 minutes after its nursing, or after its last part when
  * it had none (the night's bottle feed, its formula to finish): the underway feed's, then the finished one's. "Next
- * step" is only for the card's own big button; anything else says whose it is.
+ * step" is only for the card's own big button; anything else says what it's for.
  */
-function planBottle(fp: FeedPlanNow, rows: readonly PlanRow[], missed: readonly MissedItem[], nowMs: number, tz: string): PlanBottle | null {
+function planBottle(fp: FeedPlanNow, rows: readonly PlanRow[], missed: readonly MissedItem[], nowMs: number): PlanBottle | null {
   const first = rows.find((r) => r.action)?.action ?? null;
   const focusAt = namedAt(fp.focus);
   const focusWord = fp.focus.night ? "Night feed" : "Plan feed";
@@ -238,7 +242,7 @@ function planBottle(fp: FeedPlanNow, rows: readonly PlanRow[], missed: readonly 
       const preset = actionPreset(a);
       if (!a || !preset) continue;
       const primary = a === first;
-      return { preset: withFeedAt(preset, focusAt), word: bottleWord(preset, primary ? "Next step" : focusWord), aria: actionAria(a), primary };
+      return { preset: withFeedAt(preset, focusAt), word: bottleWord(a, preset, primary ? "Next step" : focusWord), aria: actionAria(a), primary };
     }
   }
   const owed = (view: PlanFeedView, items: readonly MissedItem[], own: string) => {
@@ -248,7 +252,7 @@ function planBottle(fp: FeedPlanNow, rows: readonly PlanRow[], missed: readonly 
     if (!end || nowMs - Date.parse(end) > PLAN_LATE_TOP_UP_MS) return null;
     for (const m of items) {
       const preset = actionPreset(m.fix);
-      if (m.fix && preset) return { preset: withFeedAt(preset, namedAt(view)), word: bottleWord(preset, own), aria: actionAria(m.fix), primary: false };
+      if (m.fix && preset) return { preset: withFeedAt(preset, namedAt(view)), word: bottleWord(m.fix, preset, own), aria: actionAria(m.fix), primary: false };
     }
     return null;
   };
@@ -259,10 +263,7 @@ function planBottle(fp: FeedPlanNow, rows: readonly PlanRow[], missed: readonly 
     const got = owed(fp.focus, items, focusWord);
     if (got) return got;
   }
-  if (fp.missed) {
-    const at = namedAt(fp.missed.view) ?? fp.missed.view.start;
-    return owed(fp.missed.view, missed, at !== null ? `${formatTime(at, tz)} feed` : "Plan feed");
-  }
+  if (fp.missed) return owed(fp.missed.view, missed, "Not logged");
   return null;
 }
 
@@ -291,7 +292,7 @@ export function planReading(
   // does: otherwise the log decides which feed it was (its shield, its milk at the breast, a top-up), since a tag
   // would win over what was logged, and the dock's sides are just "she's on".
   const startWith: StartWith | null = nurse && o.choose ? { ...(nurse.shield ? { shield: true } : {}), plan: fp.focus.feed.id } : null;
-  const bottle = planBottle(fp, rows, missed, o.now.getTime(), o.tz);
+  const bottle = planBottle(fp, rows, missed, o.now.getTime());
   const missedName = fp.missed ? (namedAt(fp.missed.view) ?? missedAt) : null;
   return { rows, primary, missed, missedName, nurseNext: !!nurse, nurseSide: nurse?.side ?? null, startWith, bottle };
 }

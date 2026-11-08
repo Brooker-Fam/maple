@@ -108,8 +108,11 @@ export function Units({ text }: { text: string }) {
   );
 }
 
-/** A very short screen (an older small phone, under 600px tall): the card puts its big action before its later steps. */
-function useShortScreen(): boolean {
+/**
+ * A very short screen (an older small phone, under 600px tall): the card puts its big action before its later steps,
+ * and Today puts a call-today warning under the card rather than above it.
+ */
+export function useShortScreen(): boolean {
   const [short, setShort] = useState(false);
   useEffect(() => {
     const check = () => setShort(window.innerHeight < 600);

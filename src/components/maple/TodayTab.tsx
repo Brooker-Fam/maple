@@ -15,7 +15,7 @@ import { AskChatButton } from "./chat/AskChat";
 import Dock from "./Dock";
 import DailyDiscovery from "./development/DailyDiscovery";
 import EntryRow, { entryEditPreset, photoUrl } from "./EntryRow";
-import NextFeedCard from "./feeding/NextFeedCard";
+import NextFeedCard, { useShortScreen } from "./feeding/NextFeedCard";
 import { HelpFooter } from "./HelpSheet";
 import Hero from "./Hero";
 import { SleepNow, useFoldedSleepId } from "./sleep/SleepCards";
@@ -40,6 +40,7 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
   const now = useNow(30_000);
   // One sleep, one card: a bassinet try's card, or a holding turn's (her sleep in arms), is that sleep's card too, so its timer card steps aside.
   const folded = useFoldedSleepId();
+  const short = useShortScreen();
   if (!state || !summary) return null;
 
   const born = !!state.baby.born_at;
@@ -75,10 +76,11 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
       )}
       {readOnly && <LatestMoment />}
       {/*
-        With the feeding plan's card in Right now, a call-today warning stays up here with the urgent ones, above it,
-        folded to one line each (a tap opens the full card), so the card's action still clears the dock.
+        With the feeding plan's card in Right now, call-today warnings stay up here with the urgent ones, above it, folded
+        into one short row (a tap opens the full cards), so the card's action still clears the dock. On a very short
+        screen that row goes under the card instead: there's no room above it.
       */}
-      <AlertStack tiers={feedPlan ? ["emergency", "now", "today"] : ["emergency", "now"]} compact={feedPlan ? ["today"] : []} onNavigate={onNavigate} />
+      <AlertStack tiers={feedPlan && !short ? ["emergency", "now", "today"] : ["emergency", "now"]} compact={feedPlan ? ["today"] : []} onNavigate={onNavigate} />
 
       {(!nothingYet || timing || sleepNow || feedPlan) && (
         <section aria-labelledby="right-now">
@@ -99,6 +101,7 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
               action (Start Left, Log bottle) clears the dock at 375x667 without scrolling, with the top of Last fed under it.
             */}
             <NextFeedCard />
+            {feedPlan && short && <AlertStack tiers={["today"]} compact={["today"]} onNavigate={onNavigate} />}
             <StatusCard />
           </div>
         </section>

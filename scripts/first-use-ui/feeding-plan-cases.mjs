@@ -643,7 +643,7 @@ export function feedingPlanCases({ fixture, freshState, record, writes, assert }
       try {
         await metric(g);
         const c = await today(g);
-        const alert = g.page.getByText("Red in the diaper: call your pediatrician today", { exact: true });
+        const alert = g.page.getByRole("button", { name: "Call your pediatrician today: Red in the diaper: call your pediatrician today. Show it in full", exact: true });
         const [a, b] = await Promise.all([alert.boundingBox(), c.boundingBox()]);
         assert(a && b && a.y < b.y, `the warning (${a?.y}) is above the card (${b?.y})`);
         assert.deepEqual(g.errors, []);
@@ -775,9 +775,9 @@ export function feedingPlanCases({ fixture, freshState, record, writes, assert }
         const missed = c.getByRole("group", { name: "Not logged", exact: true });
         assert.match(plain(await missed.textContent()), /11:45 PM feed: formula to finish not logged/, "named by its bottle, never its 11:20 PM pump");
         assert.match(plain(await c.textContent()), /3 h after the 11:45 PM feed/, "the due line names the same moment");
-        // The dock's Bottle is the missed line's own fix, saying whose it is.
+        // The dock's Bottle is the missed line's own fix, saying what it's for.
         const tile = dock(f).getByRole("button", { name: /^Bottle: Log formula to finish/ });
-        assert.equal(plain(await tile.textContent()), "Bottle11:45 PM feed");
+        assert.equal(plain(await tile.textContent()), "BottleTo finish");
         assert.doesNotMatch(await tile.getAttribute("aria-label"), /next step/);
         await tile.click();
         const form = f.page.getByRole("dialog", { name: "Feed", exact: true });
@@ -992,11 +992,18 @@ export function feedingPlanCases({ fixture, freshState, record, writes, assert }
       }
     }],
 
-    ["Feeding plan: a call-today warning folds above the card, which keeps its action above the dock, its sides as the dock's and its numbers whole", async () => {
-      // Warnings on, red in this morning's diaper; after the 8:00 AM feed the plan's turn is Nurse, top up, Right suggested.
-      const warned = planned({ entries: [...morning(), record(44, "diaper", { pee: false, poop: true, color: "red" }, at(28, "08:50"))] });
+    ["Feeding plan: call-today warnings fold into one row above the card, which keeps its action above the dock, its sides as the dock's and its numbers whole", async () => {
+      // Warnings on: red in this morning's diaper, and diapers logged since yesterday say one wet one and one poop in 24
+      // hours (three call-today warnings). After the 8:00 AM feed the plan's turn is Nurse, top up, Right suggested.
+      const diapers = [
+        record(44, "diaper", { pee: false, poop: true, color: "red" }, at(28, "08:50")),
+        record(45, "diaper", { pee: true, poop: false }, at(28, "06:00")),
+        record(46, "diaper", { pee: true, poop: false }, at(27, "08:00")),
+      ];
+      const warned = planned({ entries: [...morning(), ...diapers] });
       warned.baby.settings.show_alerts = true;
       const f = await fixture({ state: warned });
+      const row = () => f.page.getByRole("button", { name: /^Call your pediatrician today: .*\. Show them in full$/ });
       try {
         await metric(f);
         for (const [width, height] of [[375, 667], [375, 812], [320, 568]]) {
@@ -1005,22 +1012,28 @@ export function feedingPlanCases({ fixture, freshState, record, writes, assert }
           const c = card(f);
           await c.waitFor();
           await f.page.waitForTimeout(250);
-          const folded = f.page.getByRole("button", { name: "Red in the diaper: call your pediatrician today. Show all of it", exact: true });
-          const [fb, cb] = await Promise.all([folded.boundingBox(), c.boundingBox()]);
-          assert(fb && cb && fb.height <= 52 && fb.y < cb.y, `${width}x${height}: one line (${fb?.height}) above the card`);
+          assert.equal(await row().count(), 1, `${width}x${height}: one row for all of them`);
+          const [rb, cb] = await Promise.all([row().boundingBox(), c.boundingBox()]);
+          assert(rb && cb && rb.height <= 60, `${width}x${height}: a short row (${rb?.height})`);
+          // Above the card; on a very short screen there's no room above it, so under it.
+          if (height >= 600) assert(rb.y < cb.y, `${width}x${height}: the row (${rb.y}) above the card (${cb.y})`);
+          else assert(rb.y > cb.y + cb.height - 1, `${width}x${height}: the row (${rb.y}) under the card (${cb.y + cb.height})`);
+          assert.match(plain(await row().textContent()), /^Call your pediatrician today/, "who to call, first");
           const start = c.getByRole("button", { name: "Start Right: Nurse, top up", exact: true });
           const left = c.getByRole("button", { name: /^Left: start on the Left/ });
           const [sb, lb, db] = await Promise.all([start.boundingBox(), left.boundingBox(), dock(f).boundingBox()]);
-          if (height >= 667) assert(sb && db && sb.y + sb.height <= db.y, `${width}x${height}: Start Right (${sb && sb.y + sb.height}) clears the dock (${db?.y})`);
+          assert(sb && db && sb.y + sb.height <= db.y, `${width}x${height}: Start Right (${sb && sb.y + sb.height}) clears the dock (${db?.y})`);
           assert(sb && lb && lb.x < sb.x && sb.width > lb.width && Math.abs(sb.y - lb.y) < 1, `${width}x${height}: Left then Right, as the dock has them, the suggested one wide`);
           // Each number stays on one line with its unit.
           const split = await c.evaluate((el) => [...el.querySelectorAll("span.whitespace-nowrap")].filter((n) => n.getClientRects().length > 1).map((n) => n.textContent));
           assert.deepEqual(split, [], `${width}x${height}: an amount split across lines`);
           assert.equal(await f.page.evaluate(() => document.documentElement.scrollWidth), width, "no sideways scroll");
         }
-        // A tap opens the full card, with who to call and We called.
-        await f.page.getByRole("button", { name: "Red in the diaper: call your pediatrician today. Show all of it", exact: true }).click();
-        await f.page.getByRole("button", { name: "We called", exact: true }).waitFor();
+        // A tap opens every one in full, with who to call and We called.
+        await row().click();
+        await f.page.getByRole("button", { name: "We called", exact: true }).first().waitFor();
+        assert.equal(await f.page.getByRole("button", { name: "We called", exact: true }).count(), 3);
+        await row().waitFor({ state: "detached" });
         assert.deepEqual(f.errors, []);
       } finally {
         await f.close();
