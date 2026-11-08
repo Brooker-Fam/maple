@@ -28,7 +28,7 @@ import {
 } from "@/lib/maple/feed";
 import { earlierPresets, LIKELY_SIDE_MIN, usualBreakMin, usualSideMin } from "@/lib/maple/presets";
 import { DEFAULT_TZ, formatDuration, formatMinutes, formatTime, formatTimeNear } from "@/lib/maple/time";
-import type { Entry, FeedData, FeedEdit, Side, StretchSide, TimerKind, TimerResponse } from "@/lib/maple/types";
+import type { Entry, FeedData, FeedEdit, Side, StartWith, StretchSide, TimerKind, TimerResponse } from "@/lib/maple/types";
 import { useBabyWords, type BabyWords } from "./familyWords";
 import { fixPreset, KIND_TITLE, SIDE_NAME } from "./FeedParts";
 import type { IconName } from "./icons";
@@ -647,8 +647,9 @@ export function useTimerActions() {
     [backAndForth, clock, now, short]
   );
 
+  /** Start nursing on `side`; `extra`: what the new feed carries (a nipple shield, the feeding plan's feed it follows). */
   const startFeed = useCallback(
-    async (side: Side) => {
+    async (side: Side, extra?: StartWith) => {
       tick();
       const nap = running("sleep");
       let napEnded: Entry | null = null;
@@ -657,7 +658,7 @@ export function useTimerActions() {
         if (s && !s.active && s.ended_at) napEnded = s;
       }
       const napText = napEnded ? `Nap ended ${short(napEnded.ended_at!)} (${formatMinutes((Date.parse(napEnded.ended_at!) - Date.parse(napEnded.started_at)) / 1000)})` : "";
-      const res = await timerCall({ action: "start", kind: "feed", side });
+      const res = await timerCall({ action: "start", kind: "feed", side, ...(extra && (extra.shield || extra.plan) ? { with: extra } : {}) });
       // Not started here (failed, or the other phone's feed was already running): no start toast.
       if (!res || res.alreadyRunning !== false) {
         if (napEnded) timerToast(napText, napEnded, { undo: () => void reopen(napEnded!) });

@@ -1222,7 +1222,14 @@ export function MapleProvider({ children }: { children: ReactNode }) {
           ended_at: null,
           active: true,
           // A start's side is where she started (L/R); back_and_forth opens it as a both part, as the server does.
-          data: input.kind === "feed" ? startBreast(input.side === "R" ? "R" : "L", at, { both: !!input.back_and_forth }) : {},
+          data:
+            input.kind === "feed"
+              ? {
+                  ...startBreast(input.side === "R" ? "R" : "L", at, { both: !!input.back_and_forth }),
+                  ...(input.with?.shield ? { shield: true } : {}),
+                  ...(input.with?.plan ? { plan: input.with.plan } : {}),
+                }
+              : {},
           note: null,
           created_by: state.me.email,
           updated_by: null,

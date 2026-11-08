@@ -400,7 +400,10 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `now` is a clock; the feeds and this entry decide it.
     [method, state?.entries, e?.id]
   );
-  const topUpOf = method === "bottle" ? topUpRunFor(otherRuns, (when ?? now()).getTime(), now()) : null;
+  // From the feeding plan's card: the feed this bottle tops up, even late (data.top_up_of), and the plan feed it's for.
+  const [linkTo] = useState(() => (e ? undefined : pnum(preset, "top_up_of")));
+  const [planFeed] = useState(() => (e ? undefined : pstr(preset, "plan")));
+  const topUpOf = method === "bottle" ? topUpRunFor(otherRuns, (when ?? now()).getTime(), now(), linkTo) : null;
   const bottleWord = topUpOf ? "top-up" : "bottle";
   const target = feedTargetOf(state?.baby.settings);
 
@@ -427,7 +430,21 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       try {
         const split = splitShown ? { breastmilk_ml: partMl(breastPart), formula_ml: partMl(formulaPart) } : {};
         const saved = await log(
-          { kind: "feed", started_at: when?.toISOString(), data: { method: "bottle", amount_ml: amountMl, milk, via, ...split }, note: note.trim() || null },
+          {
+            kind: "feed",
+            started_at: when?.toISOString(),
+            data: {
+              method: "bottle",
+              amount_ml: amountMl,
+              milk,
+              via,
+              ...split,
+              // Only while it still tops up that feed (a time moved past the next feed drops the link).
+              ...(linkTo && topUpOf?.entries.some((x) => x.id === linkTo) ? { top_up_of: linkTo } : {}),
+              ...(planFeed ? { plan: planFeed } : {}),
+            },
+            note: note.trim() || null,
+          },
           { toast: `${amountLabel ? `${amountLabel} ${bottleWord}` : topUpOf ? "Top-up" : "Bottle"} · ${clock(at)}` }
         );
         if (saved) onClose();

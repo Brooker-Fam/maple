@@ -404,6 +404,9 @@ export type Lifetime = {
   week?: { before: string; counts: { by: string | null; diapers: number; night: number }[] };
 };
 
+/** A nursing feed's start: a nipple shield, and the feeding plan's feed it follows. */
+export type StartWith = { shield?: boolean; plan?: string };
+
 /** POST /api/maple/timer */
 export type TimerInput = {
   action: TimerAction;
@@ -418,6 +421,12 @@ export type TimerInput = {
   side?: StretchSide;
   /** start (feeds): she's going back and forth from the start; `side` is still where she started. */
   back_and_forth?: boolean;
+  /**
+   * start (feeds): what the new feed carries from the start: a nipple shield,
+   * and the feeding plan's feed it follows (settings.feeding_plan). Only a new
+   * feed takes them; one already running (a switch) keeps its own.
+   */
+  with?: StartWith;
   /** switch/pause/resume/stop/discard/adjust/reopen/retime: which entry. */
   id?: number;
   /**

@@ -37,6 +37,7 @@ import type {
   Segment,
   Side,
   Source,
+  StartWith,
   StretchSide,
   TimerKind,
   TimerResponse,
@@ -770,6 +771,8 @@ export async function startTimer(fam: FamilyRef, opts: {
   kind: TimerKind;
   side?: Side;
   backAndForth?: boolean;
+  /** A new feed's nipple shield and plan feed (only a new one: a running feed keeps its own). */
+  with?: StartWith;
   at: Date;
   createdBy: string;
   source: Source;
@@ -792,7 +795,7 @@ export async function startTimer(fam: FamilyRef, opts: {
   const found = await existing();
   if (found) return found;
   const data: EntryDataByKind[TimerKind] =
-    opts.kind === "feed" ? startBreast(opts.side ?? "L", opts.at, { both }) : {};
+    opts.kind === "feed" ? { ...startBreast(opts.side ?? "L", opts.at, { both }), ...startWithData(opts.with) } : {};
   try {
     const { entry, deduped } = await createEntryOnce(fam, {
       babyId: opts.babyId,
@@ -813,6 +816,11 @@ export async function startTimer(fam: FamilyRef, opts: {
     if (raced) return raced;
     throw err;
   }
+}
+
+/** A feed's start extras as data keys (cleanData keeps them): only what's set. */
+export function startWithData(w: StartWith | undefined): Pick<FeedData, "shield" | "plan"> {
+  return { ...(w?.shield ? { shield: true } : {}), ...(w?.plan ? { plan: w.plan } : {}) };
 }
 
 /**

@@ -23,6 +23,7 @@ import {
   type FeedEdit,
   type Segment,
   type Side,
+  type StartWith,
   type StretchRef,
   type StretchSide,
   type TimerInput,
@@ -173,6 +174,22 @@ const timerJson = (r: TimerResponse) =>
  * was discarded answers 404 { reason: "discarded", deleted_by } so the app
  * can name who did it.
  */
+/** start's `with` (a feed's nipple shield and plan feed): checked here, kept by cleanData. */
+function startWith(v: unknown, kind: unknown): StartWith | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (kind !== "feed" || !isObject(v)) throw new BadRequest("with goes with a feed: { shield?, plan? }");
+  const out: StartWith = {};
+  if (v.shield !== undefined) {
+    if (typeof v.shield !== "boolean") throw new BadRequest("with.shield must be true or false");
+    if (v.shield) out.shield = true;
+  }
+  if (v.plan !== undefined) {
+    if (typeof v.plan !== "string" || !/^[A-Za-z0-9._-]{1,24}$/.test(v.plan)) throw new BadRequest("with.plan must be a plan feed's id");
+    out.plan = v.plan;
+  }
+  return out.shield || out.plan ? out : undefined;
+}
+
 export const POST = withMember("POST /api/maple/timer", async (request, me, ctx) => {
   const body = await readJson<TimerInput & { expect_updated_at?: unknown }>(request);
   const now = new Date();
@@ -183,12 +200,14 @@ export const POST = withMember("POST /api/maple/timer", async (request, me, ctx)
     if (body.side !== undefined && !isSide(body.side)) throw new BadRequest("side must be L or R (where she started; add back_and_forth: true for both sides)");
     if (body.back_and_forth !== undefined && typeof body.back_and_forth !== "boolean") throw new BadRequest("back_and_forth must be true or false");
     if (body.back_and_forth && (body.kind !== "feed" || !body.side)) throw new BadRequest("back_and_forth goes with a feed and the side she started on");
+    const extra = startWith(body.with, body.kind);
     const baby = await getBaby(ctx);
     const { entry, alreadyRunning } = await startTimer(ctx, {
       babyId: baby.id,
       kind: body.kind,
       side: body.side,
       backAndForth: body.back_and_forth === true,
+      with: extra,
       at: now,
       createdBy: me.email,
       source: "web",
