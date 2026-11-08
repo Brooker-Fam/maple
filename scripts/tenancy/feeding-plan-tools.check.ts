@@ -496,7 +496,11 @@ async function main() {
         const formula = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 20, unit: "ml", milk: "formula", at: "1:35am" });
         ok(formula.text.includes(`The feeding plan's 1:25 AM feed ("Pump + bottle") still had its formula to finish to give, so this was saved with that feed: part of it, not a feed of its own.`) && /^Feeds today: 1\b/m.test(formula.text), formula.text);
         eq([await planOf(milk.json.id), await planOf(formula.json.id)], [night, night], "both saved with the night feed");
-        ok(/^Last feed: 1\.18 oz \(35 ml\) bottle of breast milk at 1:25 AM today/.test(await lastFed()), await lastFed());
+        // Last fed at the first bottle; with the log's later bottles of a bottle feed (feed.ts LastFed's more), both, added up.
+        ok(
+          /^Last feed: (1\.18 oz \(35 ml\) bottle of breast milk|1\.86 oz \(55 ml\) by bottle \(1\.18 oz \(35 ml\) breast milk \+ 0\.68 oz \(20 ml\) formula\), one feed,) at 1:25 AM today/.test(await lastFed()),
+          await lastFed()
+        );
         // The same sent again (a retry) is the same save, read as the first was.
         const again = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 20, unit: "ml", milk: "formula", at: "1:35am" });
         ok(again.json.deduped === true || again.json.created === false, again.text);

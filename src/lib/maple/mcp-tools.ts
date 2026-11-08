@@ -2243,6 +2243,15 @@ function lastFeedLine(s: Summary, ctx: Ctx): string {
   const label = logged ? "Last logged feed" : "Last feed";
   if (fed.kind === "bottle" || !fed.run) {
     const f = fed.entry;
+    // A bottle feed's later bottles (a feeding plan's pumped milk, then formula to finish: feed.ts LastFed's `more`, read
+    // through a wider type), added up and each said, as Today's Last fed says them.
+    const more = laterBottles(fed);
+    if (more.length) {
+      const all = [f, ...more];
+      const total = all.every((b) => b.data.amount_ml != null) ? all.reduce((n, b) => n + (b.data.amount_ml ?? 0), 0) : null;
+      const each = all.map((b) => `${b.data.amount_ml != null ? formatVolumeBoth(b.data.amount_ml) : "a bottle"}${b.data.milk ? ` ${b.data.milk === "breastmilk" ? "breast milk" : b.data.milk}` : ""}`);
+      return `${label}: ${total != null ? `${formatVolumeBoth(total)} ` : ""}by bottle (${each.join(" + ")}), one feed, at ${whenText(f.started_at, ctx)} (${ago}).`;
+    }
     const milk = f.data.milk ? ` of ${f.data.milk === "breastmilk" ? "breast milk" : f.data.milk}` : "";
     // A Mixed bottle's split when it's known: "(30 ml (1 oz) breast milk + 20 ml (0.7 oz) formula)".
     const parts = [f.data.breastmilk_ml != null ? `${formatVolumeBoth(f.data.breastmilk_ml)} breast milk` : "", f.data.formula_ml != null ? `${formatVolumeBoth(f.data.formula_ml)} formula` : ""].filter(Boolean);
@@ -2285,6 +2294,9 @@ function partsJson(run: NursingRun | null, ctx: Ctx): Record<string, unknown> {
   };
 }
 
+/** A bottle feed's later bottles (feed.ts LastFed's `more`, read through a wider type): none for any other feed. */
+const laterBottles = (fed: NonNullable<Summary["lastFed"]>): FeedEntry[] => (fed.kind === "bottle" ? ((fed as typeof fed & { more?: FeedEntry[] }).more ?? []) : []);
+
 /**
  * maple_status's last_feed: the feed as counted, and when "last fed" counts from. `id` is its newest entry (the one
  * reopen_timer, delete_entry or a fix to its end acts on). A feed of several entries (a Done and a new one within 10
@@ -2305,8 +2317,12 @@ function lastFeedJson(s: Summary, ctx: Ctx): Record<string, unknown> | null {
     minutes_ago: s.minutesSinceFeed,
     ...(fed.rule === "long" ? { counted_from_local: localWhen(fed.at, ctx), counted_from: `${FEED_LENGTH_MIN[1]} minutes before ${vo.they} finished (a long back-and-forth feed)` } : {}),
     ...(fed.rule === "side" ? { counted_from_local: localWhen(fed.at, ctx), counted_from: `when ${vo.they} went on ${vo.their} last side, which alone ran past ${FEED_LENGTH_MIN[1]} minutes` } : {}),
-    what: run ? `breastfeed (${[sidesText(run.min), run.firstSide ? `started ${sideWord(run.firstSide)}` : "", run.backAndForth ? "back and forth" : "", topUpWords(run)].filter(Boolean).join(", ")})` : phrase(fed.entry, ctx),
+    what: run
+      ? `breastfeed (${[sidesText(run.min), run.firstSide ? `started ${sideWord(run.firstSide)}` : "", run.backAndForth ? "back and forth" : "", topUpWords(run)].filter(Boolean).join(", ")})`
+      : [fed.entry, ...laterBottles(fed)].map((b) => phrase(b, ctx)).join(" + "),
     ...(run && run.entries.length > 1 ? { entries: run.entries.map((e) => e.id) } : {}),
+    // A bottle feed of several bottles (the plan's pumped milk, then formula to finish): each one, the first first.
+    ...(!run && laterBottles(fed).length ? { entries: [fed.entry, ...laterBottles(fed)].map((e) => e.id) } : {}),
     // Bottles given with it: part of this feed, never feeds of their own; milk given at the breast apart from top-ups.
     ...partsJson(run, ctx),
     by: memberName(fed.entry.created_by, ctx.members),
