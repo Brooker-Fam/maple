@@ -10,6 +10,7 @@ import { amountCases } from "./amount-cases.mjs";
 import { bottleReviewCases } from "./bottle-review-cases.mjs";
 import { topUpCases } from "./top-up-cases.mjs";
 import { feedPartsCases } from "./feed-parts-cases.mjs";
+import { feedingPlanSheetCases } from "./feeding-plan-sheet-cases.mjs";
 import { bottleMethodCases } from "./bottle-method-cases.mjs";
 import { pumpReviewCases } from "./pump-review-cases.mjs";
 import { volumeBoundaryCases } from "./volume-boundary-cases.mjs";
@@ -101,6 +102,7 @@ const cases = [
   ...bottleReviewCases({ fixture, freshState, record, writes, assert }),
   ...topUpCases({ fixture, freshState, record, writes, assert }),
   ...feedPartsCases({ fixture, freshState, record, writes, assert }),
+  ...feedingPlanSheetCases({ fixture, freshState, assert }),
   ...bottleMethodCases({ fixture, freshState, record, writes, assert }),
   ...pumpReviewCases({ fixture, freshState, record, writes, assert }),
   ...volumeBoundaryCases({ fixture, freshState, record, writes, assert }),
