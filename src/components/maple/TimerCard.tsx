@@ -483,14 +483,16 @@ function useFeedParts(entry: Entry, plan: RunningPlan | null) {
   // The plan's nursing uses the shield and nobody has said, on or off: the chip asks.
   const asked = !!plan?.shield && want === null && entry.kind === "feed" && entry.data.shield === undefined;
   const entries = state?.entries;
-  const planGiven = plan?.given;
+  // The milk the plan counts on this feed's nursing, by id (the plan's reading is new each second; the log decides it).
+  const planGiven = (plan?.given ?? []).map((b) => b.id).join(",");
   // This feed's milk at the breast and top-ups (the whole feed: a side started again within 10 minutes is the same one,
   // a break of 10 minutes or more is two runs of one timer, and the plan may count a re-latch's milk with it), oldest first.
   const given = useMemo(() => {
     if (!entries || entry.kind !== "feed") return [];
     const out = new Map<number, EntryOf<"feed">>();
     for (const r of nursingRuns(entries, clock())) if (r.entries.some((e) => e.id === entry.id)) for (const b of r.topUps) out.set(b.id, b);
-    for (const b of planGiven ?? []) out.set(b.id, b);
+    const ids = new Set(planGiven ? planGiven.split(",").map(Number) : []);
+    for (const e of entries) if (ids.has(e.id) && e.kind === "feed") out.set(e.id, e);
     return [...out.values()].sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at) || a.id - b.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `clock` is the server-corrected now; the log decides it.
   }, [entries, entry.id, entry.kind, planGiven]);
