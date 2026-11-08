@@ -629,6 +629,10 @@ check("how it's given: Bottle and Paced bottle are the bottle's way (via), Cup, 
     "Nurse; then top up 10–15 ml by spoon if still hungry; then pump up to 15 min",
     "Finger feed 5 ml, breast milk",
   ]);
+  // A name that says how it's given still says it once an edit gives it another way, as it does of a shield.
+  const [cupFeed, , fingerFeed] = [d.feeds[3], d.feeds[4], d.feeds[5]];
+  eq([staleNameWords(cupFeed, cupFeed), staleNameWords({ ...cupFeed, steps: [{ ...cup, given: "paced" }] }, cupFeed)], [[], ["cup"]]);
+  eq(staleNameWords({ ...fingerFeed, steps: [{ ...finger, given: null }] }, fingerFeed), ["finger"]);
 });
 
 check("feeds and milk in 24 hours: at least, up to or both, the milk in ml whatever the unit, nothing at 0", () => {

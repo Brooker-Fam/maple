@@ -407,13 +407,17 @@ export function draftProblem(d: PlanDraft, base: FeedingPlan | null, now: Date, 
 
 // ── changing the draft ────────────────────────────────────────────────────
 
-/** Things a feed's name can mention that its steps hold: the nipple shield, milk at the breast by syringe or SNS, a top-up, a pump. */
+/**
+ * Things a feed's name can mention that its steps hold: the nipple shield, milk at the breast by syringe or SNS, a
+ * top-up, a pump, and milk given by cup, spoon or finger instead of a bottle.
+ */
 const NAME_WORDS: { word: RegExp; has: (f: FeedDraft) => boolean }[] = [
   { word: /\bshields?\b/i, has: (f) => f.steps.some((s) => s.do === "nurse" && s.shield) },
   { word: /\bsyringes?\b/i, has: (f) => f.steps.some((s) => s.do === "nurse" && s.atBreast === "syringe") },
   { word: /\bsns\b/i, has: (f) => f.steps.some((s) => s.do === "nurse" && s.atBreast === "sns") },
   { word: /\btop[\s-]?ups?\b/i, has: (f) => f.steps.some((s) => s.do === "bottle") },
   { word: /\bpump(?:s|ing)?\b/i, has: (f) => f.steps.some((s) => s.do === "pump") },
+  ...PLAN_GIVEN_BY.map((by) => ({ word: new RegExp(`\\b${by}s?\\b`, "i"), has: (f: FeedDraft) => f.steps.some((s) => s.do === "bottle" && s.given === by) })),
 ];
 
 /** The word as the name says it, unless it says it's without it ("no shield", "without SNS"). */

@@ -1,8 +1,10 @@
 /**
  * The feeding plan's sheet (src/components/maple/feeding/FeedingPlanSheet.tsx): the plan laid out to read, the empty
  * state's two ways to add one, the form (the exact PATCH it sends, only what changed), a refusal shown at the top,
- * another phone's change loaded, removing it, a new plan from a starting shape, ounces sent as ml, and a viewer who
- * only reads it. The ways in are Settings (Doctor & care plan; Baby details for a viewer) and More.
+ * another phone's change loaded, removing it, a new plan from a starting shape, ounces sent as ml, the newer options
+ * (the night when hungry, turns by the clock, offering the breast, up to and at least, a cup or spoon, feeds and milk
+ * in 24 hours) read, kept through an edit and put in on the form, and a viewer who only reads it. The ways in are
+ * Settings (Doctor & care plan; Baby details for a viewer) and More.
  *
  * An invented plan, never any family's (scripts/maple-feeding-plan-check.ts's): by day every 2.5 to 3.5 hours, taking
  * turns between "Nurse + SNS" (12–18 min with a nipple shield, 20 ml of formula in the SNS, then pump 15) and "Nurse,
