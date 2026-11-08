@@ -180,8 +180,9 @@ export default function Dock() {
   // A timer the server hasn't confirmed yet has a temporary id: hold its controls until it has a real one.
   const feedPending = !!feed && feed.id < 0;
   const sleepPending = !!sleep && sleep.id < 0;
-  // With a plan, the next side is outlined only while the plan's next step is that nursing (not a night feed's pump first).
-  const next = planNow && !planNow.nurseNext ? null : summary.nextSide;
+  // With a plan, the next side is outlined only while the plan's next step is that nursing (not a night feed's pump
+  // first), and it's the plan's side when that nursing is on one side only.
+  const next = planNow && !planNow.nurseNext ? null : (planNow?.nurseSide ?? summary.nextSide);
   // The last bottle given as a bottle: milk at the breast (a syringe, an SNS) is part of its nursing feed, never "last".
   const lastBottle = entries.find((e) => e.kind === "feed" && e.data.method === "bottle" && e.data.amount_ml && !atBreastOf(e.data));
   // The plan's bottle now (its next step, a top-up or milk at the breast still owed, a feed that starts with a bottle):

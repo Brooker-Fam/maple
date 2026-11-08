@@ -25,6 +25,7 @@ import {
   feedPlanNow,
   feedText,
   inNight,
+  intervalText,
   parseFeedingPlan,
   planLines,
   PlanConflict,
@@ -721,6 +722,248 @@ check("a plan without an interval: what's next, but nothing due", () => {
   const p = parseFeedingPlan({ feeds: [{ name: "A", steps: [{ do: "nurse" }] }] }, null, NOW0);
   const n = feedPlanNow(p, [nurse("L 08:00-08:15")], D("09:00"), { tz: TZ });
   eq([n.focus.feed.name, n.due], ["A", null]);
+});
+
+// ── a step only if needed ────────────────────────────────────────────────
+
+/**
+ * An invented plan with steps only if needed: "Nurse, top up if hungry" (8–12 min each side, then a 25–35 ml paced
+ * top-up only if she's still hungry) and "Nurse, pump if full" (12–18 min, then pump 15 only if still full), every
+ * 2.5 to 3.5 hours by day.
+ */
+const IF_NEEDED = parseFeedingPlan(
+  {
+    day: { every: [150, 210] },
+    feeds: [
+      { name: "Nurse, top up if hungry", steps: [{ do: "nurse", minutes: [8, 12], each_side: true }, { do: "bottle", ml: [25, 35], milk: "either", via: "paced", if_needed: true }] },
+      { name: "Nurse, pump if full", steps: [{ do: "nurse", minutes: [12, 18] }, { do: "pump", minutes: 15, if_needed: true }] },
+    ],
+  },
+  null,
+  NOW0
+);
+const [HUNGRY, FULL] = IF_NEEDED.feeds;
+
+check("only if needed: kept on a bottle and a pump step, and said as the plan says it", () => {
+  eq([HUNGRY.steps[1], FULL.steps[1]], [{ do: "bottle", ml: { min: 25, max: 35 }, milk: "either", via: "paced", if_needed: true }, { do: "pump", minutes: { min: 15, max: 15 }, if_needed: true }]);
+  eq(feedingPlanOf({ feeding_plan: IF_NEEDED }), IF_NEEDED, "read back as saved");
+  eq(parseFeedingPlan({ feeds: [{ name: "A", steps: [{ do: "pump", if_needed: false }, { do: "bottle" }] }] }, null, NOW0).feeds[0].steps[0], { do: "pump" }, "false is left out");
+  throws(() => parseFeedingPlan({ feeds: [{ name: "A", steps: [{ do: "bottle", if_needed: "yes" }] }] }, null, NOW0), PlanError, /^"A" step 1: only if needed must be true or false$/);
+  eq(stepText({ do: "bottle", ml: { min: 25, max: 35 }, if_needed: true }, PLAN, TARGET, { afterNurse: true }), "Top up 25–35 ml if still hungry");
+  eq(stepText({ do: "bottle", ml: { min: 60, max: 60 }, if_needed: true }, PLAN, TARGET), "Bottle 60 ml if still hungry");
+  eq(stepText({ do: "pump", minutes: { min: 15, max: 15 }, if_needed: true }, PLAN, TARGET), "Pump 15 min if needed");
+  eq(stepText({ do: "pump", if_needed: true }, PLAN, TARGET), "Pump if needed");
+  eq(feedText(HUNGRY, IF_NEEDED, TARGET), "Nurse 8–12 min each side; then top up 25–35 ml if still hungry, formula or breast milk, paced bottle");
+  eq(feedText(FULL, IF_NEEDED, TARGET), "Nurse 12–18 min; then pump 15 min if needed");
+});
+
+check("only if needed: never keeps a feed from being done and is never missed, but stays to do while the feed is on", () => {
+  const fed = nurse("L 09:00-09:10, R 09:10-09:20", { plan: HUNGRY.id });
+  // Off the breast: done, with its top-up still there to give, so the card stays on it ("Now").
+  let n = feedPlanNow(IF_NEEDED, [fed], D("09:25"), { tz: TZ, target: TARGET });
+  eq([n.focus.state, n.focus.feed.id, states(n.focus), n.focus.done, n.focus.optionalLeft, n.missed], ["underway", HUNGRY.id, ["done", "todo"], true, true, null]);
+  eq([n.due!.for, clock(n.due!.from), n.after?.feed.id], ["after", "11:30", FULL.id]);
+  // 45 minutes after she came off, nobody gave it: it wasn't needed. The next feed, and nothing reads as not logged.
+  for (const at of ["10:06", "10:10", "11:30"]) {
+    n = feedPlanNow(IF_NEEDED, [fed], D(at), { tz: TZ, target: TARGET });
+    eq([n.focus.state, n.focus.feed.id, n.missed], ["upcoming", FULL.id, null], at);
+  }
+  // Given after all: the step's done, and the feed's done at once.
+  n = feedPlanNow(IF_NEEDED, [fed, bottle("09:25", 30, { via: "paced", milk: "formula", plan: HUNGRY.id, top_up_of: fed.id })], D("09:30"), { tz: TZ, target: TARGET });
+  eq([n.focus.state, n.focus.feed.id, n.missed], ["upcoming", FULL.id, null]);
+  // Given later from the dock, before the next is due: still that feed's top-up, not a feed of its own.
+  n = feedPlanNow(IF_NEEDED, [fed, bottle("10:05", 30, { via: "paced", milk: "formula" })], D("10:10"), { tz: TZ, target: TARGET });
+  eq([n.focus.state, n.focus.feed.id, clock(n.due!.base), n.missed], ["upcoming", FULL.id, "09:00", null]);
+  // A pump only if needed: the same.
+  const full = nurse("L 12:00-12:15", { plan: FULL.id });
+  n = feedPlanNow(IF_NEEDED, [fed, full], D("12:20"), { tz: TZ, target: TARGET });
+  eq([n.focus.state, n.focus.feed.id, states(n.focus), n.focus.done], ["underway", FULL.id, ["done", "todo"], true]);
+  eq(feedPlanNow(IF_NEEDED, [fed, full], D("13:10"), { tz: TZ, target: TARGET }).missed, null);
+});
+
+check("only if needed beside a step that isn't: only the one that isn't is missed", () => {
+  const p = parseFeedingPlan(
+    { feeds: [{ name: "Nurse, top up, pump", steps: [{ do: "nurse", minutes: [8, 12], each_side: true }, { do: "bottle", ml: [25, 35], if_needed: true }, { do: "pump", minutes: 15 }] }], day: { every: [150, 210] } },
+    null,
+    NOW0
+  );
+  const fed = nurse("L 09:00-09:10, R 09:10-09:20", { plan: p.feeds[0].id });
+  let n = feedPlanNow(p, [fed], D("09:25"), { tz: TZ, target: TARGET });
+  eq([n.focus.state, states(n.focus), n.focus.done], ["underway", ["done", "todo", "todo"], false]);
+  n = feedPlanNow(p, [fed], D("10:30"), { tz: TZ, target: TARGET });
+  eq([n.focus.state, n.missed?.steps.map((s) => s.step.do)], ["upcoming", ["pump"]]);
+});
+
+// ── on demand, at least every so often ───────────────────────────────────
+
+check("on demand: kept as its most, with on_demand, however it's sent; with no most it's when she's hungry", () => {
+  const day = (every: unknown, extra: Record<string, unknown> = {}) => parseFeedingPlan({ day: { every, ...extra }, feeds: [{ name: "A", steps: [{ do: "nurse" }] }] }, null, NOW0).day;
+  const want = { every: { min: 180, max: 180 }, on_demand: true };
+  eq([day({ max: 180 }), day([0, 180]), day({ min: 0, max: 180 }), day([180, 0]), day(180, { on_demand: true }), day([150, 180], { on_demand: true })], [want, want, want, want, want, want]);
+  eq(day(180, { on_demand: true, wake: true }), { ...want, wake: true });
+  eq([day({ min: 180 }), day(180), day([150, 210])], [{ every: { min: 180, max: 180 } }, { every: { min: 180, max: 180 } }, { every: { min: 150, max: 210 } }], "a set interval as before");
+  eq(day(undefined, { on_demand: true }), {}, "on demand with no most: when she's hungry");
+  throws(() => day([0, 10]), PlanError, /between 30 and 480/);
+  throws(() => day(0), PlanError, /between 30 and 480/);
+  const p = parseFeedingPlan({ ...INPUT, day: { every: { max: 210 }, wake: true }, night: { ...INPUT.night, every: [0, 180] } }, null, NOW0);
+  eq([p.day, p.night?.every, p.night?.on_demand], [{ every: { min: 210, max: 210 }, on_demand: true, wake: true }, { min: 180, max: 180 }, true]);
+  eq(feedingPlanOf({ feeding_plan: p }), p, "read back as saved");
+});
+
+check("on demand: in words, and the read-back says it by day and at night", () => {
+  eq([everyText({ min: 180, max: 180 }), intervalText({ min: 180, max: 180 }, true), intervalText({ min: 210, max: 210 }, true), intervalText({ min: 150, max: 210 })], [
+    "every 3 hours",
+    "on demand, at least every 3 hours",
+    "on demand, at least every 3.5 hours",
+    "every 2.5–3.5 hours",
+  ]);
+  const p = parseFeedingPlan({ ...INPUT, day: { every: [0, 180], wake: true }, night: { ...INPUT.night, every: { max: 180 } } }, null, NOW0);
+  const lines = planLines(p, TARGET);
+  eq([lines[2], lines[6]], [
+    "Day: on demand, at least every 3 hours, waking her if she's asleep, taking turns: Nurse + SNS, then Nurse, top up",
+    "Night (11 PM–5 AM): on demand, at least every 3 hours, waking her: Pump + bottle",
+  ]);
+  // A night without an interval of its own goes on with the day's, on demand too.
+  const q = parseFeedingPlan({ ...INPUT, day: { every: [0, 180] }, night: { from: "23:00", to: "05:00", feed: "Pump + bottle" } }, null, NOW0);
+  eq(planLines(q, TARGET)[6], "Night (11 PM–5 AM): on demand, at least every 3 hours (as by day): Pump + bottle");
+});
+
+check("on demand: due by its most, never Due now before it; Due now for 15 minutes then; then Due since", () => {
+  const p = parseFeedingPlan({ day: { every: { max: 180 } }, feeds: [INPUT.feeds[1]] }, null, NOW0);
+  const fed = [nurse("L 09:00-09:10, R 09:10-09:20", { plan: p.feeds[0].id }), bottle("09:22", 30, { via: "paced", milk: "formula" })];
+  const n = feedPlanNow(p, fed, D("09:45"), { tz: TZ, target: TARGET });
+  eq([n.focus.state, n.due!.for, clock(n.due!.from), clock(n.due!.to), n.due!.onDemand, n.due!.status], ["upcoming", "focus", "12:00", "12:00", true, "early"]);
+  eq([dueText(n.due!, D("09:45"), TZ), dueText(n.due!, D("11:59"), TZ)], ["By 12:00 PM (on demand)", "By 12:00 PM (on demand)"]);
+  eq([dueStatus(n.due!, D("11:59")), dueStatus(n.due!, D("12:00")), dueStatus(n.due!, D("12:15")), dueStatus(n.due!, D("12:16"))], ["early", "due", "due", "late"]);
+  eq([dueText(n.due!, D("12:05"), TZ), dueText(n.due!, D("12:16"), TZ)], ["Due now (12:00 PM)", "Due since 12:00 PM: 3h 16m since the last feed"]);
+  // Waking her by its most: said as when to wake her if she's still asleep.
+  const w = parseFeedingPlan({ day: { every: { max: 180 }, wake: true }, feeds: [INPUT.feeds[1]] }, null, NOW0);
+  const m = feedPlanNow(w, fed, D("09:45"), { tz: TZ, target: TARGET });
+  eq([dueText(m.due!, D("09:45"), TZ), dueText(m.due!, D("09:45"), TZ, "him"), dueText(m.due!, D("12:05"), TZ)], ["Wake her by 12:00 PM if still asleep", "Wake him by 12:00 PM if still asleep", "Due now (12:00 PM)"]);
+  // A release that doesn't know on_demand reads an exact interval at its most: at a time, never early.
+  const older: FeedingPlan = { ...p, day: { every: p.day.every } };
+  const o = feedPlanNow(older, fed, D("09:45"), { tz: TZ, target: TARGET });
+  eq([dueText(o.due!, D("09:45"), TZ), o.due!.onDemand], ["Next feed at 12:00 PM, in 2h 15m", undefined]);
+});
+
+check("on demand at night: the night's interval takes it too, waking her by its most", () => {
+  const p = parseFeedingPlan({ ...INPUT, night: { ...INPUT.night, every: { max: 180 } } }, null, NOW0);
+  const evening = [nurse("L 20:30-20:45", { plan: SNS.id }), bottle("20:44", 20, { via: "sns" }), pump("20:50-21:05")];
+  const n = feedPlanNow(p, evening, D("21:30"), { tz: TZ, target: TARGET });
+  eq([n.focus.feed.id, n.due!.night, n.due!.onDemand, n.due!.wake, clock(n.due!.to)], [NIGHT.id, true, true, true, "23:30"]);
+  eq(dueText(n.due!, D("21:30"), TZ), "Wake her by 11:30 PM if still asleep");
+  // The day's interval stays as it was: a set window.
+  const day = feedPlanNow(p, [nurse("L 08:00-08:15", { plan: SNS.id }), bottle("08:15", 20, { via: "sns" }), pump("08:20-08:35")], D("09:30"), { tz: TZ, target: TARGET });
+  eq([day.due!.onDemand, dueText(day.due!, D("09:30"), TZ)], [undefined, "Next feed 10:30 AM–11:30 AM, in 1h 00m"]);
+});
+
+// ── nursing on one side ──────────────────────────────────────────────────
+
+check("one side: a nursing step on the left or right, never with each side, said as the plan says it", () => {
+  const nurseOn = (side: unknown, extra: Record<string, unknown> = {}) => parseFeedingPlan({ feeds: [{ name: "A", steps: [{ do: "nurse", minutes: [15, 20], side, ...extra }, { do: "pump", minutes: 15 }] }] }, null, NOW0).feeds[0].steps[0];
+  eq([nurseOn("left"), nurseOn("R"), nurseOn("Right"), nurseOn(null)], [
+    { do: "nurse", minutes: { min: 15, max: 20 }, side: "L" },
+    { do: "nurse", minutes: { min: 15, max: 20 }, side: "R" },
+    { do: "nurse", minutes: { min: 15, max: 20 }, side: "R" },
+    { do: "nurse", minutes: { min: 15, max: 20 } },
+  ]);
+  throws(() => nurseOn("middle"), PlanError, /^"A" step 1: the side must be left or right$/);
+  throws(() => nurseOn("left", { each_side: true }), PlanError, /^"A" step 1: each side or one side, not both$/);
+  eq(stepText({ do: "nurse", minutes: { min: 15, max: 20 }, side: "L" }, PLAN, null), "Nurse 15–20 min on the left");
+  eq(stepText({ do: "nurse", side: "R", shield: true }, PLAN, null), "Nurse on the right with the nipple shield");
+  eq(stepText({ do: "nurse", minutes: { min: 12, max: 18 }, side: "L", supplement: { via: "sns", ml: { min: 20, max: 20 }, milk: "formula" } }, PLAN, null), "Nurse 12–18 min on the left, 20 ml of formula in the SNS");
+  const p = parseFeedingPlan({ feeds: [{ name: "Left, pump the right", steps: [{ do: "nurse", minutes: [15, 20], side: "left" }, { do: "pump", minutes: 15 }] }] }, null, NOW0);
+  eq(feedingPlanOf({ feeding_plan: p }), p, "read back as saved");
+  eq(feedText(p.feeds[0], p, null), "Nurse 15–20 min on the left; then pump 15 min");
+});
+
+// ── turns at night ───────────────────────────────────────────────────────
+
+/**
+ * The checks' plan with turns at night: "Pump + bottle" (one parent pumps, the other gives the bottle), then "Nurse,
+ * pump" (10–15 min each side, then pump 15), every 3 hours from 11 PM to 5 AM, waking. By day the same turns as
+ * PLAN: "Nurse + SNS", then "Nurse, top up".
+ */
+const TURNS = parseFeedingPlan(
+  {
+    ...INPUT,
+    night: { from: "23:00", to: "05:00", every: 180, wake: true, order: ["Pump + bottle", "Nurse, pump"] },
+    feeds: [...INPUT.feeds, { name: "Nurse, pump", steps: [{ do: "nurse", minutes: [10, 15], each_side: true }, { do: "pump", minutes: 15 }] }],
+  },
+  null,
+  NOW0
+);
+const NURSE_PUMP = TURNS.feeds[3];
+
+check("turns at night: night.order by name or id, its first the night's feed; one turn is just the night's feed", () => {
+  eq([TURNS.night?.feed, TURNS.night?.order, TURNS.order], [NIGHT.id, [NIGHT.id, NURSE_PUMP.id], [SNS.id, TOPUP.id]], "the night's turns stay out of the day's");
+  eq(feedingPlanOf({ feeding_plan: TURNS }), TURNS, "read back as saved");
+  const one = parseFeedingPlan({ ...INPUT, night: { ...INPUT.night, feed: undefined, order: ["Pump + bottle"] } }, null, NOW0);
+  eq([one.night?.feed, "order" in one.night!], [NIGHT.id, false]);
+  // An older release reads the night's feed: its first turn.
+  eq(TURNS.night?.feed, TURNS.night?.order?.[0]);
+  throws(() => parseFeedingPlan({ ...INPUT, night: { ...INPUT.night, order: ["Pump + bottle", "Pump + bottle"] } }, null, NOW0), PlanError, /^Each feed is in the night's turns once$/);
+  throws(() => parseFeedingPlan({ ...INPUT, night: { ...INPUT.night, order: ["Pump + bottle", "Nope"] } }, null, NOW0), PlanError, /^The night's turn 2 names a feed that isn't in the plan$/);
+  throws(() => parseFeedingPlan({ ...INPUT, night: { ...INPUT.night, order: "Pump + bottle" } }, null, NOW0), PlanError, /^The night's turns must be a list of feeds$/);
+  eq(planLines(TURNS, TARGET)[7], "Night (11 PM–5 AM): every 3 hours, waking her, taking turns: Pump + bottle, then Nurse, pump");
+});
+
+check("turns at night: each night feed takes the next turn, by the night's turns as the day's go; the day's turns never move", () => {
+  const evening = [nurse("L 20:30-20:40, R 20:40-20:50", { plan: TOPUP.id }), bottle("20:55", 30, { via: "paced", milk: "formula" })];
+  let n = feedPlanNow(TURNS, evening, D("21:30"), { tz: TZ, target: TARGET });
+  eq([n.focus.feed.id, n.focus.why, n.focus.night, clock(n.due!.from), n.due!.wake], [NIGHT.id, "night", true, "23:30", true], "the night's first turn");
+  // The night's first: its pump, then the bottle. The next night feed is the second turn, 3 hours on, waking her.
+  const first = [...evening, pump("23:20-23:40"), bottle("23:45", 55, { milk: "breastmilk" })];
+  n = feedPlanNow(TURNS, first, D("23:50"), { tz: TZ, target: TARGET });
+  eq([n.focus.state, n.focus.feed.id, n.focus.why, clock(n.due!.from), n.due!.wake], ["upcoming", NURSE_PUMP.id, "night", "02:45", true]);
+  // Nursing from the dock at 2:45 is that turn; after it the night's over by its 3 hours, and the day's turn is the one
+  // after the evening's top-up feed, as if the night's turns weren't there.
+  const second = [...first, nurse("L +1d02:45-+1d02:55, R +1d02:55-+1d03:05"), pump("+1d03:10-+1d03:25")];
+  n = feedPlanNow(TURNS, second, D("+1 03:30"), { tz: TZ, target: TARGET });
+  eq([n.focus.state, n.focus.feed.id, n.focus.night, clock(n.due!.from)], ["upcoming", SNS.id, false, "05:15"]);
+  // A turn left out: nursing from the dock when the night's turn was the bottle is the night's nursing feed, by how she
+  // was fed, and the turn after it is the bottle.
+  const nursed = [...evening, nurse("L 23:40-23:50, R 23:50-+1d00:00")];
+  n = feedPlanNow(TURNS, nursed, D("+1 00:01"), { tz: TZ, target: TARGET });
+  eq([n.focus.state, n.focus.feed.id, n.focus.why, n.after?.feed.id, n.after?.night], ["underway", NURSE_PUMP.id, "matched", NIGHT.id, true]);
+  // Started from the card as the night's feed: its tag says which.
+  n = feedPlanNow(TURNS, [...evening, nurse("L 23:40-23:55", { plan: NIGHT.id })], D("23:58"), { tz: TZ, target: TARGET });
+  eq([n.focus.feed.id, n.focus.why, n.after?.feed.id], [NIGHT.id, "tagged", NURSE_PUMP.id]);
+});
+
+check("turns at night: the last night feed's place sets the next, the next night too", () => {
+  // Three night feeds: the bottle, nursing, the bottle; the next night begins with the turn after the last.
+  const night1 = [
+    nurse("L 20:30-20:40, R 20:40-20:50", { plan: TOPUP.id }),
+    bottle("20:55", 30, { via: "paced", milk: "formula" }),
+    pump("23:00-23:20"),
+    bottle("23:25", 55, { milk: "breastmilk" }),
+    nurse("L +1d01:30-+1d01:40, R +1d01:40-+1d01:50"),
+    pump("+1d01:55-+1d02:10"),
+    pump("+1d03:50-+1d04:10"),
+    bottle("+1 04:15", 55, { milk: "breastmilk" }),
+  ];
+  // The next day's feeds, taking the day's turns, then the evening's last at 8:30 PM.
+  const day2 = [
+    nurse("L +1d08:00-+1d08:15", { plan: SNS.id }),
+    bottle("+1 08:14", 20, { via: "sns", milk: "formula" }),
+    pump("+1d08:20-+1d08:35"),
+    nurse("L +1d11:00-+1d11:10, R +1d11:10-+1d11:20", { plan: TOPUP.id }),
+    bottle("+1 11:25", 30, { via: "paced", milk: "formula" }),
+    nurse("L +1d14:00-+1d14:15", { plan: SNS.id }),
+    bottle("+1 14:14", 20, { via: "sns", milk: "formula" }),
+    pump("+1d14:20-+1d14:35"),
+    nurse("L +1d17:00-+1d17:10, R +1d17:10-+1d17:20", { plan: TOPUP.id }),
+    bottle("+1 17:25", 30, { via: "paced", milk: "formula" }),
+    nurse("L +1d20:30-+1d20:45", { plan: SNS.id }),
+    bottle("+1 20:44", 20, { via: "sns", milk: "formula" }),
+    pump("+1d20:50-+1d21:05"),
+  ];
+  const n = feedPlanNow(TURNS, [...night1, ...day2], D("+1 22:00"), { tz: TZ, target: TARGET });
+  eq([n.focus.feed.id, n.focus.night], [NURSE_PUMP.id, true], "the last night feed was the bottle: nursing is next");
+  // The day's turns went on from the day's own feeds all along.
+  const morning = feedPlanNow(TURNS, night1, D("+1 06:00"), { tz: TZ, target: TARGET });
+  eq([morning.focus.feed.id, morning.focus.night], [SNS.id, false]);
 });
 
 // ── the log's own checks ─────────────────────────────────────────────────

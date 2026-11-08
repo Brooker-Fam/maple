@@ -9,6 +9,7 @@ import { byBottle, type DayStats, type Summary } from "@/lib/maple/insights";
 import { DEFAULT_TZ, formatDuration, formatRelative, formatTime } from "@/lib/maple/time";
 import { feedTargetOf, formatVolume, formatVolumeRange } from "@/lib/maple/units";
 import type { Side, StretchSide } from "@/lib/maple/types";
+import { usePlanNow } from "./feeding/usePlanNow";
 import { Icon, type IconName } from "./icons";
 import { useNightActive } from "./nightLook";
 import { DETAIL_COLOR, KIND_COLOR } from "./palette";
@@ -124,6 +125,8 @@ export default function StatusCard() {
   const now = useNow(20_000);
   const [info, setInfo] = useState(false);
   const clusterInfo = useClusterInfo();
+  // The care team's feeding plan, as the Next feed card above reads it: its next feed on one side only is the side next.
+  const planSide = usePlanNow()?.nurseSide ?? null;
   if (!state || !summary) return null;
   const tz = state.baby.timezone ?? DEFAULT_TZ;
 
@@ -175,7 +178,7 @@ export default function StatusCard() {
   // ⓘ's first sentence: the clock times the line leaves to the big number ("Started 5:30 PM, finished 6:00 PM.").
   const clock = started ? `Started ${started}${fed?.end ? `, finished ${formatTime(fed.end, tz)}` : ""}.` : null;
 
-  const next = !nursing ? summary.next : null;
+  const next: NextSideInfo | null = nursing ? null : planSide ? { side: planSide, rule: "alternate", fuller: false } : summary.next;
   // A sleep (or tummy or pump) timer above this card on a short phone: the Last fed block keeps its answer, the finish
   // and the next side but folds the rest of the finish's line, so the Since tiles still clear the dock at 375x667.
   const fold = summary.active.length > 0;

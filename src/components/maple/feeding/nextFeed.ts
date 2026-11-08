@@ -25,6 +25,7 @@ import {
   AT_BREAST_WORDS,
   amountText,
   dueText,
+  ifNeeded,
   stepText,
   type BottleStep,
   type FeedingPlan,
@@ -59,8 +60,11 @@ export type OneTapLog = {
 
 /** A step's action (the next physical step carries it, and only that one), or a row's second link. */
 export type StepAction =
-  /** Start nursing: the suggested side big, the other beside it (the plan's shield and feed go with the start). */
-  | { kind: "nurse"; shield: boolean }
+  /**
+   * Start nursing: the suggested side big, the other beside it (the plan's shield and feed go with the start); a
+   * step on one side (`side`, "left only") offers only that side.
+   */
+  | { kind: "nurse"; shield: boolean; side?: Side }
   | { kind: "pump" }
   /**
    * Open a form, prefilled from the plan: the bottle form ("Log bottle", "Log top-up", "Log formula to finish",
@@ -85,14 +89,23 @@ export type StepRow = {
   status: string | null;
   /** The next physical step's action: on one row at most, and on none while nothing can be done yet. */
   action: StepAction | null;
-  /** A small link beside the row: her milk at the breast nobody logged, once she's off and the action has moved on to the next step. */
+  /**
+   * A small link beside the row: her milk at the breast nobody logged, once she's off and the action has moved on to
+   * the next step; or a step only if needed whose turn has come while another step has the big button.
+   */
   secondary: StepAction | null;
   /**
-   * A quiet way to say the step is finished as it is: "She's done" on a bottle short of its amount. The card sets
-   * the row aside on this phone (as Got it), and from then on shows it done; nothing is logged.
+   * A quiet way to say the step is finished as it is: "She's done" on a bottle short of its amount, "Not needed" on
+   * a step only if needed. The card sets the row aside on this phone (as Got it), and from then on shows it done;
+   * nothing is logged.
    */
   close: string | null;
+  /** A step only if needed (a top-up if she's still hungry, a pump if still full): set aside, it reads "Not needed". */
+  optional: boolean;
 };
+
+/** What a step only if needed says once it's set aside on this phone. */
+export const NOT_NEEDED = "Not needed";
 
 /** The baby's words for "She's done": BabyWords.Hes ("She's", "He's", "River's"). Without them, the name-free form. */
 export type RowWords = { Hes: string };
@@ -228,14 +241,16 @@ function sidesSoFar(run: NursingRun): string | null {
 }
 
 /**
- * Which step carries the action: the next physical step. None while she's on the breast (or on a break in a feed
- * still going): nothing else can be done yet. While a pump runs, the first bottle still to give. Otherwise the first
- * step still to do (not logged, or a bottle short of its amount); none when nothing is.
+ * Which step is next: the next physical step. None while she's on the breast (or on a break in a feed still going):
+ * nothing else can be done yet. While a pump runs, the first bottle still to give. Otherwise the first step still to
+ * do (not logged, or a bottle short of its amount); none when nothing is. A step only if needed is next only when no
+ * step that isn't is left: it never takes the big button from one.
  */
 function nextStep(view: PlanFeedView): number | null {
   if (view.group?.run?.live) return null;
   const pumping = view.steps.some((v) => v.step.do === "pump" && v.status === "running");
-  return view.steps.find((v) => v.status === "todo" && (!pumping || v.step.do === "bottle"))?.i ?? null;
+  const todo = view.steps.filter((v) => v.status === "todo" && (!pumping || v.step.do === "bottle"));
+  return (todo.find((v) => !ifNeeded(v.step)) ?? todo[0])?.i ?? null;
 }
 
 /**
@@ -244,8 +259,10 @@ function nextStep(view: PlanFeedView): number | null {
  * what was ("Nursed 14m · 20 ml in the SNS", "Pumped 15m", "Gave 30 ml"), one
  * going says so ("Nursing now · 8m", "Left 11m · Right next", "Pumping now ·
  * 6m"), a bottle short of its amount says what's given against it, and the
- * next physical step carries the action. `words`: the baby's (BabyWords), for
- * "She's done".
+ * next physical step carries the action. A step only if needed keeps its
+ * action once its turn has come, as the big button only when no step that
+ * isn't is waiting (else beside its row), with a quiet "Not needed". `words`:
+ * the baby's (BabyWords), for "She's done".
  */
 export function stepRows(fp: FeedPlanNow, view: PlanFeedView = fp.focus, words: RowWords = THE_BABY): StepRow[] {
   const nursing = nursingOf(view);
@@ -256,6 +273,14 @@ export function stepRows(fp: FeedPlanNow, view: PlanFeedView = fp.focus, words: 
   // Paused: a timed feed still running with no side open (an untimed one, logged by voice without sides, has none at all).
   const onBreak = !!lastEntry?.active && !!lastEntry.data.segments?.length && !openSegment(lastEntry.data.segments);
   const next = nextStep(view);
+  // The big button: the next step; but one only if needed never takes it from her milk at the breast still to log.
+  const milkOwed = view.steps.some((v) => v.status === "done" && milkLeft(v));
+  const primary = next !== null && !(ifNeeded(view.steps[next].step) && milkOwed) ? next : null;
+  /** A row's action: the big button, beside it (a step only if needed whose turn has come, in a feed begun), or none. */
+  const role = (v: StepView): "action" | "secondary" | null => {
+    if (v.i === primary) return "action";
+    return ifNeeded(v.step) && v.status === "todo" && view.start !== null && next !== null && v.i <= next ? "secondary" : null;
+  };
   let nursed = false;
   let count = 0;
   return view.steps.map((v): StepRow => {
@@ -264,9 +289,12 @@ export function stepRows(fp: FeedPlanNow, view: PlanFeedView = fp.focus, words: 
     const key = `${view.feed.id}:${v.i}`;
     const text = stepText(v.step, fp.plan, fp.target, { afterNurse });
     const n = v.step.do === "note" ? null : ++count;
-    const row = (r: Pick<StepRow, "state"> & Partial<StepRow>): StepRow => ({ key, n, text, status: null, action: null, secondary: null, close: null, ...r });
+    const optional = ifNeeded(v.step);
+    const row = (r: Pick<StepRow, "state"> & Partial<StepRow>): StepRow => ({ key, n, text, status: null, action: null, secondary: null, close: null, optional, ...r });
     if (v.step.do === "note") return row({ state: "note" });
-    const mine = v.i === next;
+    const r = role(v);
+    /** The step's action where its role puts it, and (only if needed) its quiet "Not needed" while it has one. */
+    const acts = (a: StepAction): Partial<StepRow> => (r ? { [r]: a, ...(optional ? { close: NOT_NEEDED } : {}) } : {});
     if (v.step.do === "nurse") {
       const s = v.step;
       const milk = atBreastWords(s, v.entries, v.ml, c);
@@ -280,17 +308,18 @@ export function stepRows(fp: FeedPlanNow, view: PlanFeedView = fp.focus, words: 
       if (v.status === "done") {
         if (!milkLeft(v)) return row({ state: "done", text: milk ? `Nursed ${minutes} · ${milk}` : `Nursed ${minutes}` });
         // Off the breast, her milk at the breast not logged: a small link beside the row while the next step has the
-        // action, or the action itself when nothing else is left.
+        // action, or the action itself when nothing else is left (or only a step only if needed).
         const fix = milkAction(s, c);
-        return row({ state: "todo", status: `Nursed ${minutes}`, ...(next === null ? { action: fix } : { secondary: fix }) });
+        return row({ state: "todo", status: `Nursed ${minutes}`, ...(primary === null ? { action: fix } : { secondary: fix }) });
       }
-      return row({ state: "todo", action: mine ? { kind: "nurse", shield: !!s.shield } : null });
+      // On one side only: that side's Start alone.
+      return row({ state: "todo", ...(r === "action" ? { action: { kind: "nurse", shield: !!s.shield, ...(s.side ? { side: s.side } : {}) } } : {}) });
     }
     if (v.step.do === "pump") {
       const minutes = minutesShort(v.minutes ?? 0);
       if (v.status === "running") return row({ state: "running", status: `Pumping now · ${minutes}` });
       if (v.status === "done") return row({ state: "done", text: `Pumped ${minutes}` });
-      return row({ state: "todo", action: mine ? { kind: "pump" } : null });
+      return row({ state: "todo", ...acts({ kind: "pump" }) });
     }
     if (v.status === "done") {
       const gave = v.ml != null ? `Gave ${amountText(ml1(v.ml), unit)}` : afterNurse ? "Gave a top-up" : "Gave a bottle";
@@ -299,9 +328,9 @@ export function stepRows(fp: FeedPlanNow, view: PlanFeedView = fp.focus, words: 
     if (short(v)) {
       // Some given, short of what it's up to: what's given against it, the rest in the bottle form, or done as it is.
       const status = `Gave ${amountText(ml1(v.ml ?? 0), unit)} · up to ${amountText(v.need!, unit)}`;
-      return row({ state: "todo", status, action: mine ? finishAction(v.step, v, afterNurse, c) : null, close: `${words.Hes} done` });
+      return row({ state: "todo", status, ...acts(finishAction(v.step, v, afterNurse, c)), close: `${words.Hes} done` });
     }
-    return row({ state: "todo", action: mine ? bottleAction(v.step, afterNurse, c) : null });
+    return row({ state: "todo", ...acts(bottleAction(v.step, afterNurse, c)) });
   });
 }
 

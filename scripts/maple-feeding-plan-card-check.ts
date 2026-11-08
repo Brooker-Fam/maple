@@ -402,6 +402,95 @@ check("missed: a top-up opens the form naming its feed; milk at the breast is on
   });
 });
 
+// ── a step only if needed ────────────────────────────────────────────────
+
+/**
+ * Invented plans with steps only if needed: "Nurse, top up if hungry" (8–12 min each side, then a 25–35 ml paced
+ * top-up if she's still hungry); "Top up if hungry, pump" (the same, then pump 15); "Nurse + SNS, top up if hungry"
+ * (12–18 min with 20 ml of formula in the SNS, then the top-up if she's still hungry); "Nurse, pump, bottle if hungry"
+ * (12–18 min, pump 15, then a 60 ml top-up of breast milk if she's still hungry); every 2.5 to 3.5 hours.
+ */
+const OPTIONAL = parseFeedingPlan(
+  {
+    day: { every: [150, 210] },
+    feeds: [
+      { name: "Nurse, top up if hungry", steps: [{ do: "nurse", minutes: [8, 12], each_side: true }, { do: "bottle", ml: [25, 35], milk: "either", via: "paced", if_needed: true }] },
+      { name: "Top up if hungry, pump", steps: [{ do: "nurse", minutes: [8, 12], each_side: true }, { do: "bottle", ml: [25, 35], via: "paced", if_needed: true }, { do: "pump", minutes: 15 }] },
+      { name: "Nurse + SNS, top up if hungry", steps: [{ do: "nurse", minutes: [12, 18], supplement: { via: "sns", ml: 20, milk: "formula" } }, { do: "bottle", ml: [25, 35], via: "paced", if_needed: true }] },
+      { name: "Nurse, pump, bottle if hungry", steps: [{ do: "nurse", minutes: [12, 18] }, { do: "pump", minutes: 15 }, { do: "bottle", ml: 60, milk: "breastmilk", if_needed: true }] },
+    ],
+  },
+  null,
+  NOW0
+);
+const [HUNGRY, HUNGRY_PUMP, SNS_HUNGRY, PUMP_HUNGRY] = OPTIONAL.feeds;
+
+check("only if needed: in the plan's words; before the feed the nursing has the action, and the step is marked only if needed", () => {
+  const fp = at(OPTIONAL, [], "09:00");
+  const rows = stepRows(fp, fp.focus, SHE);
+  eq(shape(rows), [["todo", "Nurse 8–12 min each side", null], ["todo", "Top up 25–35 ml if still hungry, formula or breast milk, paced bottle", null]]);
+  eq([carry(rows), rows.map((r) => r.optional)], [[["nurse", null, null], [null, null, null]], [false, true]]);
+});
+
+check("only if needed: off the breast it's the big button with a quiet Not needed when nothing else is left; never while she's on", () => {
+  const on = nurse("L 09:00-09:10, R 09:10-", { plan: HUNGRY.id });
+  let fp = at(OPTIONAL, [on], "09:15");
+  eq(carry(stepRows(fp, fp.focus, SHE)), [[null, null, null], [null, null, null]], "while she's on, nothing");
+  const fed = nurse("L 09:00-09:10, R 09:10-09:20", { plan: HUNGRY.id });
+  fp = at(OPTIONAL, [fed], "09:25");
+  const rows = stepRows(fp, fp.focus, SHE);
+  eq([fp.focus.state, fp.focus.done, shape(rows)], ["underway", true, [["done", "Nursed 20m", null], ["todo", "Top up 25–35 ml if still hungry, formula or breast milk, paced bottle", null]]]);
+  eq(carry(rows), [[null, null, null], ["form", null, "Not needed"]]);
+  eq(form(rows[1].action), { label: "Log top-up", aria: "Log top-up: opens the bottle form", preset: { method: "bottle", amount_ml: 25, milk: null, via: "paced", plan: HUNGRY.id, top_up_of: fed.id } });
+  // Nobody gave it: never in the not-logged line.
+  eq(missedItems(at(OPTIONAL, [fed], "10:30")), []);
+});
+
+check("only if needed never takes the big button from a step that isn't: beside its row while the pump is next, the big one once nothing else is", () => {
+  const fed = nurse("L 09:00-09:10, R 09:10-09:20", { plan: HUNGRY_PUMP.id });
+  let fp = at(OPTIONAL, [fed], "09:25", { choose: HUNGRY_PUMP.id });
+  let rows = stepRows(fp, fp.focus, SHE);
+  eq([fp.focus.feed.id, carry(rows)], [HUNGRY_PUMP.id, [[null, null, null], [null, "form", "Not needed"], ["pump", null, null]]]);
+  eq(form(rows[1].secondary), { label: "Log top-up", aria: "Log top-up: opens the bottle form", preset: { method: "bottle", amount_ml: 25, milk: null, via: "paced", plan: HUNGRY_PUMP.id, top_up_of: fed.id } });
+  // Pumping, or pumped: the top-up is the one thing left.
+  fp = at(OPTIONAL, [fed, pump("09:26-")], "09:30");
+  rows = stepRows(fp, fp.focus, SHE);
+  eq(carry(rows), [[null, null, null], ["form", null, "Not needed"], [null, null, null]]);
+  fp = at(OPTIONAL, [fed, pump("09:26-09:41")], "09:42");
+  eq(carry(stepRows(fp, fp.focus, SHE)), [[null, null, null], ["form", null, "Not needed"], [null, null, null]]);
+  // Left as it was, only the pump is ever missed.
+  eq(missedItems(at(OPTIONAL, [fed], "10:30")).map((m) => m.what), ["pump"]);
+  // Her milk at the breast still to log isn't only if needed: it keeps the big button, the top-up beside its row.
+  const sns = nurse("L 12:00-12:15", { plan: SNS_HUNGRY.id });
+  fp = at(OPTIONAL, [sns], "12:16", { choose: SNS_HUNGRY.id });
+  rows = stepRows(fp, fp.focus, SHE);
+  eq([fp.focus.feed.id, carry(rows)], [SNS_HUNGRY.id, [["log", null, null], [null, "form", "Not needed"]]]);
+});
+
+check("only if needed after a pump: nothing while the pump waits its turn; while it runs, the bottle for whoever gives it", () => {
+  const fed = nurse("L 09:00-09:15", { plan: PUMP_HUNGRY.id });
+  let fp = at(OPTIONAL, [fed], "09:16", { choose: PUMP_HUNGRY.id });
+  eq([fp.focus.feed.id, carry(stepRows(fp, fp.focus, SHE))], [PUMP_HUNGRY.id, [[null, null, null], ["pump", null, null], [null, null, null]]]);
+  fp = at(OPTIONAL, [fed, pump("09:17-")], "09:20");
+  const rows = stepRows(fp, fp.focus, SHE);
+  eq([shape(rows)[2], carry(rows)[2]], [["todo", "Top up 60 ml if still hungry, breast milk", null], ["form", null, "Not needed"]]);
+});
+
+// ── nursing on one side ──────────────────────────────────────────────────
+
+check("one side: the start offers only the plan's side, with its shield and feed", () => {
+  const p = parseFeedingPlan(
+    { feeds: [{ name: "Left, pump the right", steps: [{ do: "nurse", minutes: [15, 20], side: "left", shield: true }, { do: "pump", minutes: 15 }] }], day: { every: 180 } },
+    null,
+    NOW0
+  );
+  const fp = at(p, [], "09:00");
+  const rows = stepRows(fp, fp.focus, SHE);
+  eq([rows[0].text, rows[0].action], ["Nurse 15–20 min on the left with the nipple shield", { kind: "nurse", shield: true, side: "L" }]);
+  // Any other plan's start has no side of its own: the suggested one, the other beside it.
+  eq(stepRows(at(PLAN, [], "09:00"), undefined, SHE)[0].action, { kind: "nurse", shield: false });
+});
+
 // ── the plan's unit ──────────────────────────────────────────────────────
 
 check("in ounces: what's given, what it's up to and the rest, in the plan's unit", () => {

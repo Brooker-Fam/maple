@@ -31,15 +31,16 @@ import { usePlanLog, usePlanNow, type PlanRow } from "./usePlanNow";
  * 11:30 AM, in 1h 00m · 2.5–3.5 h after the 8:00 AM feed"; calm in every
  * state, "Due since 4:10 PM" is a fact, never an alarm), its first step in the
  * plan's words with the action (Start Left, the side the dock suggests, with
- * the other side beside it; Start pumping; Log bottle, the bottle form
- * prefilled from the plan), its later steps on one line, and one quiet
+ * the other side beside it, or only the plan's side when it nurses on one;
+ * Start pumping; Log bottle, the bottle form prefilled from the plan), its
+ * later steps on one line, and one quiet
  * "Other feed" for the plan's other feeds, kept on this phone until a feed
  * starts or the plan's turn changes. While a feed is going ("Now"), each step
  * says whether it's logged, going or still to do; the next physical step
  * carries the action (milk at the breast in one tap, a top-up in the bottle
  * form naming its feed, Start pumping), a step can carry a small second one
- * beside it, and a short bottle step has a quiet "She's done" that sets it
- * aside on this phone. "Not …?" says which plan feed it really was, for every
+ * beside it, and a short bottle step has a quiet "She's done" (a step only if
+ * needed, "Not needed") that sets it aside on this phone. "Not …?" says which plan feed it really was, for every
  * phone (data.plan on its entries). A finished feed's steps nobody logged get
  * one line with Fix, which opens each fix and Got it (set aside on this phone).
  *
@@ -66,14 +67,15 @@ function hoursText(r: Range): string {
 }
 
 /**
- * What a due window counts from: "2.5–3.5 h after the 8:00 AM feed" (the plan's interval from the last feed's start),
- * or "after the 3:40 AM feed" when the window moved (a day feed waiting for the night to end).
+ * What a due window counts from: "2.5–3.5 h after the 8:00 AM feed" (the plan's interval from the last feed's start;
+ * on demand, "at most 3 h after the 8:00 AM feed"), or "after the 3:40 AM feed" when the window moved (a day feed
+ * waiting for the night to end).
  */
 export function dueFromWords(d: PlanDue, plan: FeedingPlan, tz: string): string {
   const every = d.night ? (plan.night?.every ?? plan.day.every) : plan.day.every;
   const at = formatTime(d.base, tz);
   const plain = !!every && d.from === d.base + every.min * MIN && d.to === d.base + every.max * MIN;
-  return plain && every ? `${hoursText(every)} after the ${at} feed` : `after the ${at} feed`;
+  return plain && every ? `${d.onDemand ? "at most " : ""}${hoursText(every)} after the ${at} feed` : `after the ${at} feed`;
 }
 
 /** A very short screen (an older small phone, under 600px tall): the card puts its big action before its later steps. */
@@ -227,8 +229,20 @@ export default function NextFeedCard() {
   /** One action's buttons: the card's big one (`big`), or a small one beside a row or in the missed line's fixes. */
   const actionView = (a: StepAction, big: boolean): ReactNode => {
     if (a.kind === "nurse") {
-      const second = other(first);
       const shield = a.shield ? ", with the nipple shield" : "";
+      if (a.side) {
+        // The plan nurses on one side only ("left only, pump the right"): that side's Start alone, never the other.
+        const only = a.side;
+        return (
+          <div data-plan-primary>
+            <Button size="lg" className="w-full whitespace-nowrap" disabled={busy} onClick={() => startNursing(only, a.shield)} aria-label={`Start ${SIDE_NAME[only]}${shield}: ${focus.feed.name}`}>
+              <SideDot side={only} />
+              Start {SIDE_NAME[only]}
+            </Button>
+          </div>
+        );
+      }
+      const second = other(first);
       return (
         <div data-plan-primary className="flex gap-2">
           <Button

@@ -3,11 +3,11 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { AT_BREAST_WORDS, feedingPlanOf, feedPlanNow, PLAN_LATE_TOP_UP_MS, type FeedingPlan, type FeedPlanNow, type NurseStep } from "@/lib/maple/feeding-plan";
 import { DEFAULT_TZ, formatTime } from "@/lib/maple/time";
-import type { StartWith } from "@/lib/maple/types";
+import type { Side, StartWith } from "@/lib/maple/types";
 import { feedTargetOf, type FeedTarget } from "@/lib/maple/units";
 import { useBabyWords } from "../familyWords";
 import { useMaple, useNow } from "../useMaple";
-import { missedItems, nursingOf, stepRows, type MissedItem, type OneTapLog, type StepAction, type StepRow } from "./nextFeed";
+import { missedItems, NOT_NEEDED, nursingOf, stepRows, type MissedItem, type OneTapLog, type StepAction, type StepRow } from "./nextFeed";
 
 /**
  * The feeding plan as Today reads it, now, for every part of Today that acts on
@@ -136,6 +136,8 @@ export type PlanNow = {
   missedStart: number | null;
   /** The next step is nursing (the card's Start): the dock outlines the next side only then. */
   nurseNext: boolean;
+  /** That nursing is on one side only ("left only, pump the right"): the side the dock and Last fed outline, else null. */
+  nurseSide: Side | null;
   /** What the dock's nursing start carries: the picked plan feed and its nipple shield, with a pick on this phone; else null. */
   startWith: StartWith | null;
   /** The plan's bottle now, as the form's preset, or null. */
@@ -252,9 +254,12 @@ export function usePlanNow(): PlanNow | null {
     void seen;
     if (!fp) return null;
     const closed = (start: number | null, key: string) => start !== null && sessionRead(closeKey(family, start, key)) === "1";
-    // A closed step reads as done: no action, no second action, no way to close it again.
+    // A closed step reads as done: no action, no second action, no way to close it again. One only if needed, with
+    // nothing given, says it wasn't needed.
     const rows = rowsOf(fp, fp.focus, { Hes: words.Hes }).map((r): PlanRow =>
-      r.state !== "note" && r.state !== "done" && closed(focusStart, r.key) ? { ...r, state: "done", action: null, secondary: null, close: null } : r
+      r.state !== "note" && r.state !== "done" && closed(focusStart, r.key)
+        ? { ...r, state: "done", action: null, secondary: null, close: null, ...(r.optional && r.close === NOT_NEEDED ? { status: NOT_NEEDED } : {}) }
+        : r
     );
     const primaryRow = rows.find((r) => r.action) ?? null;
     const primary = primaryRow?.action ? { row: primaryRow, action: primaryRow.action } : null;
@@ -266,7 +271,7 @@ export function usePlanNow(): PlanNow | null {
     // would win over what was logged, and the dock's sides are just "she's on".
     const startWith: StartWith | null = nurse && choose ? { ...(nurse.shield ? { shield: true } : {}), plan: fp.focus.feed.id } : null;
     const bottle = planBottle(fp, rows, missed, now.getTime());
-    return { rows, primary, missed, nurseNext: !!nurse, startWith, bottle };
+    return { rows, primary, missed, nurseNext: !!nurse, nurseSide: nurse?.side ?? null, startWith, bottle };
   }, [fp, family, focusStart, missedAt, now, seen, words.Hes, choose]);
 
   if (!plan || !fp || !base || !derived) return null;
