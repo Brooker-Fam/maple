@@ -7,7 +7,7 @@ import { feedPartsList, planUnitsOf } from "@/lib/maple/describe";
 import { lastFedRule, minutesShort, spanText, typicalFeedGapMin, type NextSide as NextSideInfo, type NursingRun } from "@/lib/maple/feed";
 import { byBottle, type DayStats, type Summary } from "@/lib/maple/insights";
 import { DEFAULT_TZ, formatDuration, formatRelative, formatTime } from "@/lib/maple/time";
-import { feedTargetOf, formatVolume, formatVolumeRange } from "@/lib/maple/units";
+import { feedTargetOf, formatVolume, formatVolumeRange, otherUnits, volumeIn, volumesBoth } from "@/lib/maple/units";
 import type { Side, StretchSide } from "@/lib/maple/types";
 import { usePlanNow } from "./feeding/usePlanNow";
 import { Icon, type IconName } from "./icons";
@@ -375,6 +375,9 @@ export function Tallies({
   const both = s.bothSec >= 60 ? `both ${formatDuration(s.bothSec)}` : null;
   // By bottle: the bottles' milk, without what went in at the breast (DayStats counts that with the top-ups).
   const { ml: bottleOnlyMl, formulaMl: bottleFormulaMl } = byBottle(s);
+  // A row's amount; with amounts both ways, the other unit under it, so the row's words keep their room at 320px.
+  const amount = (ml: number) => ({ value: volumeIn(ml, units), value2: volumesBoth() ? volumeIn(ml, otherUnits(units)) : null });
+  const bottleFormula = `${formatVolume(bottleFormulaMl, units)} formula`;
 
   // Each count's bar fills toward the usual number for her day of life (the footnote says what that is).
   // Feeds count each feed in a cluster (split by 10+ minutes off the breast): "11 · 4 in a cluster". A top-up is part of
@@ -428,12 +431,12 @@ export function Tallies({
       label: "At the breast",
       detail: "syringe or SNS",
       below: s.atBreastFormulaMl > 0 ? `${formatVolume(s.atBreastFormulaMl, units)} formula` : null,
-      value: s.atBreastMl > 0 ? formatVolume(s.atBreastMl, units) : `${s.atBreast} time${s.atBreast === 1 ? "" : "s"}`,
+      ...(s.atBreastMl > 0 ? amount(s.atBreastMl) : { value: `${s.atBreast} time${s.atBreast === 1 ? "" : "s"}` }),
     },
-    // Every bottle's amount, top-ups too, with the formula in it when any was logged.
-    bottleOnlyMl > 0 && { icon: "bottle", color: DETAIL_COLOR.bottle, label: "By bottle", detail: bottleFormulaMl > 0 ? `${formatVolume(bottleFormulaMl, units)} formula` : null, value: formatVolume(bottleOnlyMl, units) },
-    s.pumpMl > 0 && { icon: "milk", color: KIND_COLOR.pump, label: "Pumped", detail: null, value: formatVolume(s.pumpMl, units) },
-  ].filter(Boolean) as { icon: IconName; color: string; label: string; detail: string | null; below?: string | null; value: string }[];
+    // Every bottle's amount, top-ups too, with the formula in it when any was logged (on a line of its own both ways).
+    bottleOnlyMl > 0 && { icon: "bottle", color: DETAIL_COLOR.bottle, label: "By bottle", ...(bottleFormulaMl > 0 ? (volumesBoth() ? { below: bottleFormula } : { detail: bottleFormula }) : {}), ...amount(bottleOnlyMl) },
+    s.pumpMl > 0 && { icon: "milk", color: KIND_COLOR.pump, label: "Pumped", detail: null, ...amount(s.pumpMl) },
+  ].filter(Boolean) as { icon: IconName; color: string; label: string; detail?: string | null; below?: string | null; value: string; value2?: string | null }[];
 
   return (
     <section aria-labelledby="day-so-far" aria-busy={loading || undefined}>
@@ -476,7 +479,10 @@ export function Tallies({
                   </span>
                   {x.below && <span className="block truncate text-[13px] text-mp-ink-3">{x.below}</span>}
                 </span>
-                <span className="shrink-0 font-semibold text-mp-ink tabular-nums">{x.value}</span>
+                <span className="shrink-0 text-right font-semibold text-mp-ink tabular-nums">
+                  {x.value}
+                  {x.value2 && <span className="block text-[12px] font-medium text-mp-ink-3">{x.value2}</span>}
+                </span>
               </li>
             ))}
           </ul>

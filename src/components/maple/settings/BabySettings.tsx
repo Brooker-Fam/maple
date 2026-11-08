@@ -1,16 +1,18 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { feedingPlanOf } from "@/lib/maple/feeding-plan";
 import { alertsOn } from "@/lib/maple/insights";
 import { dayKey, formatDayLabel, formatTime } from "@/lib/maple/time";
-import { feedTargetFrom, feedTargetOf, formatLength, formatVolume, formatWeight } from "@/lib/maple/units";
+import type { UnitSystem } from "@/lib/maple/types";
+import { feedTargetFrom, feedTargetOf, formatLength, formatWeight, otherUnits, volumeIn, volumeRangeIn } from "@/lib/maple/units";
 import BirthSheet from "../BirthSheet";
 import { useBabyWords, useFamilyOne } from "../familyWords";
 import { useFeedingPlanNav } from "../feeding/FeedingPlanNav";
 import { planShortLine } from "../feeding/planDraft";
 import { Icon } from "../icons";
 import { logSwitches } from "../MoreSheet";
+import { UnitSwitch, useAmountUnit } from "../sheets/AmountUnit";
 import { Button, Segmented, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
 import { GROUP, InputRow, SaveBar, Section, Toggle, telHref } from "./parts";
@@ -27,13 +29,16 @@ const numOrNull = (s: string) => {
 };
 
 export default function BabySettings({ section }: { section: "baby" | "doctor" | "today" }) {
-  const { state, api, refresh, toast, readOnly, units, now } = useMaple();
+  const { state, api, refresh, toast, readOnly, units, now, volumeBoth } = useMaple();
   const w = useBabyWords();
   const one = useFamilyOne();
   const baby = state!.baby;
   const tz = baby.timezone;
   const settings = baby.settings;
   const str = (v: unknown) => (typeof v === "string" ? v : typeof v === "number" ? String(v) : "");
+  // The unit the target per feed is typed in: the app's; with amounts both ways on, its ml | oz switch's.
+  const targetUnit = useAmountUnit(units);
+  const tu = targetUnit.unit;
 
   const profileSrc: Profile = { name: baby.name, nickname: baby.nickname ?? "", due: baby.due_date ?? "" };
   const doctorSrc: Doctor = {
@@ -45,11 +50,11 @@ export default function BabySettings({ section }: { section: "baby" | "doctor" |
     // The numbers alone, in the units shown; the rows say which unit.
     feedFrom: (() => {
       const t = feedTargetOf(settings);
-      return t ? formatVolume(t.min, units).replace(/ (ml|oz)$/, "") : "";
+      return t ? volumeIn(t.min, tu).replace(/ (ml|oz)$/, "") : "";
     })(),
     feedTo: (() => {
       const t = feedTargetOf(settings);
-      return t && t.max !== t.min ? formatVolume(t.max, units).replace(/ (ml|oz)$/, "") : "";
+      return t && t.max !== t.min ? volumeIn(t.max, tu).replace(/ (ml|oz)$/, "") : "";
     })(),
   };
   const plans = useFeedingPlanNav();
@@ -77,6 +82,36 @@ export default function BabySettings({ section }: { section: "baby" | "doctor" |
   const pDirty = (Object.keys(pEdits) as (keyof Profile)[]).some((k) => pEdits[k] !== profileSrc[k]);
   const dDirty = (Object.keys(dEdits) as (keyof Doctor)[]).some((k) => dEdits[k] !== doctorSrc[k]);
   useSettingsDraft(section, section === "baby" ? pDirty : section === "doctor" && dDirty);
+  // Only a target typed here is sent. A number still showing a saved amount, or one its switch moved, stands for that
+  // amount exactly: 70 ml reads 2.37 oz, and 2.37 oz typed would be 70.1.
+  const targetTyped = d.feedFrom !== doctorSrc.feedFrom || d.feedTo !== doctorSrc.feedTo;
+  const savedTarget = feedTargetOf(settings);
+  const exactTarget = (n: number) =>
+    targetUnit.exact(n) ??
+    (savedTarget && n === Number(doctorSrc.feedFrom) ? savedTarget.min : savedTarget && doctorSrc.feedTo && n === Number(doctorSrc.feedTo) ? savedTarget.max : undefined);
+  /** The target moved to `to`: a typed number moves with it, the same amount; one still as saved is re-read in `to`. */
+  const moveTarget = (to: UnitSystem) => {
+    const typed = (text: string | undefined) => {
+      const n = text == null ? NaN : Number(text.trim().replace(",", "."));
+      return text?.trim() && Number.isFinite(n) && n > 0 ? exactTarget(n) ?? targetUnit.toMl(n) : undefined;
+    };
+    const [from, upTo] = targetUnit.moveTo(to, [typed(dEdits.feedFrom), typed(dEdits.feedTo)]);
+    setDEdits((x) => ({ ...x, ...(from != null ? { feedFrom: String(from) } : {}), ...(upTo != null ? { feedTo: String(upTo) } : {}) }));
+  };
+  // Without amounts both ways, it's typed in the app's units, and follows them.
+  useEffect(() => {
+    if (!volumeBoth && targetUnit.unit !== units) moveTarget(units);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- it follows the app's units and the switch, nothing else.
+  }, [volumeBoth, units]);
+  // The target as typed, in the other unit, live under its fields ("= 50–70 ml"); nothing for a blank or a typo.
+  const targetOther = (() => {
+    try {
+      const t = feedTargetFrom(d.feedFrom, d.feedTo, tu, exactTarget);
+      return t ? `= ${volumeRangeIn(t, otherUnits(tu))}` : undefined;
+    } catch {
+      return undefined;
+    }
+  })();
 
   const save = async (which: "profile" | "doctor") => {
     let body: Record<string, unknown>;
@@ -90,7 +125,7 @@ export default function BabySettings({ section }: { section: "baby" | "doctor" |
       if (fh !== null && (Number.isNaN(fh) || fh < 1 || fh > 8)) return toast("Feed interval should be in hours, like 3", { tone: "error" });
       let target: ReturnType<typeof feedTargetFrom>;
       try {
-        target = feedTargetFrom(d.feedFrom, d.feedTo, units);
+        target = feedTargetFrom(d.feedFrom, d.feedTo, tu, exactTarget);
       } catch (e) {
         return toast(e instanceof Error ? e.message : "Check the target per feed", { tone: "error" });
       }
@@ -101,7 +136,7 @@ export default function BabySettings({ section }: { section: "baby" | "doctor" |
           after_hours_phone: d.afterHours.trim().slice(0, 30) || null,
           gestational_age_weeks: ga,
           feed_interval_hours: fh,
-          feed_target_ml: target,
+          ...(targetTyped ? { feed_target_ml: target } : {}),
         },
       };
     }
@@ -249,20 +284,30 @@ export default function BabySettings({ section }: { section: "baby" | "doctor" |
           <PhoneRow label="After-hours line" value={d.afterHours} saved={doctorSrc.afterHours} onChange={(v) => setDEdits((x) => ({ ...x, afterHours: v }))} />
           {/* Context next to bottles and in summaries, never a warning: shown whether or not warnings are on. */}
           <InputRow
-            label={`Target per feed, from (${units === "metric" ? "ml" : "oz"})`}
+            label={`Target per feed, from (${tu === "metric" ? "ml" : "oz"})`}
             note={`Optional: only if ${w.his} care team gave you one. Maple shows it next to bottles and in the visit summary; it never warns.`}
             inputMode="decimal"
-            placeholder={units === "metric" ? "e.g. 45" : "e.g. 1.5"}
+            placeholder={tu === "metric" ? "e.g. 45" : "e.g. 1.5"}
             value={d.feedFrom}
             onChange={(e) => setDEdits((x) => ({ ...x, feedFrom: e.target.value.replace(/[^\d.,]/g, "") }))}
           />
           <InputRow
-            label={`Up to (${units === "metric" ? "ml" : "oz"})`}
+            label={`Up to (${tu === "metric" ? "ml" : "oz"})`}
             inputMode="decimal"
-            placeholder={units === "metric" ? "e.g. 60" : "e.g. 2"}
+            placeholder={tu === "metric" ? "e.g. 60" : "e.g. 2"}
             value={d.feedTo}
             onChange={(e) => setDEdits((x) => ({ ...x, feedTo: e.target.value.replace(/[^\d.,]/g, "") }))}
           />
+          {/* Amounts both ways: typed in either unit (the same amount when it switches), the other said live under it. */}
+          {volumeBoth && (
+            <div className="flex min-h-[52px] items-center gap-3 px-4 py-2.5">
+              <div className="min-w-0 flex-1">
+                <p className={cx(tone.body, "text-[15px]")}>Target in</p>
+                {targetOther && <p className={cx(tone.muted, "mt-0.5 text-[13px] leading-snug tabular-nums")}>{targetOther}</p>}
+              </div>
+              <UnitSwitch label="Target per feed in" value={tu} onChange={moveTarget} />
+            </div>
+          )}
           {planRow}
           {/* These only tune the reminders. */}
           {warnings && (

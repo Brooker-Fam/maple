@@ -6,7 +6,7 @@ import ts from "typescript";
 import { feedClusters, lastFedAnchor, lastFedRule, minutesShort, nursingRuns, spanText, topUpMl, typicalFeedGapMin } from "../src/lib/maple/feed";
 import { feedPartsList, planUnitsOf } from "../src/lib/maple/describe";
 import { formatDuration, formatRelative, formatTime } from "../src/lib/maple/time";
-import { feedTargetOf, formatVolume, formatVolumeRange } from "../src/lib/maple/units";
+import { feedTargetOf, formatVolume, formatVolumeRange, setVolumesBoth } from "../src/lib/maple/units";
 import { makeVoice } from "../src/lib/maple/voice";
 import type { EntryOf, Segment } from "../src/lib/maple/types";
 
@@ -79,6 +79,8 @@ function render(entries: EntryOf<"feed">[], clock: string, sleeping = false, { i
     useMaple: () => ({ state: { entries, baby: { timezone: "UTC", settings }, me: { email: "synthetic@example.test" } }, summary, log: noop, memberLabel: noop, readOnly: false, units: "metric", isNight: () => false }),
     // The info button's state: open for this one render when `info`.
     useVoice: () => voice, useSheets: () => ({ open: noop }), useNow: () => now, useState: () => [info, noop], useClusterInfo: () => ({ open: noop, sheet: null }),
+    // No feeding plan here: nothing picked on this phone, so the next side is the log's.
+    usePlanNow: () => null,
     DEFAULT_TZ: "UTC", typicalFeedGapMin, topUpMl, feedPartsList, planUnitsOf, feedTargetOf, formatVolumeRange, formatRelative, formatTime, formatDuration, formatVolume, minutesShort, spanText, lastFedRule,
     ts: (entry: { started_at: string }) => Date.parse(entry.started_at), since: String, sidesLabel: fn("sidesLabel", helpers),
     cx: (...classes: unknown[]) => classes.filter(Boolean).join(" "), tone: {}, DETAIL_COLOR: {}, KIND_COLOR: {},
@@ -175,4 +177,18 @@ test("adjusted long-feed anchors remain Last fed while their finish is explicit"
   assert.equal(side.summary.lastFed?.rule, "side");
   assert.match(side.text, /Finished just now/);
   assert.doesNotMatch(side.text, /Last feed started/);
+});
+
+test("with this phone's amounts both ways, Last fed says a bottle and its target in ml and oz, the phone's units first", () => {
+  setVolumesBoth(true);
+  try {
+    // The fixture's phone reads metric: ml first, oz in brackets.
+    const targeted = render([...history(), bottle(1, "10:00", "10:15", 60)], "10:40", false, { settings: { feed_target_ml: { min: 50, max: 70 } } });
+    assert.equal(text(detailsLine(targeted.rendered)), "Finished 25m ago · 60 ml (2.03 oz) bottle · target 50–70 ml (1.69–2.37 oz)");
+  } finally {
+    setVolumesBoth(false);
+  }
+  // Off again, exactly as before.
+  const plain = render([...history(), bottle(1, "10:00", "10:15", 60)], "10:40", false, { settings: { feed_target_ml: { min: 50, max: 70 } } });
+  assert.equal(text(detailsLine(plain.rendered)), "Finished 25m ago · 60 ml bottle · target 50–70 ml");
 });

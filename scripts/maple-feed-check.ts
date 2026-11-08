@@ -93,6 +93,8 @@ import { checkFeedTarget, cleanData } from "../src/lib/maple/validate";
 import { feedTargetFrom, feedTargetOf, formatVolumeRange, formatVolumeRangeBoth } from "../src/lib/maple/units";
 import { formatClock, formatMinutes, formatRange, formatTimeNear, localParts, zonedTimeToUtc } from "../src/lib/maple/time";
 import type { Baby, Entry, EntryOf, FeedData, Member, Segment, Side, StretchSide } from "../src/lib/maple/types";
+import { fieldAmount, fieldMl, formatVolume, formatVolumeBoth, formatVolumeShort, setVolumesBoth, volumeIn, volumeLines } from "../src/lib/maple/units";
+import { amountText } from "../src/lib/maple/feeding-plan";
 
 const TZ = "America/New_York";
 
@@ -2172,6 +2174,37 @@ check("describeEntry: back and forth reads as such", () => {
       try { checkFeedTarget({ feed_target_ml: bad }); } catch { refused = true; }
       ok(refused, `refused ${JSON.stringify(bad)}`);
     }
+  });
+  check("amounts in ml and oz on this phone: every amount both ways, its units first; off, as ever; Claude's words never doubled", () => {
+    const sns = { ...given("09:50", 20), data: { method: "bottle", amount_ml: 20, via: "sns", milk: "formula" } } as EntryOf<"feed">;
+    const off = () => [formatVolume(60, "us"), formatVolume(60, "metric"), formatVolumeRange({ min: 50, max: 70 }, "metric"), amountText({ min: 25, max: 35 }, "ml"), feedPartWords(sns, "us", "metric"), formatVolumeShort(60, "us"), volumeLines(60, "us", " last")];
+    eq(off(), ["2.03 oz", "60 ml", "50–70 ml", "25–35 ml", "+ 20 ml (0.68 oz) in the SNS", "2.03 oz", "2.03 oz last"]);
+    setVolumesBoth(true);
+    try {
+      eq(formatVolume(60, "us"), "2.03 oz (60 ml)");
+      eq(formatVolume(fieldMl(2, "us"), "us"), "2 oz (59.1 ml)");
+      eq(formatVolume(60, "metric"), "60 ml (2.03 oz)");
+      eq(formatVolume(null, "metric"), "—");
+      eq([formatVolumeRange({ min: 50, max: 70 }, "metric"), formatVolumeRange({ min: 50, max: 70 }, "us"), formatVolumeRange({ min: 50, max: 50 }, "metric")], ["50–70 ml (1.69–2.37 oz)", "1.69–2.37 oz (50–70 ml)", "50 ml (1.69 oz)"]);
+      // The plan's amounts in its unit first, the other in brackets, whichever the phone reads.
+      eq([amountText({ min: 25, max: 35 }, "ml"), amountText({ min: 20, max: 20 }, "ml"), amountText({ min: 29.6, max: 29.6 }, "oz")], ["25–35 ml (0.85–1.18 oz)", "20 ml (0.68 oz)", "1 oz (29.6 ml)"]);
+      // A feed's part: the plan's unit first, once (never "20 ml (0.68 oz) (0.68 oz)"), the same with the phone in either unit.
+      eq([feedPartWords(sns, "us", "metric"), feedPartWords(sns, "metric", "metric"), feedPartWords(sns, "metric")], ["+ 20 ml (0.68 oz) in the SNS", "+ 20 ml (0.68 oz) in the SNS", "+ 20 ml (0.68 oz) in the SNS"]);
+      // Tight places: a dot, or a line of its own.
+      eq([formatVolumeShort(60, "us"), volumeLines(60, "metric", " last")], ["2.03 oz · 60 ml", "60 ml last\n2.03 oz"]);
+      // A day's line on the Timeline.
+      eq(daySummaryParts(statsFor([given("08:00", 60, { milk: "formula" })], D("00:00"), D("23:59"), "day", D("23:59")), "us").slice(1, 3), ["2.03 oz (60 ml) bottle", "2.03 oz (60 ml) formula"]);
+      // Claude's and Siri's words (both already) and one unit alone never change.
+      eq([formatVolumeBoth(60), formatVolumeRangeBoth({ min: 50, max: 70 }), volumeIn(60, "us")], ["2.03 oz (60 ml)", "50–70 ml (1.69–2.37 oz)", "2.03 oz"]);
+    } finally {
+      setVolumesBoth(false);
+    }
+    eq(off(), ["2.03 oz", "60 ml", "50–70 ml", "25–35 ml", "+ 20 ml (0.68 oz) in the SNS", "2.03 oz", "2.03 oz last"], "off again, exactly as before");
+    // An amount field's number in its unit, and what it saves: the same amount either way.
+    eq([fieldAmount(60, "metric"), fieldAmount(60, "us"), fieldAmount(0.2, "us"), fieldMl(2, "us"), fieldMl(59.1, "metric")], [60, 2.03, 0.00676, 59.1, 59.1]);
+    // A target number a unit switch moved saves as it was typed: 70 ml reads 2.37 oz, and 2.37 oz typed is 70.1.
+    eq(feedTargetFrom("1.69", "2.37", "us"), { min: 50, max: 70.1 });
+    eq(feedTargetFrom("1.69", "2.37", "us", (n) => ({ 1.69: 50, 2.37: 70 } as Record<number, number>)[n]), { min: 50, max: 70 });
   });
   check("cleanData: a Mixed bottle's split adds up; how it was given only on a bottle", () => {
     const bottle = (d: Record<string, unknown>) => cleanData("feed", { method: "bottle", ...d });

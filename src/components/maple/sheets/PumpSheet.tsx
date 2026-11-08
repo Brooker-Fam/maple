@@ -6,7 +6,10 @@ import { useState } from "react";
 import { describeEntry } from "@/lib/maple/describe";
 import { formatDuration } from "@/lib/maple/time";
 import { formatVolume, mlToOz, ozToMl } from "@/lib/maple/units";
+import type { UnitSystem } from "@/lib/maple/types";
 import { Segmented, Sheet, TimeRange, WhenField } from "../ui";
+import { useMaple } from "../useMaple";
+import { OtherUnit, UnitSwitch, useAmountUnit } from "./AmountUnit";
 import type { SheetProps } from "./index";
 import { useSavedEntryConflict } from "./useSavedEntryConflict";
 import {
@@ -33,17 +36,20 @@ export default function PumpSheet(props: SheetProps) {
 
 function PumpForm({ open, onClose, entry, preset }: SheetProps) {
   const { tz, units, log, update, remove, now } = useSheetBase();
+  const { volumeBoth } = useMaple();
   const e = entry?.kind === "pump" ? entry : undefined;
   const { changed: entryChanged, onConflict, notice } = useSavedEntryConflict(e);
   const running = !!e?.active;
-  const metric = units === "metric";
+  // The amounts' unit: the app's, moved by their ml | oz switch with amounts both ways on (AmountUnit.tsx).
+  const amountUnit = useAmountUnit(units);
+  const metric = amountUnit.unit === "metric";
   const toDisplay = (ml: number | undefined) => {
     if (ml == null) return null;
     if (metric) return ml;
     const oz = mlToOz(ml);
     return Number(oz > 0 && oz < 0.01 ? oz.toPrecision(3) : oz.toFixed(2));
   };
-  const toMl = (v: number | null) => (v == null ? undefined : Math.round((metric ? v : ozToMl(v)) * 10) / 10);
+  const toMl = (v: number | null) => amountUnit.toMl(v);
 
   const initialLeft = e?.data.left_ml ?? pnum(preset, "left_ml");
   const initialRight = e?.data.right_ml ?? pnum(preset, "right_ml");
@@ -131,6 +137,17 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
     setMode(next);
   };
   const needsSplit = mode === "sides" && totalMl != null && left == null && right == null;
+  /**
+   * The ml | oz switch: each side and the total move to the other unit, the same amounts (untouched ones as saved).
+   * Each field is keyed by its unit, so it opens afresh on the new number (never a frame of the old text marked wrong).
+   */
+  const switchUnit = (to: UnitSystem) => {
+    if (to === amountUnit.unit || amountInvalid) return;
+    const [l, r, t] = amountUnit.moveTo(to, [touched.left_ml ? toMl(left) : initialLeft, touched.right_ml ? toMl(right) : initialRight, totalMl]);
+    setLeft(l);
+    setRight(r);
+    setTotalAmount((a) => ({ ...a, shown: t }));
+  };
 
   const save = async () => {
     if (busy || entryChanged || timeInvalid || durationInvalid || (!running && (amountInvalid || needsSplit))) return;
@@ -208,26 +225,38 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
         {!running && (
           <>
             <div>
-              <fieldset disabled={amountInvalid} className="min-w-0">
-                <Segmented
-                  aria-label="Pumped amounts"
-                  value={mode}
-                  onChange={chooseMode}
-                  options={[
-                    { value: "sides", label: "Each side" },
-                    { value: "total", label: "Total" },
-                  ]}
-                />
-              </fieldset>
+              <div className="flex items-center gap-2">
+                <fieldset disabled={amountInvalid} className="min-w-0 flex-1">
+                  <Segmented
+                    aria-label="Pumped amounts"
+                    value={mode}
+                    onChange={chooseMode}
+                    options={[
+                      { value: "sides", label: "Each side" },
+                      { value: "total", label: "Total" },
+                    ]}
+                  />
+                </fieldset>
+                {volumeBoth && <UnitSwitch label="Pumped amounts in" value={amountUnit.unit} onChange={switchUnit} disabled={amountInvalid} />}
+              </div>
               {amountInvalid && <p className="mt-1.5 text-xs text-mp-danger">Correct the number before changing how amounts are entered.</p>}
             </div>
             {mode === "sides" ? (
               <div className="grid gap-3 sm:grid-cols-2">
-                <MiniStepper key="left" label={<SideLabel side="L" />} unit={unit} ariaLabel={`left, ${unit}`} value={left} onChange={edit("left_ml", setLeft)} onInvalid={checks.watch("left")} step={step} decimals={metric ? 1 : 3} max={maxAmount(initialLeft, left, touched.left_ml, 600)} />
-                <MiniStepper key="right" label={<SideLabel side="R" />} unit={unit} ariaLabel={`right, ${unit}`} value={right} onChange={edit("right_ml", setRight)} onInvalid={checks.watch("right")} step={step} decimals={metric ? 1 : 3} max={maxAmount(initialRight, right, touched.right_ml, 600)} />
+                <div className="min-w-0">
+                  <MiniStepper key={`left-${amountUnit.unit}`} label={<SideLabel side="L" />} unit={unit} ariaLabel={`left, ${unit}`} value={left} onChange={edit("left_ml", setLeft)} onInvalid={checks.watch("left")} step={step} decimals={metric ? 1 : 3} max={maxAmount(initialLeft, left, touched.left_ml, 600)} />
+                  {volumeBoth && <OtherUnit ml={data.left_ml} unit={amountUnit.unit} />}
+                </div>
+                <div className="min-w-0">
+                  <MiniStepper key={`right-${amountUnit.unit}`} label={<SideLabel side="R" />} unit={unit} ariaLabel={`right, ${unit}`} value={right} onChange={edit("right_ml", setRight)} onInvalid={checks.watch("right")} step={step} decimals={metric ? 1 : 3} max={maxAmount(initialRight, right, touched.right_ml, 600)} />
+                  {volumeBoth && <OtherUnit ml={data.right_ml} unit={amountUnit.unit} />}
+                </div>
               </div>
             ) : (
-              <MiniStepper key="total" label="Total" unit={unit} ariaLabel={`total, ${unit}`} value={total} onChange={editTotal} onInvalid={checks.watch("total")} step={step} decimals={metric ? 1 : 3} max={maxAmount(totalMl, total, totalAmount.entered, 1200)} />
+              <div>
+                <MiniStepper key={`total-${amountUnit.unit}`} label="Total" unit={unit} ariaLabel={`total, ${unit}`} value={total} onChange={editTotal} onInvalid={checks.watch("total")} step={step} decimals={metric ? 1 : 3} max={maxAmount(totalMl, total, totalAmount.entered, 1200)} />
+                {volumeBoth && <OtherUnit ml={totalMl} unit={amountUnit.unit} />}
+              </div>
             )}
             {amountInvalid && <p role="alert" className="text-[13px] text-mp-danger">{mode === "sides" ? `Each side can be up to ${limitLabel(600)}.` : `The total can be up to ${limitLabel(1200)}.`} Correct the amount, or leave it blank if unknown.</p>}
             <label className="flex min-h-[44px] items-center gap-3 text-sm text-mp-ink">

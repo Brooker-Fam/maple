@@ -210,7 +210,7 @@ function planBottle(fp: FeedPlanNow, rows: readonly PlanRow[], missed: readonly 
  * Today's 20-second tick, so the dock's one-second clock doesn't redo it.
  */
 export function usePlanNow(): PlanNow | null {
-  const { state, summary } = useMaple();
+  const { state, summary, volumeBoth } = useMaple();
   const words = useBabyWords();
   const now = useNow(20_000);
   // This phone's memory's version: every reader reads it again when any part of Today changes it.
@@ -254,6 +254,7 @@ export function usePlanNow(): PlanNow | null {
   // The rows, the missed line and what the dock takes, read again when the plan's reading or this phone's memory changes.
   const derived = useMemo(() => {
     void seen;
+    void volumeBoth; // the rows' words say amounts, both ways with this phone's switch on
     if (!fp) return null;
     const closed = (start: number | null, key: string) => start !== null && sessionRead(closeKey(family, start, key)) === "1";
     // A closed step reads as done (no action, no second action, no way to close it again; one only if needed, with
@@ -271,7 +272,7 @@ export function usePlanNow(): PlanNow | null {
     const startWith: StartWith | null = nurse && choose ? { ...(nurse.shield ? { shield: true } : {}), plan: fp.focus.feed.id } : null;
     const bottle = planBottle(fp, rows, missed, now.getTime());
     return { rows, primary, missed, nurseNext: !!nurse, nurseSide: nurse?.side ?? null, startWith, bottle };
-  }, [fp, family, focusStart, missedAt, now, seen, words.Hes, choose]);
+  }, [fp, family, focusStart, missedAt, now, seen, words.Hes, choose, volumeBoth]);
 
   if (!plan || !fp || !base || !derived) return null;
   return { plan, target, tz, family, now, base, fp, chosen: choose, ...derived, missedStart: missedAt, pick, setMissedAside, closeRow };

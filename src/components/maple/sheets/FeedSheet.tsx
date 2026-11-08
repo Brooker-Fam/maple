@@ -51,6 +51,7 @@ import { useDraftChanged } from "../useDraftChanged";
 import { doneText, nextSideWords } from "../useTimerActions";
 import type { SheetProps } from "./index";
 import { useSavedEntryConflict } from "./useSavedEntryConflict";
+import { OtherUnit, UnitSwitch, useAmountUnit } from "./AmountUnit";
 import {
   CHECK_NUMBER_HINT,
   ContextNote,
@@ -207,8 +208,9 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const planUnits = planUnitsOf(state?.baby.settings);
   const pu = planUnits ?? units;
   // This form's amounts: a feed's part (milk at the breast, a top-up) or a plan step's bottle in the plan's unit, so
-  // they read as the plan has them; any other bottle in the app's. Fixed when it opens, so a typed amount keeps its unit.
-  const [vu] = useState<UnitSystem>(() => {
+  // they read as the plan has them; any other bottle in the app's. Fixed when it opens, so a typed amount keeps its unit
+  // (with amounts both ways on, its ml | oz switch moves it, the same amount: AmountUnit.tsx).
+  const amountUnit = useAmountUnit(() => {
     if (!plan) return units;
     const planned =
       forBreast ||
@@ -217,6 +219,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       (e?.data.method === "bottle" && (!!atBreastOf(e.data) || e.data.top_up_of != null || !!e.data.plan || (!!state && topUpIds(nursingRuns(state.entries, now())).has(e.id))));
     return planned ? pu : units;
   });
+  const vu = amountUnit.unit;
   // The newest milk given at the breast, for a nursing feed's own "Milk at the breast" (how it went in, how much).
   const lastAtBreast = useMemo(
     () => state?.entries.find((x): x is EntryOf<"feed"> => x.kind === "feed" && x.data.method === "bottle" && x.id !== e?.id && !!atBreastOf(x.data)) ?? null,
@@ -240,7 +243,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const historical = !!knownEntry && !knownEntry.active && Date.parse(knownEntry.ended_at ?? knownEntry.started_at) < now().getTime() - 72 * 60 * MIN;
   const liveEntry = loadedEntry || historical ? knownEntry : undefined;
   // An entry that belongs in the recent list and disappears was discarded.
-  const { whoDiscarded } = useMaple();
+  const { whoDiscarded, volumeBoth } = useMaple();
   const [seen, setSeen] = useState(false);
   if (loadedEntry && !seen) setSeen(true);
   const gone = !!e && e.id > 0 && seen && !!state && !loadedEntry && !historical;
@@ -302,6 +305,8 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     if (ml == null) return null;
     return pu === "metric" ? ml : Number(mlToOz(ml).toFixed(2));
   });
+  // Its amount's unit: the plan's or the app's, moved by its ml | oz switch with amounts both ways on.
+  const milkUnit = useAmountUnit(pu);
   const [milkKind, setMilkKind] = useState<Milk | undefined>(() => lastAtBreast?.data.milk);
   // Which of the plan's feeds this is (data.plan): from the plan's card, or picked here ("Plan feed"). Today's card,
   // the chat and Siri read it first, so a feed read as the wrong kind is put right on every phone.
@@ -456,8 +461,8 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const [formulaPart, setFormulaPart] = useState<number | null>(() => (e?.data.method === "bottle" ? shownMl(e.data.formula_ml) : null));
   const [when, setWhen] = useState<Date | null>(() => (e ? new Date(e.started_at) : fromPreset));
   const fieldsDirty = useDraftChanged({ manualTimeInvalid, method, when, note: notePatch.note, amount, milk, via, breastPart, formulaPart, left, right, both, first, range, shield, milkOn, milkVia, milkAmount, milkKind, planPick, invalid: checks.invalid });
-  const amountMl = !touched.amount ? initialAmountMl : amount == null ? undefined : Math.round((vu === "metric" ? amount : ozToMl(amount)) * 10) / 10;
-  const partMl = (v: number | null) => (v == null ? undefined : Math.round((vu === "metric" ? v : ozToMl(v)) * 10) / 10);
+  const amountMl = !touched.amount ? initialAmountMl : amountUnit.toMl(amount);
+  const partMl = (v: number | null) => amountUnit.toMl(v);
   const hadSplit = e?.data.method === "bottle" && (e.data.breastmilk_ml != null || e.data.formula_ml != null);
   const splitShown = milk === "mixed";
   /** A part typed: with both, the amount is their sum. */
@@ -480,6 +485,13 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       setBreastPart(null);
       setFormulaPart(null);
     }
+  };
+  /** Its ml | oz switch: the amount and a Mixed bottle's split move to the other unit, each the same amount. */
+  const switchAmountUnit = (to: UnitSystem) => {
+    const [a, b, f] = amountUnit.moveTo(to, [amountMl, partMl(breastPart), partMl(formulaPart)]);
+    setAmount(a);
+    setBreastPart(b);
+    setFormulaPart(f);
   };
   // One part and the amount give the other (the server works it out the same way): said under the parts.
   const knownTotal = amountMl ?? null;
@@ -520,7 +532,8 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const planRange = method === "bottle" ? partRange(plan, partPlan, breastVia ? atBreastShown : topUpOf ? "top-up" : null) : null;
   const chips = planRange ? rangeChips(planRange, vu) : atBreastShown ? (vu === "metric" ? [5, 10, 15, 20] : [0.25, 0.5, 0.75, 1]) : vu === "metric" ? [30, 60, 90, 120] : [1, 2, 3, 4];
   // A new nursing feed's own milk at the breast, in ml (blank: given, the amount not said).
-  const milkMl = milkAmount == null ? undefined : Math.round((pu === "metric" ? milkAmount : ozToMl(milkAmount)) * 10) / 10;
+  const milkMl = milkUnit.toMl(milkAmount);
+  const switchMilkUnit = (to: UnitSystem) => setMilkAmount(milkUnit.moveTo(to, [milkMl])[0]);
   const zeroMilk = method === "breast" && !e && milkOn && milkMl === 0;
 
   // A saved nursing feed's parts, as its row shows them (feed-rows.ts): its milk at the breast, its top-ups.
@@ -931,17 +944,19 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
               </div>
               <div>
                 <MiniStepper
-                  key="milk-amount"
+                  key={`milk-amount-${milkUnit.unit}`}
                   label="Amount"
-                  unit={pu === "metric" ? "ml" : "oz"}
-                  ariaLabel={`milk at the breast, ${pu === "metric" ? "millilitres" : "ounces"}`}
+                  unit={milkUnit.unit === "metric" ? "ml" : "oz"}
+                  ariaLabel={`milk at the breast, ${milkUnit.unit === "metric" ? "millilitres" : "ounces"}`}
                   value={milkAmount}
                   onChange={setMilkAmount}
                   onInvalid={checks.watch("milk-amount")}
-                  step={pu === "metric" ? 5 : 0.25}
-                  decimals={pu === "metric" ? 1 : 3}
-                  max={limitIn(pu)}
+                  step={milkUnit.unit === "metric" ? 5 : 0.25}
+                  decimals={milkUnit.unit === "metric" ? 1 : 3}
+                  max={limitIn(milkUnit.unit)}
+                  aside={volumeBoth ? <UnitSwitch label="Milk at the breast in" value={milkUnit.unit} onChange={switchMilkUnit} disabled={checks.invalid} /> : undefined}
                 />
+                {volumeBoth && <OtherUnit ml={milkMl} unit={milkUnit.unit} />}
                 {zeroMilk && <p role="alert" className="mt-1.5 text-[13px] text-mp-danger">{ZERO_BOTTLE_HINT}</p>}
               </div>
               <Segmented<AtBreastVia>
@@ -1037,8 +1052,14 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
         <div className="mt-3">
           <p className={cx(tone.muted, "mb-1.5 text-[13px]")}>How much of each (optional)</p>
           <div className="grid grid-cols-2 gap-3">
-            <MiniStepper key="breast-part" label="Breast milk" unit={unitWord} ariaLabel={`breast milk, ${unitName}`} value={breastPart} onChange={(v) => editPart("breast", v)} onInvalid={checks.watch("breast-part")} step={vu === "metric" ? 5 : 0.25} decimals={vu === "metric" ? 1 : 3} max={bottleLimit} />
-            <MiniStepper key="formula-part" label="Formula" unit={unitWord} ariaLabel={`formula, ${unitName}`} value={formulaPart} onChange={(v) => editPart("formula", v)} onInvalid={checks.watch("formula-part")} step={vu === "metric" ? 5 : 0.25} decimals={vu === "metric" ? 1 : 3} max={bottleLimit} />
+            <div className="min-w-0">
+              <MiniStepper key={`breast-part-${vu}`} label="Breast milk" unit={unitWord} ariaLabel={`breast milk, ${unitName}`} value={breastPart} onChange={(v) => editPart("breast", v)} onInvalid={checks.watch("breast-part")} step={vu === "metric" ? 5 : 0.25} decimals={vu === "metric" ? 1 : 3} max={bottleLimit} />
+              {volumeBoth && <OtherUnit ml={partMl(breastPart)} unit={vu} />}
+            </div>
+            <div className="min-w-0">
+              <MiniStepper key={`formula-part-${vu}`} label="Formula" unit={unitWord} ariaLabel={`formula, ${unitName}`} value={formulaPart} onChange={(v) => editPart("formula", v)} onInvalid={checks.watch("formula-part")} step={vu === "metric" ? 5 : 0.25} decimals={vu === "metric" ? 1 : 3} max={bottleLimit} />
+              {volumeBoth && <OtherUnit ml={partMl(formulaPart)} unit={vu} />}
+            </div>
           </div>
           {partOver ? (
             <p role="alert" className="mt-1.5 text-[13px] text-mp-danger">{PART_OVER_HINT}</p>
@@ -1054,7 +1075,8 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const amountSection = (
     <div>
       <MiniStepper
-        key="amount"
+        // Keyed by its unit: a switch opens it afresh on the moved number (never a frame of the old text marked wrong).
+        key={`amount-${vu}`}
         // Milk at the breast: "In the syringe", "In the SNS".
         label={atBreastShown ? AT_BREAST_WORDS[atBreastShown].inThe.replace(/^i/, "I") : "Amount consumed"}
         unit={unitWord}
@@ -1065,7 +1087,9 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
         step={vu === "metric" ? 5 : atBreastShown ? 0.25 : 0.5}
         decimals={vu === "metric" ? 1 : 3}
         max={maxAmount}
+        aside={volumeBoth ? <UnitSwitch label="Amount in" value={vu} onChange={switchAmountUnit} disabled={checks.invalid} /> : undefined}
       />
+      {volumeBoth && <OtherUnit ml={amountMl} unit={vu} />}
       {(checks.invalid || amountOverLimit) && <p role="alert" className="mt-1.5 text-[13px] text-mp-danger">Bottle amounts can be up to {vu === "metric" ? "500 ml" : `${bottleLimit} oz (500 ml)`}. Correct the amount, or leave it blank if unknown.</p>}
       {zeroBottle && <p role="alert" className="mt-1.5 text-[13px] text-mp-danger">{ZERO_BOTTLE_HINT}</p>}
       <div className="mt-2 flex flex-wrap gap-2">
@@ -1075,8 +1099,9 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
           </Chip>
         ))}
       </div>
-      {/* In the plan's unit while the app shows the other: the app's beside it, so it can be checked either way. */}
-      {vu !== units && amountMl != null && amountMl > 0 && <p className={cx(tone.muted, "mt-1.5 text-xs")}>That&apos;s {formatVolume(amountMl, units)}.</p>}
+      {/* In the plan's unit while the app shows the other: the app's beside it, so it can be checked either way (with
+          amounts both ways on, the line under the field says it). */}
+      {!volumeBoth && vu !== units && amountMl != null && amountMl > 0 && <p className={cx(tone.muted, "mt-1.5 text-xs")}>That&apos;s {formatVolume(amountMl, units)}.</p>}
       {lastBottle?.data.amount_ml != null && !e && (
         <p className={cx(tone.muted, "mt-1.5 text-xs")}>
           {forBreast ? "Last at the breast" : "Last bottle"}: {formatVolume(lastBottle.data.amount_ml, vu)}

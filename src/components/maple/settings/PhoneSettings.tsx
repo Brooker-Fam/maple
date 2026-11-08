@@ -3,11 +3,12 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useTheme } from "@/components/ThemeProvider";
 import { isNativeApp } from "@/lib/maple/native";
+import { otherUnits, ozToMl, volumeIn } from "@/lib/maple/units";
 import { Icon } from "../icons";
 import { useNightPref, type NightPref } from "../nightLook";
 import { Segmented, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
-import { GROUP, Section } from "./parts";
+import { GROUP, Section, Toggle } from "./parts";
 
 function SegmentRow({ label, note, children }: { label: string; note?: string; children: ReactNode }) {
   return (
@@ -22,7 +23,10 @@ function SegmentRow({ label, note, children }: { label: string; note?: string; c
 }
 
 export default function PhoneSettings() {
-  const { units, setUnits } = useMaple();
+  const { units, setUnits, volumeBoth, setVolumeBoth } = useMaple();
+  // An everyday amount, as it reads with it on: "2 oz (59.1 ml)", "60 ml (2.03 oz)".
+  const example = units === "metric" ? 60 : ozToMl(2);
+  const bothExample = `${volumeIn(example, units)} (${volumeIn(example, otherUnits(units))})`;
   const [night, setNight] = useNightPref();
   const { theme, setTheme } = useTheme();
   const [standalone, setStandalone] = useState(true);
@@ -83,6 +87,13 @@ export default function PhoneSettings() {
               ]}
             />
           </SegmentRow>
+          {/* Bottles, pumping and the target per feed, for families reading oz on the bottle and ml from their care team. */}
+          <Toggle
+            label="Amounts in ml and oz"
+            hint={`Every amount shows both, your units first: ${bothExample}. Amounts can be typed in either.`}
+            checked={volumeBoth}
+            onChange={setVolumeBoth}
+          />
         </div>
       </Section>
       {!standalone && (
