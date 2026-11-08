@@ -162,9 +162,9 @@ export const TOP_UP_AFTER_MS = 30 * MIN;
 /**
  * A bottle that names its feed (data.top_up_of: the feeding plan's top-up,
  * given late) is that feed's top-up up to this long after it ended, unless
- * another feed began first. Milk given at the breast (a syringe or an SNS),
- * logged late, goes with the feed before it on the same terms: it's only
- * ever given while she nurses.
+ * another feed began first. Milk given at the breast logged late (an SNS, or a
+ * syringe a feeding plan's step gave: data.plan) goes with the feed before it
+ * on the same terms; a syringe on its own may be a feed by finger.
  */
 export const TOP_UP_LINK_MS = 3 * HOUR;
 export const TOP_UP_BEFORE_MS = SAME_FEED_MS;
@@ -1618,7 +1618,10 @@ export function nursingRuns(entries: readonly Entry[], now: Date): NursingRun[] 
   flush();
   // Top-ups: each bottle given with a feed rides along with it.
   const bottles = entries.filter(isBottleFeed).sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at) || a.id - b.id);
-  for (const b of bottles) topUpRunFor(runs, Date.parse(b.started_at), now, b.data.top_up_of, b.data.via)?.topUps.push(b);
+  // Logged late, milk at the breast is the feed's before it: an SNS is only ever used at the breast, and a syringe
+  // is when a feeding plan's step gave it (data.plan). A syringe on its own may be a feed by finger, so it isn't.
+  const atBreastLate = (d: FeedData) => (d.via === "sns" || (d.via === "syringe" && !!d.plan) ? d.via : null);
+  for (const b of bottles) topUpRunFor(runs, Date.parse(b.started_at), now, b.data.top_up_of, atBreastLate(b.data))?.topUps.push(b);
   return runs;
 }
 
@@ -2071,7 +2074,7 @@ export function clusterLine(c: FeedCluster, tz: string = DEFAULT_TZ): string {
 
 /** How Maple's Log counts feeds (product rules, not guidance): the Cluster feeding sheet's last lines. */
 export const FEED_COUNT_RULE =
-  "Off the breast for under 10 minutes is the same feed, whether Pause or Done was tapped. Three or more feeds, each starting less than 30 minutes after the last one ended, make a cluster, and each feed in it counts. A bottle given during a feed, under 10 minutes before it, or less than 30 minutes after it ended is that feed's top-up: part of it, not a feed of its own. Milk given at the breast, in a syringe or an SNS, is always part of the nursing it went with, even logged up to 3 hours after that feed ended.";
+  "Off the breast for under 10 minutes is the same feed, whether Pause or Done was tapped. Three or more feeds, each starting less than 30 minutes after the last one ended, make a cluster, and each feed in it counts. A bottle given during a feed, under 10 minutes before it, or less than 30 minutes after it ended is that feed's top-up: part of it, not a feed of its own. Milk given at the breast in an SNS, or by syringe for a feeding plan's step, is part of the nursing it went with, even logged up to 3 hours after that feed ended.";
 /** Last fed's info line, when a feed can count from 40 minutes before it ended. */
 export const lastFedRule = (vo: Voice) =>
   `Counted from when ${vo.their} last feed began. A long back-and-forth stretch counts from 40 minutes before ${vo.they} finished, or from when ${vo.they} went on ${vo.their} last side if that side alone ran longer.`;

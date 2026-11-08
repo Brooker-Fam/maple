@@ -77,7 +77,7 @@ import { feedingPlanStatus, owedPartLine, planFeedArg, planOwedPart, planShield,
 import { AT_BREAST_WORDS, feedingPlanOf } from "./feeding-plan";
 import { registerSleepTools, sleepStatus, tryRef, undoableGoalWrite, undoableSleep, undoAsk } from "./sleep/mcp";
 import { deleteShift, deleteTry, endArmsSleepForFeed, getTry as getSleepTry } from "./sleep/store";
-import { adminActsAs, alertsOn, dailyStats, isVitaminD, memberName, soloBottleMl, summarize, type Summary } from "./insights";
+import { adminActsAs, alertsOn, byBottle, dailyStats, isVitaminD, memberName, soloBottleMl, summarize, type Summary } from "./insights";
 import { pumpSummaryLabel, pumpTalliesJson } from "./pump-summary";
 import { milestoneLabel, milestonesFor, milestoneWordsOf, NEUTRAL_MILESTONE_WORDS, type MilestoneWords } from "./milestones";
 import {
@@ -2848,15 +2848,25 @@ async function dailySummaryResult(ctx: Ctx, days: number): Promise<CallToolResul
       const sleepH = round1(dayRows.reduce((n, r) => n + r.sleep_hours, 0));
       p.push(`So far ${vo.they}${vo.verb("'s had")} ${plural(f, "feed")}${perSession}, ${wet} wet and ${dirty} dirty diapers, and about ${sleepH} hours of logged sleep.`);
     }
-    // Bottles, top-ups included, and what they held, over the days in the summary.
+    // Bottles, top-ups included, and what they held, over the days in the summary; milk given at the breast (a syringe
+    // or an SNS with the nursing) said apart, never "by bottle".
     if (anyBottle || anyTopUp) {
       const total = (f: (d: (typeof stats)[number]) => number) => stats.reduce((n, d) => n + f(d), 0);
-      const bottleMl = total((d) => d.bottleMl);
-      const formulaMl = total((d) => d.formulaMl);
-      const breastMl = total((d) => d.breastMilkMl);
-      const tops = total((d) => d.topUps);
+      const bottle = stats.map(byBottle);
+      const sum = (f: (b: (typeof bottle)[number]) => number) => bottle.reduce((n, b) => n + f(b), 0);
+      const bottleMl = sum((b) => b.ml);
+      const formulaMl = sum((b) => b.formulaMl);
+      const breastMl = sum((b) => b.breastMilkMl);
+      const tops = total((d) => d.topUps - d.atBreast);
       const held = [formulaMl ? `${formatVolumeBoth(formulaMl)} formula` : "", breastMl ? `${formatVolumeBoth(breastMl)} breast milk` : ""].filter(Boolean);
       if (bottleMl) p.push(`By bottle: ${formatVolumeBoth(bottleMl)} in all${tops ? `, ${plural(tops, "top-up")} with nursing among them` : ""}${held.length ? ` (${held.join(", ")})` : ""}.`);
+      const atBreastN = total((d) => d.atBreast);
+      if (atBreastN) {
+        const ml = total((d) => d.atBreastMl);
+        const inIt = [total((d) => d.atBreastFormulaMl), total((d) => d.atBreastBreastMilkMl)];
+        const what = [inIt[0] ? `${formatVolumeBoth(inIt[0])} formula` : "", inIt[1] ? `${formatVolumeBoth(inIt[1])} breast milk` : ""].filter(Boolean);
+        p.push(`Milk at the breast (syringe or SNS), part of the nursing: ${ml ? `${formatVolumeBoth(ml)} in all` : plural(atBreastN, "time")}${what.length ? ` (${what.join(", ")})` : ""}.`);
+      }
     }
     if (target) p.push(`The family's target per feed from their care team: ${formatVolumeRangeBoth(target)}, counting what's taken at the breast.`);
     if (anyPump) {

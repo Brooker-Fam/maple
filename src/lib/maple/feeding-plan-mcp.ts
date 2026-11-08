@@ -192,7 +192,7 @@ function missedWords(n: FeedPlanNow, w: Words): string | null {
 /** The nursing entry a late top-up or milk at the breast names (log_feed top_up_of), when the missed steps have one and the feed nursed. */
 function missedTopUpOf(n: FeedPlanNow): number | null {
   if (!n.missed?.steps.some((s) => s.step.do === "bottle" || s.milkMissing)) return null;
-  return n.missed.view.group?.run?.entries[0]?.id ?? null;
+  return newestNursingId(n.missed.view.group?.run);
 }
 
 const dueWords = (d: PlanDue | null, w: Words) => (d ? dueText(d, w.now, w.tz, w.vo.them) : null);
@@ -644,7 +644,20 @@ export function owedPart(plan: FeedingPlan, entries: readonly Entry[], at: Date,
   const bottle = view.steps.some((s) => s.step.do === "bottle" && s.status === "todo");
   const breast = view.steps.some((s) => s.milkMissing);
   if (!bottle && !breast) return null;
-  return { id: run.entries[0].id, view, part: breast && (opts.atBreast || !bottle) ? "milk at the breast" : "top-up" };
+  const id = newestNursingId(run);
+  if (id == null) return null;
+  return { id, view, part: breast && (opts.atBreast || !bottle) ? "milk at the breast" : "top-up" };
+}
+
+/**
+ * The nursing entry a late part names (top_up_of): the newest saved one of the
+ * feed, since a plan feed can hold a re-latch, and feed.ts's link takes only a
+ * run with no newer feed begun before the part.
+ */
+function newestNursingId(run: { entries: readonly Entry[] } | null | undefined): number | null {
+  let newest: Entry | null = null;
+  for (const e of run?.entries ?? []) if (e.id > 0 && (!newest || Date.parse(e.started_at) >= Date.parse(newest.started_at))) newest = e;
+  return newest?.id ?? null;
 }
 
 /** owedPart for an MCP call, from the log as Today reads it; null with no plan. */

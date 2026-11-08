@@ -549,6 +549,10 @@ check("milk at the breast logged late is part of the nursing it went with: the p
   eq([topUpRunFor(runs, ms("08:50"), D("09:00"), null, "sns")?.start, topUpRunFor(runs, ms("08:50"), D("09:00")), runs[0].topUps.map((b) => b.id)], [ms("08:00"), null, [late.id]]);
   eq([countedFeeds([fed, late], D("09:00")).length, clock(lastFedAnchor([fed, late], D("09:00"))!.at)], [1, "08:00"]);
   eq(topUpRunFor(runs, ms("11:20"), D("11:30"), null, "syringe"), null, "over three hours after it ended");
+  // A syringe is the feed's when a plan's step gave it; on its own, logged late, it may be a feed by finger: a feed.
+  const tagged = bottle("09:10", 20, { via: "syringe", milk: "formula", plan: SNS.id });
+  const lone = bottle("09:10", 20, { via: "syringe", milk: "formula" });
+  eq([countedFeeds([fed, tagged], D("09:20")).length, countedFeeds([fed, lone], D("09:20")).length], [1, 2], "a syringe late: the plan's is part of the feed, a lone one a feed");
   const n = now(PLAN, [fed, pumped, late], "09:00");
   eq([n.focus.state, n.focus.feed.id, n.missed, clock(n.due!.base), clock(n.due!.from)], ["upcoming", TOPUP.id, null, "08:00", "10:30"]);
   // Logged as a plain bottle (no SNS said), it's still the feed's milk while the feed wants it: not a feed of its own.
