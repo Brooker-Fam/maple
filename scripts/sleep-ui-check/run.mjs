@@ -656,6 +656,8 @@ try {
   await settled(page);
   await sam.row.click();
   await plan.waitFor();
+  // (The sheet came in under the thumb that opened it: read first.)
+  await settle();
   await plan.getByRole("radio", { name: "Goals", exact: true }).click();
   await plan.getByRole("radio", { name: "Goals", exact: true, checked: true }).waitFor();
   // Someone holding her, seen by a view-only guest: who and since when, and the header into the plan; nothing to tap that writes.
@@ -1155,6 +1157,8 @@ try {
   await sparseReceipt.filter({ hasText: "Saved: somewhere else" }).waitFor();
   await night.locator("[data-safe-sleep]").waitFor();
   assert.match(await night.locator("[data-safe-sleep]").innerText(), /^Lay her on her back for every nap and at night\. Keep her bassinet in your room, close to your bed but not in it/);
+  // (No handoff came in where Somewhere else was, and the waits above take well under the tap cooldown.)
+  await settle();
   await night.getByRole("region", { name: "Did the 2:00 AM handoff happen as planned?" }).getByRole("button", { name: "No handoff", exact: true }).click();
   await sparseReceipt.filter({ hasText: "Saved: no handoff" }).waitFor();
   const samSaid = (await page.evaluate(() => window.__sleep.checkins())).find((x) => x.member === "sam@example.test" && x.night === "2026-11-04");
@@ -1256,6 +1260,8 @@ try {
   await settled(page);
   await sam.row.click();
   await plan.waitFor();
+  // (The sheet came in under the thumb that opened it: read first.)
+  await settle();
   await plan.getByRole("radio", { name: "Goals", exact: true }).click();
   const morningGoal = plan.getByRole("region", { name: "Bassinet nights, and sleep for both of us" });
   await morningGoal.locator("[data-goal-coverage]").waitFor();
@@ -1524,6 +1530,8 @@ try {
   await sam.row.click();
   await plan.waitFor();
   assert.equal(await plan.locator("[data-goal-return]").count(), 0, "Nor in the plan");
+  // (The sheet came in under the thumb that opened it: read first.)
+  await settle();
   await plan.getByRole("radio", { name: "Goals", exact: true }).click();
   const quietGoal = plan.getByRole("region", { name: "Bassinet by Dec 1" });
   await quietGoal.locator("[data-goal-quiet]").filter({ hasText: "Nothing logged since Tue, Oct 27." }).waitFor();
@@ -1654,6 +1662,9 @@ try {
   await sam.dock.waitFor();
   await more("Sleep goals");
   await plan.waitFor();
+  // The sheet came in where More's Sleep goals row was, Plan for going back to work under the thumb that tapped it: a
+  // person reads it before tapping (a tap there at once is a double tap's second half, and does nothing).
+  await settle();
   await plan.getByRole("button", { name: "Plan for going back to work", exact: true }).click();
   const quick = plan.getByRole("region", { name: "Plan for going back to work" });
   await quick.getByText("Question 1 of 5", { exact: true }).waitFor();
@@ -1716,6 +1727,9 @@ try {
   await page.setViewportSize({ width: 320, height: 568 });
   await page.goto("https://sleep.example.test/");
   await more("Sleep goals");
+  await plan.waitFor();
+  // (Read first again: at 320 × 568 the two taps land on the same point.)
+  await settle();
   await plan.getByRole("button", { name: "Plan for going back to work", exact: true }).click();
   await quick.getByText("Question 1 of 5", { exact: true }).waitFor();
   await noSideScroll(plan, "The quick setup at 320px");
@@ -1988,6 +2002,8 @@ try {
   await more("Holding her");
   let holdingSheet = page.getByRole("dialog", { name: "Holding River", exact: true });
   await holdingSheet.waitFor();
+  // (The sheet came in where More's Holding her row was: read first.)
+  await settle();
   await holdingSheet.getByRole("button", { name: "Asleep in arms", exact: true }).click();
   assert.equal(await holdingSheet.getByRole("button", { name: "Asleep in arms", exact: true }).getAttribute("aria-pressed"), "true");
   await holdingSheet.getByRole("button", { name: "Close", exact: true }).click();
@@ -2050,6 +2066,8 @@ try {
   await intoBassinet.getByRole("button", { name: "Done", exact: true }).click();
   await intoBassinet.waitFor({ state: "hidden" });
   await advance(40);
+  // (The try's card took the turn card's place, an outcome under the thumb: the page's taps wait out the cooldown first.)
+  await settled();
   await page.getByRole("region", { name: "In the bassinet" }).getByRole("button", { name: /^Stayed asleep/ }).click();
   await advance(60);
   await page.evaluate(async () => {
