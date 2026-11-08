@@ -11,6 +11,7 @@ import { adminFamilyId, familyForAuth, memberIdFromSub, type FamilyCtx, type Fam
 import { cleanDevice } from "./device";
 import { describeEntry } from "./describe";
 import {
+  CLUSTER_MIN_FEEDS,
   clusterLine,
   countedFeeds,
   feedClusters,
@@ -72,7 +73,7 @@ import { registerMemoryTools, statusMemories } from "./memory/mcp";
 import { memoryRules } from "./memory/policy";
 import { registerPeopleTools } from "./people-mcp";
 import { feedingPlanStatus, owedPartLine, planFeedArg, planOwedPart, planShield, registerFeedingPlanTools, type OwedPart } from "./feeding-plan-mcp";
-import { feedingPlanOf } from "./feeding-plan";
+import { AT_BREAST_WORDS, feedingPlanOf } from "./feeding-plan";
 import { registerSleepTools, sleepStatus, tryRef, undoableGoalWrite, undoableSleep, undoAsk } from "./sleep/mcp";
 import { deleteShift, deleteTry, endArmsSleepForFeed, getTry as getSleepTry } from "./sleep/store";
 import { adminActsAs, alertsOn, dailyStats, isVitaminD, memberName, soloBottleMl, summarize, type Summary } from "./insights";
@@ -1020,14 +1021,17 @@ async function snapshot(ctx: Ctx): Promise<Summary> {
   return (await snapshotWithLog(ctx)).s;
 }
 
-/** snapshot, with the 72 hours it read (the feeding plan reads the log against itself from them, as Today does). */
-async function snapshotWithLog(ctx: Ctx): Promise<{ s: Summary; entries: Entry[] }> {
+/**
+ * snapshot, with the 72 hours it read (the feeding plan reads the log against itself from them, as Today does) and
+ * today's parts given with nursing from them (milk at the breast apart from top-ups, for the tallies' words).
+ */
+async function snapshotWithLog(ctx: Ctx): Promise<{ s: Summary; entries: Entry[]; parts: DayParts }> {
   const [entries, growth, lifetime] = await Promise.all([
     listEntries(ctx.fam, { babyId: ctx.baby.id, from: new Date(ctx.now.getTime() - 72 * HOUR), includeActive: true, limit: 2000 }),
     listEntries(ctx.fam, { babyId: ctx.baby.id, kinds: ["growth"], ascending: true, limit: 2000 }),
     lifetimeCounts(ctx.fam, ctx.baby.id),
   ]);
-  return { s: summarize({ entries, growth, baby: ctx.baby, members: ctx.members, now: ctx.now, lifetime, vo: voiceOf(ctx) }), entries };
+  return { s: summarize({ entries, growth, baby: ctx.baby, members: ctx.members, now: ctx.now, lifetime, vo: voiceOf(ctx) }), entries, parts: todayParts(entries, ctx) };
 }
 
 function targetsJson(s: Summary) {
@@ -1042,15 +1046,25 @@ function targetsJson(s: Summary) {
     : null;
 }
 
-function talliesJson(s: Summary) {
+/** `parts`: today's parts given with nursing (todayParts), so milk at the breast is counted apart from top-ups. */
+function talliesJson(s: Summary, parts?: DayParts) {
   const t = s.today;
+  const bottlesMl = parts ? topUpMl({ topUps: parts.bottles }) : null;
+  const breastMl = parts ? topUpMl({ topUps: parts.breast }) : null;
   return {
     today: {
       feeds: t.feeds,
       ...(t.clusterFeeds ? { feeds_in_a_cluster: t.clusterFeeds } : {}),
       ...(t.bottleFeeds ? { bottles: t.bottleFeeds, ...(soloBottleMl(t) ? { bottle_total: formatVolumeBoth(soloBottleMl(t)) } : {}) } : {}),
-      // Bottles given with nursing: part of those feeds (feed.ts), never counted as feeds.
-      ...(t.topUps ? { top_ups: t.topUps, ...(t.topUpMl ? { top_up_total: formatVolumeBoth(t.topUpMl) } : {}) } : {}),
+      // Bottles given with nursing: part of those feeds (feed.ts), never counted as feeds; milk given at the breast apart.
+      ...(parts
+        ? {
+            ...(parts.bottles.length ? { top_ups: parts.bottles.length, ...(bottlesMl ? { top_up_total: formatVolumeBoth(bottlesMl) } : {}) } : {}),
+            ...(parts.breast.length ? { at_breast: parts.breast.length, ...(breastMl ? { at_breast_total: formatVolumeBoth(breastMl) } : {}) } : {}),
+          }
+        : t.topUps
+          ? { top_ups: t.topUps, ...(t.topUpMl ? { top_up_total: formatVolumeBoth(t.topUpMl) } : {}) }
+          : {}),
       // What the bottles held (feed.ts milkSplit), when it was said.
       ...(t.formulaMl ? { formula_total: formatVolumeBoth(t.formulaMl) } : {}),
       ...(t.breastMilkMl ? { breast_milk_by_bottle_total: formatVolumeBoth(t.breastMilkMl) } : {}),
@@ -1144,7 +1158,8 @@ function clusterJson(c: FeedCluster, ctx: Ctx) {
   };
 }
 
-function tallyLines(s: Summary, kinds: Set<EntryKind>, vo: Voice, unknownBirthTime: boolean): string[] {
+/** `parts`: today's parts given with nursing (todayParts), so milk at the breast is never called a top-up. */
+function tallyLines(s: Summary, kinds: Set<EntryKind>, vo: Voice, unknownBirthTime: boolean, parts?: DayParts): string[] {
   const out: string[] = [];
   const t = s.targets;
   const day = s.age ? `${unknownBirthTime ? "Estimated " : ""}Day ${s.age.dayOfLife}` : null;
@@ -1156,8 +1171,9 @@ function tallyLines(s: Summary, kinds: Set<EntryKind>, vo: Voice, unknownBirthTi
     out.push(line);
   }
   if (kinds.has("feed")) {
-    // Top-ups are part of their nursing feeds, so they never add to the count.
-    const notes = [s.today.clusterFeeds ? `${s.today.clusterFeeds} in a cluster` : "", s.today.topUps ? `with ${plural(s.today.topUps, "top-up")}` : ""].filter(Boolean);
+    // Top-ups and milk at the breast are part of their nursing feeds, so they never add to the count.
+    const given = parts ? partsWith(parts) : s.today.topUps ? `with ${plural(s.today.topUps, "top-up")}` : "";
+    const notes = [s.today.clusterFeeds ? `${s.today.clusterFeeds} in a cluster` : "", given].filter(Boolean);
     let line = `Feeds today: ${s.today.feeds}${notes.length ? ` (${notes.join(", ")})` : ""}`;
     line += t ? `; last 24h: ${s.last24h.feeds} (${unknownBirthTime ? "estimated " : ""}aim ${t.feeds[0]}–${t.feeds[1]}).` : ".";
     out.push(line);
@@ -1432,18 +1448,19 @@ const needsSnapshot = (kinds: Set<EntryKind>) => [...kinds].some((k) => TALLY_KI
 /** One write → the tool result (adds today's tallies and age-based alerts). */
 async function writeResult(ctx: Ctx, sv: Saved): Promise<CallToolResult> {
   const kinds = new Set<EntryKind>([sv.entry.kind]);
-  const s = sv.status === "duplicate" || !needsSnapshot(kinds) ? null : await snapshot(ctx);
+  const snap = sv.status === "duplicate" || !needsSnapshot(kinds) ? null : await snapshotWithLog(ctx);
+  const s = snap?.s ?? null;
   const alerts = sortAlerts([...sv.alerts, ...(s ? snapshotAlerts(s, kinds) : [])]);
   const lines = [
     savedLine(sv, ctx),
     ...(sv.status === "duplicate" ? [] : sv.lines),
-    ...(s ? tallyLines(s, kinds, voiceOf(ctx), ctx.baby.settings.birth_time_approx === true) : []),
+    ...(s ? tallyLines(s, kinds, voiceOf(ctx), ctx.baby.settings.birth_time_approx === true, snap!.parts) : []),
     ...assumedLine(sv.assumed),
     ...alertLines(alerts, { emergencySigns: sv.emergencySigns }, voiceOf(ctx)),
   ];
   return ok(lines.join("\n"), {
     ...savedJson(sv, ctx),
-    ...(s ? talliesJson(s) : {}),
+    ...(s ? talliesJson(s, snap!.parts) : {}),
     ...(s && kinds.has("feed") ? nextJson(s) : {}),
     alerts,
   });
@@ -2028,9 +2045,11 @@ function timerJson(e: Entry, ctx: Ctx) {
 /**
  * "Nursing on the right since 11:37 PM (6 min); Left 11:04–11:26, break 11
  * min; total nursing 28 min, started by Matt [timer #812]." Every time sits
- * next to the word that says what it is.
+ * next to the word that says what it is. `given`: what was given with the
+ * feed so far (its run's topUps), so milk at the breast already logged reads
+ * as given: "Given with it so far: 0.68 oz (20 ml) in the syringe at 12:56 PM."
  */
-function timerLine(e: Entry, ctx: Ctx): string {
+function timerLine(e: Entry, ctx: Ctx, given: readonly FeedEntry[] = []): string {
   const elapsed = formatDuration((ctx.now.getTime() - ts(e)) / 1000);
   const by = memberName(e.created_by, ctx.members);
   if (e.kind === "feed") {
@@ -2041,7 +2060,11 @@ function timerLine(e: Entry, ctx: Ctx): string {
     const where = cur.kind === "break" ? `paused ${since}` : cur.side === "B" ? `going back and forth (both sides) ${since}` : `on the ${sideWord(cur.side)} ${since}`;
     const past = parts.slice(0, -1).map((p) => partText(p, ctx));
     const rest = past.length ? `; ${past.join(", ")}; total nursing ${minutesText(partTotals(parts).min.nursing)}` : "";
-    return `Nursing ${e.data.shield ? "with the nipple shield, " : ""}${where}${rest}, started by ${by} [timer #${e.id}].`;
+    const withIt = given.map((b) => {
+      const at = formatTime(b.started_at, ctx.tz);
+      return atBreast(b) ? `${atBreastWords([b])} at ${at}` : `a ${b.data.amount_ml != null ? `${formatVolumeBoth(b.data.amount_ml)} ` : ""}top-up at ${at}`;
+    });
+    return `Nursing ${e.data.shield ? "with the nipple shield, " : ""}${where}${rest}, started by ${by} [timer #${e.id}].${withIt.length ? ` Given with it so far: ${withIt.join(", ")}.` : ""}`;
   }
   return `${TIMER_LABEL[e.kind as TimerKind].replace(/^./, (c) => c.toUpperCase())} timer running: ${elapsed} since ${formatTime(e.started_at, ctx.tz)} (started by ${by}) [timer #${e.id}].`;
 }
@@ -2068,11 +2091,7 @@ function topUpWords(run: NursingRun): string {
   const breast = run.topUps.filter(atBreast);
   const bottles = run.topUps.filter((b) => !atBreast(b));
   const parts: string[] = [];
-  if (breast.length) {
-    const ml = topUpMl({ topUps: breast });
-    const how = breast.every((b) => b.data.via === "sns") ? "in the SNS" : breast.every((b) => b.data.via === "syringe") ? "by syringe" : "at the breast";
-    parts.push(`${ml != null ? `${formatVolumeBoth(ml)} ` : "milk "}${how}`);
-  }
+  if (breast.length) parts.push(atBreastWords(breast));
   const n = bottles.length;
   if (n) {
     const ml = topUpMl({ topUps: bottles });
@@ -2083,6 +2102,32 @@ function topUpWords(run: NursingRun): string {
 
 /** A bottle entry whose milk was given at the breast while she nursed (via an SNS or a syringe). */
 const atBreast = (b: FeedEntry) => b.data.via === "sns" || b.data.via === "syringe";
+
+/** Milk given at the breast, as the app says it: "0.68 oz (20 ml) in the syringe", "milk in the SNS", "1.35 oz (40 ml) at the breast" (both). */
+function atBreastWords(list: readonly FeedEntry[]): string {
+  const ml = topUpMl({ topUps: [...list] });
+  const how = list.every((b) => b.data.via === "sns") ? AT_BREAST_WORDS.sns.inThe : list.every((b) => b.data.via === "syringe") ? AT_BREAST_WORDS.syringe.inThe : "at the breast";
+  return `${ml != null ? `${formatVolumeBoth(ml)} ` : "milk "}${how}`;
+}
+
+/**
+ * Today's parts given with nursing feeds (feed.ts topUps), by when each was given: milk at the breast apart from
+ * top-ups by bottle; `live`: those given so far with the feed still going, for its timer's line.
+ */
+type DayParts = { breast: FeedEntry[]; bottles: FeedEntry[]; live: FeedEntry[] };
+
+function todayParts(entries: readonly Entry[], ctx: Ctx): DayParts {
+  const [from, to] = dayBounds(dayKey(ctx.now, ctx.tz), ctx.tz);
+  const runs = nursingRuns(entries, ctx.now);
+  const given = runs.flatMap((r) => r.topUps).filter((b) => Date.parse(b.started_at) >= from.getTime() && Date.parse(b.started_at) < to.getTime());
+  return { breast: given.filter(atBreast), bottles: given.filter((b) => !atBreast(b)), live: runs.find((r) => r.live)?.topUps ?? [] };
+}
+
+/** A day's parts in the tally's words: "with 0.68 oz (20 ml) in the syringe and 1 top-up"; never "top-up" for milk at the breast. */
+function partsWith(p: DayParts): string {
+  const bits = [p.breast.length ? atBreastWords(p.breast) : "", p.bottles.length ? plural(p.bottles.length, "top-up") : ""].filter(Boolean);
+  return bits.length ? `with ${bits.join(" and ")}` : "";
+}
 
 /**
  * Her last feed as counted (feed.ts nursingRuns: Pauses and Dones under 10 minutes apart are one feed), from the
@@ -2136,6 +2181,18 @@ function lastFeedLine(s: Summary, ctx: Ctx): string {
   return `${label}: nursed at ${whenText(new Date(run.start), ctx)} (${ago})${detail}.`;
 }
 
+/** A feed's parts for JSON: at_breast (a syringe or an SNS, with how) apart from top_ups (by bottle). */
+function partsJson(run: NursingRun | null, ctx: Ctx): Record<string, unknown> {
+  if (!run?.topUps.length) return {};
+  const part = (b: FeedEntry) => ({ id: b.id, local: localWhen(b.started_at, ctx), amount: b.data.amount_ml != null ? formatVolumeBoth(b.data.amount_ml) : null });
+  const breast = run.topUps.filter(atBreast);
+  const bottles = run.topUps.filter((b) => !atBreast(b));
+  return {
+    ...(breast.length ? { at_breast: breast.map((b) => ({ ...part(b), via: b.data.via })) } : {}),
+    ...(bottles.length ? { top_ups: bottles.map(part) } : {}),
+  };
+}
+
 /**
  * maple_status's last_feed: the feed as counted, and when "last fed" counts from. `id` is its newest entry (the one
  * reopen_timer, delete_entry or a fix to its end acts on). A feed of several entries (a Done and a new one within 10
@@ -2158,8 +2215,8 @@ function lastFeedJson(s: Summary, ctx: Ctx): Record<string, unknown> | null {
     ...(fed.rule === "side" ? { counted_from_local: localWhen(fed.at, ctx), counted_from: `when ${vo.they} went on ${vo.their} last side, which alone ran past ${FEED_LENGTH_MIN[1]} minutes` } : {}),
     what: run ? `breastfeed (${[sidesText(run.min), run.firstSide ? `started ${sideWord(run.firstSide)}` : "", run.backAndForth ? "back and forth" : "", topUpWords(run)].filter(Boolean).join(", ")})` : phrase(fed.entry, ctx),
     ...(run && run.entries.length > 1 ? { entries: run.entries.map((e) => e.id) } : {}),
-    // Bottles given with it: part of this feed, never feeds of their own.
-    ...(run?.topUps.length ? { top_ups: run.topUps.map((b) => ({ id: b.id, local: localWhen(b.started_at, ctx), amount: b.data.amount_ml != null ? formatVolumeBoth(b.data.amount_ml) : null })) } : {}),
+    // Bottles given with it: part of this feed, never feeds of their own; milk given at the breast apart from top-ups.
+    ...partsJson(run, ctx),
     by: memberName(fed.entry.created_by, ctx.members),
   };
 }
@@ -2189,14 +2246,16 @@ function lastSleepLine(s: Summary, ctx: Ctx): string | null {
  * "Today so far: 6 feeds (4 in a cluster), 3 wet, 2 dirty, 4h 10m of sleep logged." Bottles and pumping only when
  * there are some; a day with none of them logged says so ("no feeds, diapers or sleep logged"), never "0 feeds".
  */
-function todayLine(s: Summary): string {
+function todayLine(s: Summary, parts?: DayParts): string {
   const tb = s.today;
-  // Bottles on their own are feeds; top-ups are part of nursing feeds (feed.ts), with their own amount.
+  // Bottles on their own are feeds; top-ups are part of nursing feeds (feed.ts), with their own amount, and so is milk
+  // given at the breast, said as that (todayParts), never as a top-up.
   const bottleMl = soloBottleMl(tb);
+  const topUps = (n: number, ml: number | null) => (n ? `${plural(n, "top-up")} with nursing${ml ? `, ${formatVolumeBoth(ml)}` : ""}` : "");
   const extra = [
     tb.clusterFeeds ? `${tb.clusterFeeds} in a cluster` : "",
     tb.bottleFeeds ? `${plural(tb.bottleFeeds, "bottle")}${bottleMl ? `, ${formatVolumeBoth(bottleMl)}` : ""}` : "",
-    tb.topUps ? `${plural(tb.topUps, "top-up")} with nursing${tb.topUpMl ? `, ${formatVolumeBoth(tb.topUpMl)}` : ""}` : "",
+    ...(parts ? [parts.breast.length ? atBreastWords(parts.breast) : "", topUps(parts.bottles.length, topUpMl({ topUps: parts.bottles }))] : [topUps(tb.topUps, tb.topUpMl)]),
     tb.formulaMl ? `${formatVolumeBoth(tb.formulaMl)} of formula by bottle` : "",
   ].filter(Boolean);
   const counts =
@@ -2219,9 +2278,9 @@ function last24Words(d: Summary["last24h"]): string {
  * The log in maple_status's own lines, cut to what the in-app chat needs on every message: running timers, her last
  * feed, the next side, diapers, the last sleep and today's counts. Nothing before she's born.
  */
-export function logStateLines(s: Summary, ctx: Ctx): string[] {
+export function logStateLines(s: Summary, ctx: Ctx, parts?: DayParts): string[] {
   if (!s.born) return [];
-  const lines = [...s.active.map((e) => timerLine(e, ctx)), lastFeedLine(s, ctx), nextLine(s, voiceOf(ctx)), diaperLine(s, ctx), lastSleepLine(s, ctx), todayLine(s)];
+  const lines = [...s.active.map((e) => timerLine(e, ctx, e.kind === "feed" ? parts?.live : undefined)), lastFeedLine(s, ctx), nextLine(s, voiceOf(ctx)), diaperLine(s, ctx), lastSleepLine(s, ctx), todayLine(s, parts)];
   return lines.filter((l): l is string => !!l);
 }
 
@@ -2230,8 +2289,8 @@ export function logStateLines(s: Summary, ctx: Ctx): string[] {
  * next medicine for someone who can read her page (momStatus, so ctx.care holds).
  */
 export async function logState(ctx: Ctx): Promise<string[]> {
-  const [{ s, entries }, mom, sleep] = await Promise.all([snapshotWithLog(ctx), momStatus(ctx), sleepStatus(ctx).catch(() => null)]);
-  const lines = logStateLines(s, ctx);
+  const [{ s, entries, parts }, mom, sleep] = await Promise.all([snapshotWithLog(ctx), momStatus(ctx), sleepStatus(ctx).catch(() => null)]);
+  const lines = logStateLines(s, ctx, parts);
   const plan = s.born ? await feedingPlanStatus(ctx, entries) : null;
   if (plan) lines.push(...plan.lines);
   if (s.born && sleep) lines.push(...sleep.lines);
@@ -2306,19 +2365,25 @@ export function lastFedSpeak(s: Summary, name: string, tz: string, vo: Voice): s
 
 /** "While you slept" recap since a time. */
 async function recap(ctx: Ctx, since: Date, reason: string) {
-  const entries = (await listEntries(ctx.fam, {
+  // From 2 hours before `since`, the running feed with them (Siri's recap reads the same): a top-up or milk at the
+  // breast given after `since` still finds its feed, one that began before or is still going, and is never a feed.
+  const loaded = await listEntries(ctx.fam, {
     babyId: ctx.baby.id,
-    from: since,
+    from: new Date(since.getTime() - 2 * HOUR),
     to: new Date(ctx.now.getTime() + 1),
     limit: 2000,
     ascending: true,
-  })).filter((e) => !e.active);
+    includeActive: true,
+  });
+  const entries = loaded.filter((e) => !e.active && ts(e) >= since.getTime());
   const after = (e: Entry) => ts(e) >= since.getTime();
   // Feeds as counted (Pauses and Dones under 10 minutes apart are one feed, a bottle given with a feed is its top-up),
-  // plus each bottle on its own.
-  const runs = nursingRuns(entries, ctx.now);
-  const clusters = feedClusters(runs).filter((c) => c.start >= since.getTime());
-  const feedStarts = countedFeeds(entries, ctx.now, runs)
+  // plus each bottle on its own: those begun since, and finished (the one going now is said as going).
+  const runs = nursingRuns(loaded, ctx.now);
+  const done = runs.filter((r) => !r.live);
+  const clusters = feedClusters(done).filter((c) => c.start >= since.getTime() && c.feeds >= CLUSTER_MIN_FEEDS);
+  const feedStarts = countedFeeds(loaded, ctx.now, runs)
+    .filter((f) => (f.run ? !f.run.live : !f.bottle.active))
     .map((f) => f.start)
     .filter((t) => t >= since.getTime());
   const diapers = entries.filter((e): e is EntryOf<"diaper"> => e.kind === "diaper" && after(e));
@@ -2377,7 +2442,7 @@ async function recap(ctx: Ctx, since: Date, reason: string) {
 
 async function statusResult(ctx: Ctx, since: string | null | undefined): Promise<CallToolResult> {
   const vo = voiceOf(ctx);
-  const { s, entries } = await snapshotWithLog(ctx);
+  const { s, entries, parts } = await snapshotWithLog(ctx);
   const name = ctx.baby.nickname || vo.Name;
   const lines: string[] = [];
   const json: Record<string, unknown> = {
@@ -2427,7 +2492,7 @@ async function statusResult(ctx: Ctx, since: string | null | undefined): Promise
     json.recap = r.json;
   }
 
-  if (s.active.length) lines.push(...s.active.map((e) => timerLine(e, ctx)));
+  if (s.active.length) lines.push(...s.active.map((e) => timerLine(e, ctx, e.kind === "feed" ? parts.live : undefined)));
   json.timers = s.active.map((e) => timerJson(e, ctx));
 
   lines.push(lastFeedLine(s, ctx));
@@ -2466,13 +2531,13 @@ async function statusResult(ctx: Ctx, since: string | null | undefined): Promise
   }
 
   const t = s.targets;
-  lines.push(todayLine(s));
+  lines.push(todayLine(s, parts));
   if (s.age) {
     // The aim only with warnings on (targets is null otherwise).
     const aim = t ? ` (${ctx.baby.settings.birth_time_approx ? "Estimated " : ""}Day ${s.age.dayOfLife} aim: ${t.feeds[0]}–${t.feeds[1]} feeds, ${t.wet}+ wet${t.dirty != null ? `, ${t.dirty}+ dirty` : ""})` : "";
     lines.push(`Last 24 hours: ${last24Words(s.last24h)}${aim}.`);
   }
-  Object.assign(json, talliesJson(s));
+  Object.assign(json, talliesJson(s, parts));
 
   if (s.vitaminD) {
     lines.push(`Vitamin D: given at ${formatTime(s.vitaminD.givenAt, ctx.tz)} by ${memberName(s.vitaminD.by, ctx.members)}.`);
@@ -3833,7 +3898,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
       if (stopped.kind === "pump" && pumpedMl != null) {
         stopped = await updateEntry(ctx.fam, stopped.id, { data: { total_ml: pumpedMl } }, ctx.who.id);
       }
-      const s = await snapshot(ctx);
+      const { s, parts } = await snapshotWithLog(ctx);
       const kinds = new Set<EntryKind>([stopped.kind]);
       // A feed stopped while paused ends when she came off; say so, since that's not "now".
       let ending = "";
@@ -3854,7 +3919,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
         ...(openTry ? [`Bassinet try ${tryRef(openTry)} is still open on this sleep: ask how it went, then bassinet_try {action:"finish"} (it ends when the sleep did).`] : []),
         // Breaks and switches are worth spelling out; a one-side feed is already in the line above.
         ...(timed && timed.length > 1 ? [timelineText(stopped as FeedEntry, ctx)] : []),
-        ...tallyLines(s, kinds, voiceOf(ctx), ctx.baby.settings.birth_time_approx === true),
+        ...tallyLines(s, kinds, voiceOf(ctx), ctx.baby.settings.birth_time_approx === true, parts),
         ...assumedLine(assumed),
       ];
       return ok(lines.join("\n"), {
@@ -3863,7 +3928,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
         duration: formatDuration((Date.parse(stopped.ended_at!) - ts(stopped)) / 1000),
         ...(timed ? { timeline: timelineJson(timed, ctx), total_nursing_minutes: partTotals(timed).min.nursing } : {}),
         ...(ending ? { ended_at_pause: true } : {}),
-        ...talliesJson(s),
+        ...talliesJson(s, parts),
         ...(stopped.kind === "feed" ? nextJson(s) : {}),
         ...(assumed.length ? { assumed } : {}),
         undo: timed
@@ -4611,14 +4676,15 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
       }
       const saved = results.filter((r) => r.saved).map((r) => r.saved!);
       const kinds = new Set<EntryKind>(saved.filter((x) => x.status !== "duplicate").map((x) => x.entry.kind));
-      const s = needsSnapshot(kinds) ? await snapshot(ctx) : null;
+      const snap = needsSnapshot(kinds) ? await snapshotWithLog(ctx) : null;
+      const s = snap?.s ?? null;
       const alerts = sortAlerts([...saved.flatMap((x) => x.alerts), ...(s ? snapshotAlerts(s, kinds) : [])]);
       const lines: string[] = [];
       for (const r of results) {
         if (r.saved) lines.push(savedLine(r.saved, ctx), ...(r.saved.status === "duplicate" ? [] : r.saved.lines));
         else lines.push(`Not saved (item ${r.index + 1}, ${a.entries[r.index].kind}): ${r.error}`);
       }
-      if (s) lines.push(...tallyLines(s, kinds, voiceOf(ctx), ctx.baby.settings.birth_time_approx === true));
+      if (s) lines.push(...tallyLines(s, kinds, voiceOf(ctx), ctx.baby.settings.birth_time_approx === true, snap!.parts));
       lines.push(...assumedLine(saved.flatMap((x) => x.assumed)));
       lines.push(...alertLines(alerts, { emergencySigns: saved.some((x) => x.emergencySigns) }, voiceOf(ctx)));
       const created = saved.filter((x) => x.status === "created").length;
@@ -4637,7 +4703,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
         saved: created,
         of: a.entries.length,
         results: results.map((r) => (r.saved ? { item: r.index + 1, ...savedJson(r.saved, ctx) } : { item: r.index + 1, created: false, error: r.error })),
-        ...(s ? talliesJson(s) : {}),
+        ...(s ? talliesJson(s, snap!.parts) : {}),
         ...(s && kinds.has("feed") ? nextJson(s) : {}),
         alerts,
       });

@@ -32,7 +32,7 @@ import { context, fail, FAMILY_ONE_COPY, ok, READ_ANN, ToolError, VIEWER_MESSAGE
 import { readBackMatches, readBackToken, READ_BACK_HOURS, rereadWhy } from "./sleep/mcp";
 import { listEntries, SettingsChanged, storedPlanRev, StoreUnavailable, updateBaby } from "./store";
 import { formatTime, formatTimeNear } from "./time";
-import type { Entry } from "./types";
+import type { Entry, EntryOf } from "./types";
 import { feedTargetOf, ML_PER_FL_OZ, type FeedTarget } from "./units";
 import { checkFeedTarget } from "./validate";
 import type { Voice } from "./voice";
@@ -90,9 +90,26 @@ function breastMilkWords(s: StepView, plan: FeedingPlan): string {
   return sup ? `the ${amountText(sup.ml, plan.unit)} ${AT_BREAST_WORDS[sup.via].inThe}` : "the milk at the breast";
 }
 
-/** What the log holds for a step: "20 min", "30 ml", "12 min so far". */
-function logged(s: StepView, plan: FeedingPlan): string[] {
-  if (s.status === "running") return s.minutes != null ? [`${s.minutes} min so far`] : [];
+/**
+ * Milk at the breast already logged for a nursing step, with the last one's time: "20 ml in the SNS at 11:56 AM", so
+ * a feed still going says it was given (and it isn't given or logged twice). Null with none.
+ */
+function breastMilkLogged(s: StepView, plan: FeedingPlan, tz: string): string | null {
+  if (s.step.do !== "nurse" || s.ml == null) return null;
+  const given = s.entries.filter((e): e is EntryOf<"feed"> => e.kind === "feed" && e.data.method === "bottle");
+  if (!given.length) return null;
+  const vias = new Set(given.map((e) => e.data.via));
+  const via = vias.size === 1 ? [...vias][0] : undefined;
+  const how = via === "syringe" || via === "sns" ? AT_BREAST_WORDS[via].inThe : "at the breast";
+  return `${amountText({ min: s.ml, max: s.ml }, plan.unit)} ${how} at ${formatTime(Math.max(...given.map((e) => Date.parse(e.started_at))), tz)}`;
+}
+
+/** What the log holds for a step: "20 min", "30 ml", "12 min so far", "12 min so far, 20 ml in the SNS at 11:56 AM". */
+function logged(s: StepView, plan: FeedingPlan, tz: string): string[] {
+  if (s.status === "running") {
+    const milk = breastMilkLogged(s, plan, tz);
+    return [s.minutes != null ? `${s.minutes} min so far` : null, milk].filter((x): x is string => !!x);
+  }
   if (s.status !== "done") return [];
   return [s.minutes != null && s.step.do !== "bottle" ? `${s.minutes} min` : null, s.ml != null ? amountText({ min: s.ml, max: s.ml }, plan.unit) : null].filter((x): x is string => !!x);
 }
@@ -100,12 +117,12 @@ function logged(s: StepView, plan: FeedingPlan): string[] {
 const withLogged = (text: string, bits: string[]) => (bits.length ? `${text} (${bits.join(", ")})` : text);
 
 /** One step with what the log says about it: "Pump 15 min (done, 14 min)", "Top up 25–35 ml (not logged yet)". */
-function statusWords(s: StepView, text: string, plan: FeedingPlan): string {
+function statusWords(s: StepView, text: string, plan: FeedingPlan, tz: string): string {
   if (s.status === "info") return text;
-  if (s.status === "running") return withLogged(text, ["going now", ...logged(s, plan)]);
+  if (s.status === "running") return withLogged(text, ["going now", ...logged(s, plan, tz)]);
   if (s.status === "todo") return `${text} (not logged yet)`;
   if (s.milkMissing) return `${text} (nursed${s.minutes != null ? ` ${s.minutes} min` : ""}; ${breastMilkWords(s, plan)} isn't logged)`;
-  return withLogged(text, ["done", ...logged(s, plan)]);
+  return withLogged(text, ["done", ...logged(s, plan, tz)]);
 }
 
 const WHY: Record<PlanFeedView["why"], string> = {
@@ -168,10 +185,10 @@ export function planNowLine(n: FeedPlanNow, w: Words): string {
     const left = stepsLeft(n).filter((s) => s.status === "todo" || s.status === "info");
     const bits = [
       `Feeding plan: ${named(f.feed)} is underway${f.start != null ? ` since ${formatTime(f.start, w.tz)}` : ""}.`,
-      done.length ? `Done: ${done.map((s) => withLogged(lower(words[s.i]), logged(s, n.plan))).join("; ")}.` : "",
+      done.length ? `Done: ${done.map((s) => withLogged(lower(words[s.i]), logged(s, n.plan, w.tz))).join("; ")}.` : "",
       // Nursed, with the milk at the breast not logged: the nursing is done, the milk is what's missing.
       ...unlogged.map((s) => `Nursed${s.minutes != null ? ` ${s.minutes} min` : ""}; not logged yet: ${breastMilkWords(s, n.plan)}.`),
-      now.length ? `Going now: ${now.map((s) => withLogged(lower(words[s.i]), logged(s, n.plan))).join("; ")}.` : "",
+      now.length ? `Going now: ${now.map((s) => withLogged(lower(words[s.i]), logged(s, n.plan, w.tz))).join("; ")}.` : "",
       left.length ? `Next: ${left.map((s) => lower(words[s.i])).join("; then ")}.` : "",
     ];
     out.push(bits.filter(Boolean).join(" "));
@@ -213,7 +230,7 @@ function planNowBlock(n: FeedPlanNow, w: Words): string[] {
     if (n.others.length) out.push(`The plan's other feeds, if they'd rather do one of those (start_timer with plan when it begins; nothing in the plan changes): ${n.others.map(named).join(", ")}.`);
   } else {
     out.push(`Underway: ${named(f.feed)} (${WHY[f.why]}${f.start != null ? `, since ${formatTime(f.start, w.tz)}` : ""}).`);
-    out.push(...f.steps.map((s) => `- ${statusWords(s, words[s.i], n.plan)}`));
+    out.push(...f.steps.map((s) => `- ${statusWords(s, words[s.i], n.plan, w.tz)}`));
     if (f.extraNursing) out.push(`${w.vo.They} also nursed in this feed, which its steps don't include.`);
     if (n.after) out.push(`After it: ${named(n.after.feed)}.${due ? ` ${due}.` : ""}`);
     else if (due) out.push(`${due}.`);
