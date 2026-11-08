@@ -13,17 +13,30 @@
  * Nothing here makes up a number: a starting shape fills in the kinds of
  * step and leaves every minute and amount for the family to copy from their
  * plan.
+ *
+ * Every option the plan holds has its place here, so a plan saved in the chat
+ * and changed on the form keeps all of it: the night when she's hungry (on
+ * demand with nothing in Up to), the night's turns by the clock, nursing only
+ * if she wants to, a step's most (up to) or a bottle's least (at least), a
+ * bottle by cup, spoon or finger (`by`), and feeds and milk in 24 hours.
  */
 import {
+  afterNursing,
   checkFeedingPlan,
   feedText,
+  GIVEN_BY_WORDS,
+  nightClockTurns,
   nightTurns,
+  PLAN_BOTTLE_VIAS,
+  PLAN_GIVEN_BY,
   PlanConflict,
   PlanError,
   planNotes,
   type AtBreastVia,
   type FeedingPlan,
+  type PerDayRange,
   type PlanBottleVia,
+  type PlanGivenBy,
   type PlanMilk,
   type PlanStep,
   type PlanUnit,
@@ -39,6 +52,8 @@ export type NurseDraft = {
   key: string;
   do: "nurse";
   minutes: RangeDraft;
+  /** Its minutes are the most ("Nurse up to 10 min"): one number, as typed in the one box (upToOf). */
+  upTo: boolean;
   each_side: boolean;
   /** On one side only (Left, Right), or null (Either); never with each_side. */
   side: Side | null;
@@ -47,21 +62,34 @@ export type NurseDraft = {
   atBreast: "none" | AtBreastVia;
   atBreastMl: RangeDraft;
   atBreastMilk: PlanMilk | null;
+  /** Only if she wants to (practice at the breast before a bottle): "Offer the breast", never missed, and the bottle after it is the feed. */
+  if_needed: boolean;
 };
-/** if_needed: only if needed (a pump if still full). */
-export type PumpDraft = { key: string; do: "pump"; minutes: RangeDraft; if_needed: boolean };
-/** if_needed: only if she's still hungry. */
-export type BottleDraft = { key: string; do: "bottle"; amount: "ml" | "target"; ml: RangeDraft; milk: PlanMilk | null; via: PlanBottleVia | null; if_needed: boolean };
+/** if_needed: only if needed (a pump if still full). upTo: its minutes are the most. */
+export type PumpDraft = { key: string; do: "pump"; minutes: RangeDraft; upTo: boolean; if_needed: boolean };
+/** How a bottle step's milk is given: by bottle (the plan's `via`: bottle, paced), or instead of one (its `by`: cup, spoon, finger). */
+export type GivenDraft = PlanBottleVia | PlanGivenBy;
+/**
+ * amount: an amount (one number or a range), up to one (its most) or at least one (its least), each one number as typed
+ * in the one box (upToOf, leastOf), or up to the target. given: how (null: the plan doesn't say). if_needed: only if
+ * she's still hungry.
+ */
+export type BottleDraft = { key: string; do: "bottle"; amount: "ml" | "up_to" | "at_least" | "target"; ml: RangeDraft; milk: PlanMilk | null; given: GivenDraft | null; if_needed: boolean };
 export type NoteDraft = { key: string; do: "note"; text: string };
 export type StepDraft = NurseDraft | PumpDraft | BottleDraft | NoteDraft;
 export type StepKind = StepDraft["do"];
 
 export type FeedDraft = { key: string; id: string | null; name: string; steps: StepDraft[] };
 /**
- * The night: its hours, its own time between feeds (empty: the day's), on demand with that as its most, waking her,
- * and its own feeds taking turns, by feed key (none: the same turns as by day; one: every night feed is that one).
+ * The night: its hours, its own time between feeds (empty: the day's), on demand with that as its most (nothing typed:
+ * whenever she's hungry, no set time and never woken for a feed), waking her, and its own feeds taking turns, by feed
+ * key (none: the same turns as by day; one: every night feed is that one). byClock: its turns by the clock instead,
+ * each from its own time (`starts`, "HH:MM" by place in `order`, "" not typed yet; sent with two turns or more).
  */
-export type NightDraft = { on: boolean; from: string; to: string; every: RangeDraft; onDemand: boolean; wake: boolean; order: string[] };
+export type NightDraft = { on: boolean; from: string; to: string; every: RangeDraft; onDemand: boolean; wake: boolean; order: string[]; byClock: boolean; starts: string[] };
+
+/** Feeds and milk (in ml) in 24 hours, as the care team gave them: `min` is at least, `max` up to; either may be empty. */
+export type PerDayDraft = { feeds: RangeDraft; ml: RangeDraft };
 
 export type PlanDraft = {
   from: string;
@@ -78,6 +106,7 @@ export type PlanDraft = {
   feeds: FeedDraft[];
   /** The day's turns, by feed key. */
   order: string[];
+  perDay: PerDayDraft;
   notes: string;
 };
 
@@ -92,10 +121,15 @@ export type PlanInput = {
   check_in?: string;
   unit: PlanUnit;
   day: { every?: Range; on_demand?: true; wake?: true };
-  /** The night's own feed by its place (`feed`), or its feeds taking turns (`order`, two or more). */
-  night?: { from: string; to: string; every?: Range; on_demand?: true; wake?: true; feed?: number; order?: number[] };
+  /**
+   * The night's own feed by its place (`feed`), or its feeds taking turns (`order`, two or more), and their times by
+   * the clock (`starts`, one for each turn). on_demand with no every: whenever she's hungry at night.
+   */
+  night?: { from: string; to: string; every?: Range; on_demand?: true; wake?: true; feed?: number; order?: number[]; starts?: string[] };
   feeds: { id?: string; name: string; steps: PlanStepInput[] }[];
   order?: number[];
+  /** Feeds and milk in 24 hours, the milk in ml. */
+  per_day?: { feeds?: PerDayRange; ml?: PerDayRange };
   notes?: string;
 };
 
@@ -104,12 +138,15 @@ const nextKey = (p: string) => `${p}${++seq}`;
 const feedKey = (id: string) => `f:${id}`;
 
 export const EMPTY_RANGE: RangeDraft = { min: null, max: null };
-const NIGHT_OFF: NightDraft = { on: false, from: "", to: "", every: EMPTY_RANGE, onDemand: false, wake: false, order: [] };
+const NIGHT_OFF: NightDraft = { on: false, from: "", to: "", every: EMPTY_RANGE, onDemand: false, wake: false, order: [], byClock: false, starts: [] };
+const PER_DAY_NONE: PerDayDraft = { feeds: EMPTY_RANGE, ml: EMPTY_RANGE };
 
 /** A saved range as the form shows it: one number is just the first box ("15 to [ ] min"). */
 const rangeOf = (r: Range | FeedTarget | null | undefined): RangeDraft => (r ? { min: r.min, max: r.max === r.min ? null : r.max } : EMPTY_RANGE);
-/** A time between feeds as the form shows it: on demand, its most in the Up to box. */
+/** A time between feeds as the form shows it: on demand, its most in the Up to box (when she's hungry at night: none). */
 const intervalOf = (r: Range | undefined, onDemand: boolean | undefined): RangeDraft => (r && onDemand ? { min: null, max: r.max } : rangeOf(r));
+/** A count or amount in 24 hours as the form shows it: at least in the first box, up to in the second. */
+const endsOf = (r: PerDayRange | undefined): RangeDraft => ({ min: r?.min ?? null, max: r?.max ?? null });
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
 /** A from–to as the server takes it, smallest first; one end alone is both ends; nothing typed is undefined. */
@@ -120,20 +157,44 @@ export function rangeOut(r: RangeDraft): Range | undefined {
   return { min: round1(Math.min(a, b)), max: round1(Math.max(a, b)) };
 }
 
-/** On demand, the most time between feeds as typed (the Up to box, else the From box), or null. */
+/** On demand, the most time between feeds as typed (the Up to box, else the From box), or null; a step's most (up to) the same. */
 export const upToOf = (r: RangeDraft): number | null => r.max ?? r.min;
+/** A bottle's least (at least) as typed: its one box, which is a range's From (else its To), or null. */
+export const leastOf = (r: RangeDraft): number | null => r.min ?? r.max;
 
-/** A time between feeds as the server takes it: the range, or on demand its most with on_demand; nothing typed is nothing. */
-function intervalOut(r: RangeDraft, onDemand: boolean): { every?: Range; on_demand?: true } {
+/** One number as the server takes it ({ min: n, max: n }), or undefined. */
+const oneOut = (n: number | null): Range | undefined => (n == null ? undefined : { min: round1(n), max: round1(n) });
+
+/**
+ * A time between feeds as the server takes it: the range, or on demand its most with on_demand; nothing typed is
+ * nothing, except on demand at night (`alone`), which is whenever she's hungry there (on_demand on its own), never the
+ * day's interval.
+ */
+function intervalOut(r: RangeDraft, onDemand: boolean, alone = false): { every?: Range; on_demand?: true } {
   if (!onDemand) {
     const every = rangeOut(r);
     return every ? { every } : {};
   }
   const most = upToOf(r);
-  return most == null ? {} : { every: { min: round1(most), max: round1(most) }, on_demand: true };
+  if (most == null) return alone ? { on_demand: true } : {};
+  return { every: { min: round1(most), max: round1(most) }, on_demand: true };
+}
+
+/** Whether the night is whenever she's hungry: on demand, with nothing in its Up to box (no set time, never woken). */
+export const nightHungry = (n: Pick<NightDraft, "onDemand" | "every">): boolean => n.onDemand && upToOf(n.every) == null;
+
+/** A count or amount in 24 hours as the server takes it (one end or both, nothing at 0), or undefined with neither. */
+function endsOut(r: RangeDraft): PerDayRange | undefined {
+  const out: PerDayRange = {};
+  if (r.min != null && r.min > 0) out.min = round1(r.min);
+  if (r.max != null && r.max > 0) out.max = round1(r.max);
+  return out.min !== undefined || out.max !== undefined ? out : undefined;
 }
 
 export const isEmptyRange = (r: RangeDraft) => r.min == null && r.max == null;
+
+const isVia = (g: GivenDraft | null): g is PlanBottleVia => !!g && (PLAN_BOTTLE_VIAS as readonly string[]).includes(g);
+const isBy = (g: GivenDraft | null | undefined): g is PlanGivenBy => !!g && (PLAN_GIVEN_BY as readonly string[]).includes(g);
 
 // ── showing amounts ────────────────────────────────────────────────────────
 
@@ -146,8 +207,8 @@ export function shownAmount(ml: number | null, unit: PlanUnit): number | null {
 /** A number typed in the plan's unit, as ml (unrounded, so oz → ml → oz shows what was typed). */
 export const typedAmount = (n: number | null, unit: PlanUnit): number | null => (n == null ? null : unit === "oz" ? n * ML_PER_FL_OZ : n);
 
-/** The most a field takes, in the plan's unit (PLAN_LIMITS.ml is 300 ml). */
-export const amountMax = (unit: PlanUnit) => (unit === "oz" ? Math.round((300 / ML_PER_FL_OZ) * 100) / 100 : 300);
+/** The most a field takes, in the plan's unit: `ml` (PLAN_LIMITS.ml's 300 ml for a feed's amounts; 3000 for milk in 24 hours). */
+export const amountMax = (unit: PlanUnit, ml = 300) => (unit === "oz" ? Math.round((ml / ML_PER_FL_OZ) * 100) / 100 : ml);
 
 // ── a plan to a draft, and back ───────────────────────────────────────────
 
@@ -158,17 +219,20 @@ function stepDraftOf(s: PlanStep): StepDraft {
       key,
       do: "nurse",
       minutes: rangeOf(s.minutes),
+      upTo: !!s.up_to,
       each_side: !!s.each_side,
       side: s.side ?? null,
       shield: !!s.shield,
       atBreast: s.supplement?.via ?? "none",
       atBreastMl: rangeOf(s.supplement?.ml),
       atBreastMilk: s.supplement?.milk ?? null,
+      if_needed: !!s.if_needed,
     };
   }
-  if (s.do === "pump") return { key, do: "pump", minutes: rangeOf(s.minutes), if_needed: !!s.if_needed };
+  if (s.do === "pump") return { key, do: "pump", minutes: rangeOf(s.minutes), upTo: !!s.up_to, if_needed: !!s.if_needed };
   if (s.do === "bottle") {
-    return { key, do: "bottle", amount: s.to_target && !s.ml ? "target" : "ml", ml: rangeOf(s.ml), milk: s.milk ?? null, via: s.via ?? null, if_needed: !!s.if_needed };
+    const amount = s.to_target && !s.ml ? "target" : s.up_to ? "up_to" : s.at_least ? "at_least" : "ml";
+    return { key, do: "bottle", amount, ml: rangeOf(s.ml), milk: s.milk ?? null, given: s.by ?? s.via ?? null, if_needed: !!s.if_needed };
   }
   return { key, do: "note", text: s.text };
 }
@@ -176,9 +240,9 @@ function stepDraftOf(s: PlanStep): StepDraft {
 /** A new step of a kind, with nothing filled in. */
 export function newStep(kind: StepKind): StepDraft {
   const key = nextKey("s");
-  if (kind === "nurse") return { key, do: "nurse", minutes: EMPTY_RANGE, each_side: false, side: null, shield: false, atBreast: "none", atBreastMl: EMPTY_RANGE, atBreastMilk: null };
-  if (kind === "pump") return { key, do: "pump", minutes: EMPTY_RANGE, if_needed: false };
-  if (kind === "bottle") return { key, do: "bottle", amount: "ml", ml: EMPTY_RANGE, milk: null, via: null, if_needed: false };
+  if (kind === "nurse") return { key, do: "nurse", minutes: EMPTY_RANGE, upTo: false, each_side: false, side: null, shield: false, atBreast: "none", atBreastMl: EMPTY_RANGE, atBreastMilk: null, if_needed: false };
+  if (kind === "pump") return { key, do: "pump", minutes: EMPTY_RANGE, upTo: false, if_needed: false };
+  if (kind === "bottle") return { key, do: "bottle", amount: "ml", ml: EMPTY_RANGE, milk: null, given: null, if_needed: false };
   return { key, do: "note", text: "" };
 }
 
@@ -188,10 +252,17 @@ export function newFeed(name = "", kinds: StepKind[] = []): FeedDraft {
 
 /** The saved plan (or none) and target as a draft; a new plan shows amounts in `unit`. */
 export function draftOf(plan: FeedingPlan | null, target: FeedTarget | null, unit: PlanUnit): PlanDraft {
-  if (!plan) return { from: "", check_in: "", unit, target: rangeOf(target), every: EMPTY_RANGE, onDemand: false, wake: false, night: NIGHT_OFF, feeds: [], order: [], notes: "" };
+  if (!plan) {
+    return { from: "", check_in: "", unit, target: rangeOf(target), every: EMPTY_RANGE, onDemand: false, wake: false, night: NIGHT_OFF, feeds: [], order: [], perDay: PER_DAY_NONE, notes: "" };
+  }
   const feeds: FeedDraft[] = plan.feeds.map((f) => ({ key: feedKey(f.id), id: f.id, name: f.name, steps: f.steps.map(stepDraftOf) }));
   const known = (k: string) => feeds.some((f) => f.key === k);
   const n = plan.night;
+  // The night's turns, each with its start by the clock when it has one (a saved plan's starts always fit its turns).
+  const clock = nightClockTurns(plan);
+  const turns = nightTurns(plan)
+    .map((id, i) => ({ key: feedKey(id), start: clock?.[i]?.from ?? "" }))
+    .filter((t) => known(t.key));
   return {
     from: plan.from ?? "",
     check_in: plan.check_in ?? "",
@@ -206,13 +277,17 @@ export function draftOf(plan: FeedingPlan | null, target: FeedTarget | null, uni
           from: n.from,
           to: n.to,
           every: intervalOf(n.every, n.on_demand),
-          onDemand: !!n.on_demand && !!n.every,
+          // With no time of its own, on demand is whenever she's hungry at night: nothing in its Up to box.
+          onDemand: !!n.on_demand,
           wake: !!n.wake,
-          order: nightTurns(plan).map(feedKey).filter(known),
+          order: turns.map((t) => t.key),
+          byClock: !!clock,
+          starts: turns.map((t) => t.start),
         }
       : NIGHT_OFF,
     feeds,
     order: plan.order.map(feedKey).filter(known),
+    perDay: plan.per_day ? { feeds: endsOf(plan.per_day.feeds), ml: endsOf(plan.per_day.ml) } : PER_DAY_NONE,
     // The whole notes (notes_full past what an older release reads), never their start as it reads them.
     notes: planNotes(plan) ?? "",
   };
@@ -220,32 +295,38 @@ export function draftOf(plan: FeedingPlan | null, target: FeedTarget | null, uni
 
 const text = (s: string) => s.replace(/\s+/g, " ").trim();
 
+/** Minutes as sent: up to, one number (the box as typed, with up_to); else the range. Up to with nothing typed sends up_to alone, so the check says it needs its number. */
+const minutesOut = (s: NurseDraft | PumpDraft) => {
+  const minutes = s.upTo ? oneOut(upToOf(s.minutes)) : rangeOut(s.minutes);
+  return { ...(minutes ? { minutes } : {}), ...(s.upTo ? { up_to: true as const } : {}) };
+};
+
 function stepOut(s: StepDraft): PlanStepInput {
   if (s.do === "nurse") {
-    const minutes = rangeOut(s.minutes);
     const ml = rangeOut(s.atBreastMl);
     return {
       do: "nurse",
-      ...(minutes ? { minutes } : {}),
+      ...minutesOut(s),
       ...(s.each_side ? { each_side: true } : {}),
       // Each side and one side can't both be: each side wins (the form never sets both).
       ...(s.side && !s.each_side ? { side: s.side } : {}),
       ...(s.shield ? { shield: true } : {}),
       // No amount typed: sent as it is, and the check says what's missing ("say how much milk goes in the syringe").
       ...(s.atBreast !== "none" ? { supplement: { via: s.atBreast, ...(ml ? { ml } : {}), ...(s.atBreastMilk ? { milk: s.atBreastMilk } : {}) } } : {}),
+      ...(s.if_needed ? { if_needed: true } : {}),
     };
   }
-  if (s.do === "pump") {
-    const minutes = rangeOut(s.minutes);
-    return { do: "pump", ...(minutes ? { minutes } : {}), ...(s.if_needed ? { if_needed: true } : {}) };
-  }
+  if (s.do === "pump") return { do: "pump", ...minutesOut(s), ...(s.if_needed ? { if_needed: true } : {}) };
   if (s.do === "bottle") {
-    const ml = s.amount === "ml" ? rangeOut(s.ml) : undefined;
+    // Up to or at least: one number, as its one box reads it; with nothing typed the flag goes alone, and the check says it needs its number.
+    const ml = s.amount === "ml" ? rangeOut(s.ml) : s.amount === "up_to" ? oneOut(upToOf(s.ml)) : s.amount === "at_least" ? oneOut(leastOf(s.ml)) : undefined;
     return {
       do: "bottle",
       ...(s.amount === "target" ? { to_target: true } : ml ? { ml } : {}),
+      ...(s.amount === "up_to" ? { up_to: true } : s.amount === "at_least" ? { at_least: true } : {}),
       ...(s.milk ? { milk: s.milk } : {}),
-      ...(s.via ? { via: s.via } : {}),
+      // By bottle (via), or by cup, spoon or finger instead (by): never both.
+      ...(isVia(s.given) ? { via: s.given } : isBy(s.given) ? { by: s.given } : {}),
       ...(s.if_needed ? { if_needed: true } : {}),
     };
   }
@@ -257,6 +338,8 @@ export function inputOf(d: PlanDraft): { plan: PlanInput; target: FeedTarget | n
   const place = (key: string | null) => (key ? d.feeds.findIndex((f) => f.key === key) + 1 : 0);
   const every = intervalOut(d.every, d.onDemand);
   const order = d.order.map(place).filter((i) => i > 0);
+  const feeds = endsOut(d.perDay.feeds);
+  const ml = endsOut(d.perDay.ml);
   const plan: PlanInput = {
     ...(text(d.from) ? { from: text(d.from) } : {}),
     ...(d.check_in ? { check_in: d.check_in } : {}),
@@ -264,18 +347,21 @@ export function inputOf(d: PlanDraft): { plan: PlanInput; target: FeedTarget | n
     day: { ...every, ...(d.wake ? { wake: true as const } : {}) },
     feeds: d.feeds.map((f) => ({ ...(f.id ? { id: f.id } : {}), name: text(f.name), steps: f.steps.map(stepOut) })),
     ...(order.length ? { order } : {}),
+    ...(feeds || ml ? { per_day: { ...(feeds ? { feeds } : {}), ...(ml ? { ml } : {}) } } : {}),
     ...(d.notes.trim() ? { notes: d.notes.trim() } : {}),
   };
   if (d.night.on) {
-    const nightEvery = intervalOut(d.night.every, d.night.onDemand);
-    // One night feed goes as the night's feed; two or more as its turns.
-    const turns = d.night.order.map(place).filter((i) => i > 0);
+    const nightEvery = intervalOut(d.night.every, d.night.onDemand, true);
+    // One night feed goes as the night's feed; two or more as its turns, with their times by the clock when it's by the clock.
+    const turns = d.night.order.map((k, i) => ({ at: place(k), start: d.night.starts[i] ?? "" })).filter((t) => t.at > 0);
     plan.night = {
       from: d.night.from,
       to: d.night.to,
       ...nightEvery,
-      ...(d.night.wake ? { wake: true as const } : {}),
-      ...(turns.length === 1 ? { feed: turns[0] } : turns.length > 1 ? { order: turns } : {}),
+      // Whenever she's hungry has no time to wake her by: the switch is hidden then, and nothing goes.
+      ...(d.night.wake && !nightHungry(d.night) ? { wake: true as const } : {}),
+      ...(turns.length === 1 ? { feed: turns[0].at } : turns.length > 1 ? { order: turns.map((t) => t.at) } : {}),
+      ...(d.night.byClock && turns.length > 1 ? { starts: turns.map((t) => t.start) } : {}),
     };
   }
   const target = rangeOut(d.target);
@@ -298,6 +384,9 @@ export function draftProblem(d: PlanDraft, base: FeedingPlan | null, now: Date, 
   const input = inputOf(d);
   if (plan) {
     if (d.night.on && (!d.night.from || !d.night.to)) return "Say when the night starts and ends, or switch off Different at night.";
+    // By the clock, each of the night's feeds starts at its own time: one not typed yet is the form's to say.
+    const clockTurns = input.plan.night?.starts;
+    if (clockTurns?.some((s) => !s)) return "Say when each of the night's feeds starts, or switch off By the clock.";
     // On demand, only its most is sent: a From left in its box from before isn't checked.
     const sent = (r: RangeDraft, onDemand: boolean): (number | null)[] => (onDemand ? [upToOf(r)] : [r.min, r.max]);
     const times = [...sent(d.every, d.onDemand), ...(d.night.on ? sent(d.night.every, d.night.onDemand) : [])];
@@ -368,10 +457,14 @@ export function addFeed(d: PlanDraft, feed: FeedDraft = newFeed()): PlanDraft {
   return { ...d, feeds: [...d.feeds, feed], order: [...d.order, feed.key] };
 }
 
-/** A feed taken out: out of the turns and the night's too; the day's turns never end up empty while there's a feed. */
+/** The night's start time by the clock for each turn, by place ("" for one not typed). */
+const startsOf = (n: NightDraft) => n.order.map((_, i) => n.starts[i] ?? "");
+
+/** A feed taken out: out of the turns and the night's too (with its time by the clock); the day's turns never end up empty while there's a feed. */
 export function removeFeed(d: PlanDraft, key: string): PlanDraft {
   const feeds = d.feeds.filter((f) => f.key !== key);
-  const night = d.night.order.includes(key) ? { ...d.night, order: d.night.order.filter((k) => k !== key) } : d.night;
+  const at = d.night.order.indexOf(key);
+  const night = at >= 0 ? { ...d.night, order: d.night.order.filter((k) => k !== key), starts: startsOf(d.night).filter((_, i) => i !== at) } : d.night;
   let order = d.order.filter((k) => k !== key);
   if (!order.length && feeds.length) order = [(feeds.find((f) => !night.order.includes(f.key)) ?? feeds[0]).key];
   return { ...d, feeds, night, order };
@@ -409,9 +502,15 @@ export function takeOutFeed(before: PlanDraft, key: string): { next: PlanDraft; 
     const feeds = placeBack(d.feeds.map((f) => f.key), before.feeds.map((f) => f.key), key).map((k) => byKey.get(k)!);
     const turns = d.order.filter((k) => !filled.includes(k));
     const order = before.order.includes(key) ? placeBack(turns, before.order, key) : turns;
-    // The night's turns as the take-out left them (another feed picked for the night since stays picked).
+    // The night's turns as the take-out left them (another feed picked for the night since stays picked), with its time by the clock.
     const untouched = d.night.order.join("|") === next.night.order.join("|");
-    const night = before.night.order.includes(key) && untouched ? { ...d.night, order: placeBack(d.night.order, before.night.order, key) } : d.night;
+    let night = d.night;
+    if (before.night.order.includes(key) && untouched) {
+      const nightOrder = placeBack(d.night.order, before.night.order, key);
+      const starts = startsOf(d.night);
+      starts.splice(nightOrder.indexOf(key), 0, before.night.starts[before.night.order.indexOf(key)] ?? "");
+      night = { ...d.night, order: nightOrder, starts };
+    }
     return { ...d, feeds, order, night };
   };
   return { next, putBack };
@@ -419,12 +518,26 @@ export function takeOutFeed(before: PlanDraft, key: string): { next: PlanDraft; 
 
 /**
  * The night's own feeds, taking turns in this order (none: the same turns as by day): each leaves the day's turns (a
- * night feed doesn't take a day turn), unless that would leave the day with none.
+ * night feed doesn't take a day turn), unless that would leave the day with none. By the clock, the times stay where
+ * they are when feeds change places (the night's hours stay in order; the feeds move through them), and a feed added
+ * or taken out brings or takes its own (a new one has none yet).
  */
 export function setNightTurns(d: PlanDraft, keys: readonly string[]): PlanDraft {
   let order = d.order;
   for (const k of keys) if (order.length > 1 && order.includes(k)) order = order.filter((x) => x !== k);
-  return { ...d, night: { ...d.night, order: [...keys] }, order };
+  const was = d.night.order;
+  const starts = startsOf(d.night);
+  const moved = keys.length === was.length && keys.every((k) => was.includes(k));
+  const next = moved ? keys.map((_, i) => starts[i]) : keys.map((k) => (was.includes(k) ? starts[was.indexOf(k)] : ""));
+  return { ...d, night: { ...d.night, order: [...keys], starts: next }, order };
+}
+
+/** The night's turn at `i` starts at `hhmm` by the clock ("" to clear it). */
+export function setNightStart(d: PlanDraft, i: number, hhmm: string): PlanDraft {
+  const starts = startsOf(d.night);
+  if (i < 0 || i >= starts.length) return d;
+  starts[i] = hhmm;
+  return { ...d, night: { ...d.night, starts } };
 }
 
 /** The night's one feed (null: the same turns as by day), as setNightTurns with it alone. */
@@ -442,8 +555,15 @@ export function move<T>(list: readonly T[], i: number, by: -1 | 1): T[] {
 
 export type PlanShape = { id: string; title: string; sub: string; feeds: { name: string; kinds: StepKind[] }[] };
 
-/** The kinds of step only: every minute and amount is left to copy from the plan. */
+/**
+ * The kinds of step only: every minute and amount is left to copy from the plan. The plain, everyday ones first (one
+ * feed each: nursing with a top-up, a bottle, then triple feeding and pumping); two feeds taking turns, then Blank, last.
+ */
 export const PLAN_SHAPES: PlanShape[] = [
+  { id: "top-up", title: "Nurse, then top up", sub: "Nursing, then a bottle", feeds: [{ name: "Nurse, then top up", kinds: ["nurse", "bottle"] }] },
+  { id: "bottle", title: "Bottle", sub: "Formula or breast milk by bottle", feeds: [{ name: "Bottle", kinds: ["bottle"] }] },
+  { id: "triple", title: "Triple feed", sub: "Nurse, top up, then pump", feeds: [{ name: "Triple feed", kinds: ["nurse", "bottle", "pump"] }] },
+  { id: "pump-bottle", title: "Pump and bottle", sub: "Pumping, then a bottle", feeds: [{ name: "Pump and bottle", kinds: ["pump", "bottle"] }] },
   {
     id: "turns",
     title: "Two feeds taking turns",
@@ -453,8 +573,6 @@ export const PLAN_SHAPES: PlanShape[] = [
       { name: "Nurse, then top up", kinds: ["nurse", "bottle"] },
     ],
   },
-  { id: "top-up", title: "Nurse, then top up", sub: "Nursing, then a bottle", feeds: [{ name: "Nurse, then top up", kinds: ["nurse", "bottle"] }] },
-  { id: "pump-bottle", title: "Pump and bottle", sub: "Pumping, then a bottle", feeds: [{ name: "Pump and bottle", kinds: ["pump", "bottle"] }] },
   { id: "blank", title: "Blank", sub: "One feed to fill in", feeds: [{ name: "", kinds: [] }] },
 ];
 
@@ -503,18 +621,31 @@ export function feedSummary(f: FeedDraft, unit: PlanUnit, target: FeedTarget | n
   for (const s of f.steps) {
     const out = stepOut(s);
     if (out.do === "note") notes.push(out.text.replace(/[\s.;,]+$/, "") || "Note");
-    else if (out.do === "nurse" && out.supplement && !out.supplement.ml) steps.push({ do: "nurse" });
+    else if (out.do === "nurse" && out.supplement && !out.supplement.ml) steps.push({ do: "nurse", ...(out.if_needed ? { if_needed: true } : {}) });
     else steps.push(out as PlanStep);
   }
   const said = steps.length ? feedText({ id: f.id ?? f.key, name: f.name, steps }, { unit }, target) : "";
   return [said, ...notes].filter(Boolean).join(". ");
 }
 
-/** A step's name on its card: a bottle after nursing is the top-up. */
+/**
+ * Whether step `i` of a draft's steps comes after its nursing, so a bottle there is the top-up: as the plan's words
+ * read it (afterNursing), never after nursing only if she wants to, where the bottle is the feed.
+ */
+export const draftAfterNursing = (steps: readonly StepDraft[], i: number): boolean => afterNursing(steps.map(stepOut) as PlanStep[], i);
+
+/**
+ * A step's name on its card: a bottle after nursing is the top-up (never after nursing only if she wants to, which is
+ * still "Nurse", its switch saying so), and on its own, by cup, spoon or finger, it's that ("Cup", "Finger feed").
+ */
 export function stepTitle(s: StepDraft | PlanStep, afterNurse: boolean): string {
   if (s.do === "nurse") return "Nurse";
   if (s.do === "pump") return "Pump";
-  if (s.do === "bottle") return afterNurse ? "Top-up" : "Bottle";
+  if (s.do === "bottle") {
+    if (afterNurse) return "Top-up";
+    const by = "given" in s ? s.given : s.by;
+    return isBy(by) ? GIVEN_BY_WORDS[by].name : "Bottle";
+  }
   return "Note";
 }
 

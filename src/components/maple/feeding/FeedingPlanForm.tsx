@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { amountText, AT_BREAST_WORDS, PLAN_LIMITS, type AtBreastVia, type PlanBottleVia, type PlanMilk, type Range } from "@/lib/maple/feeding-plan";
+import { amountText, AT_BREAST_WORDS, PLAN_LIMITS, type AtBreastVia, type PlanMilk, type Range } from "@/lib/maple/feeding-plan";
 import type { Side } from "@/lib/maple/types";
 import { Switch } from "../care/parts";
 import { useBabyWords } from "../familyWords";
@@ -13,13 +13,18 @@ import { Button, Chip, cx, NumberProblem, parseTypedNumber, RepeatButton, Segmen
 import {
   addFeed,
   amountMax,
+  draftAfterNursing,
+  EMPTY_RANGE,
   feedLabel,
   feedSummary,
   isEmptyRange,
+  leastOf,
   move,
   newStep,
+  nightHungry,
   quotedList,
   rangeOut,
+  setNightStart,
   setNightTurns,
   shownAmount,
   staleNameWords,
@@ -30,6 +35,7 @@ import {
   wakeText,
   type BottleDraft,
   type FeedDraft,
+  type GivenDraft,
   type NurseDraft,
   type PlanDraft,
   type PumpDraft,
@@ -43,10 +49,13 @@ import {
  * (planDraft.ts): who it's from and the check-in, the unit its amounts are
  * written in, the target per feed, how often by day (every so often, or on
  * demand up to a time), each feed's steps (a nursing step on either side, one
- * side or each; a pump or bottle only if needed), the day's turns, the night
- * (its own feeds taking turns too) and notes. Every field has its name for a
- * screen reader; a number typed wrong says so by its field and holds Save; a
- * refusal from the plan's check marks the feed and step it's about.
+ * side or each, only if she wants to; minutes up to a most; a pump or bottle
+ * only if needed; a bottle's amount, up to or at least one, or up to the
+ * target, by bottle, cup, spoon or finger), the day's turns, the night (when
+ * she's hungry, its own feeds taking turns too, or by the clock), feeds and
+ * milk in 24 hours, and notes. Every field has its name for a screen reader; a
+ * number typed wrong says so by its field and holds Save; a refusal from the
+ * plan's check marks the feed and step it's about.
  */
 
 type Change = (fn: (d: PlanDraft) => PlanDraft) => void;
@@ -55,16 +64,30 @@ export type PlanMark = { feed: string; step: string | null; message: string };
 
 const MAX_MINUTES = PLAN_LIMITS.stepMinutes[1];
 const MAX_HOURS = PLAN_LIMITS.everyMinutes[1] / 60;
+/** Notes past this many characters show how many they hold, of PLAN_LIMITS.notes. */
+const NOTES_COUNT_FROM = PLAN_LIMITS.notes - 200;
 
 const MILKS: { value: PlanMilk; label: string }[] = [
   { value: "breastmilk", label: "Breast milk" },
   { value: "formula", label: "Formula" },
   { value: "either", label: "Either" },
-  { value: "breastmilk_first", label: "Pumped milk, then formula" },
+  // Pumped or donor milk alike: it's breast milk, then formula to finish.
+  { value: "breastmilk_first", label: "Breast milk, then formula" },
 ];
-const VIAS: { value: PlanBottleVia; label: string }[] = [
+/** How a bottle step's milk is given: by bottle (bottle, paced), or instead of a bottle by cup, spoon or finger. */
+const GIVEN: { value: GivenDraft; label: string }[] = [
   { value: "bottle", label: "Bottle" },
   { value: "paced", label: "Paced bottle" },
+  { value: "cup", label: "Cup" },
+  { value: "spoon", label: "Spoon" },
+  { value: "finger", label: "Finger" },
+];
+/** A bottle step's amount: an amount (a number or from–to), up to one, at least one, or up to the target. */
+const AMOUNTS: { value: BottleDraft["amount"]; label: string }[] = [
+  { value: "ml", label: "An amount" },
+  { value: "up_to", label: "Up to" },
+  { value: "at_least", label: "At least" },
+  { value: "target", label: "Up to the target" },
 ];
 const AT_BREAST: ("none" | AtBreastVia)[] = ["none", "syringe", "sns"];
 const ADD: { kind: StepKind; label: string; icon: IconName }[] = [
@@ -173,7 +196,11 @@ export function PlanForm({ draft, initial, change, watch, invalid, mark, onRemov
               wkey="every"
             />
             <p className={cx(tone.muted, "text-[13px] leading-snug")}>
-              {draft.onDemand ? `When ${w.hes} hungry, and at least this often.` : "From the start of one feed to the next. Leave empty if the plan doesn't say."}
+              {!draft.onDemand
+                ? "From the start of one feed to the next. Leave empty if the plan doesn't say."
+                : upToOf(draft.every) == null
+                  ? `Whenever ${w.hes} hungry, with no set time between feeds.`
+                  : `When ${w.hes} hungry, and at least this often.`}
             </p>
           </div>
           <Toggle label="Wake to feed" hint={wakeHint(intervalShown(draft.every, draft.onDemand), w)} checked={draft.wake} onChange={(wake) => set({ wake })} />
@@ -210,8 +237,16 @@ export function PlanForm({ draft, initial, change, watch, invalid, mark, onRemov
 
       <NightEditor draft={draft} change={change} watch={watch} />
 
+      <PerDayEditor draft={draft} change={change} watch={watch} />
+
       <FormSection title="Notes">
         <TextArea ariaLabel="Notes" rows={3} maxLength={PLAN_LIMITS.notes} value={draft.notes} onChange={(notes) => set({ notes })} placeholder="Anything else the plan says" />
+        {/* Close to the most the notes hold: how many so far, so a long paste isn't cut short unseen. */}
+        {draft.notes.length > NOTES_COUNT_FROM && (
+          <p aria-live="polite" className={cx(tone.muted, "-mt-1 px-1 text-right text-[13px] tabular-nums")}>
+            {draft.notes.length.toLocaleString("en-US")} of {PLAN_LIMITS.notes.toLocaleString("en-US")} characters
+          </p>
+        )}
       </FormSection>
     </div>
   );
@@ -316,7 +351,7 @@ function FeedEditor({ feed, was, index, draft, change, watch, canFold, mark, has
               index={i}
               count={feed.steps.length}
               feedName={label}
-              afterNurse={feed.steps.slice(0, i).some((x) => x.do === "nurse")}
+              afterNurse={draftAfterNursing(feed.steps, i)}
               unit={draft.unit}
               hasTarget={hasTarget}
               watch={watch}
@@ -389,10 +424,19 @@ function StepEditor({ step, index, count, feedName, afterNurse, unit, hasTarget,
 }
 
 function NurseFields({ step, name, unit, watch, onChange }: { step: NurseDraft; name: string; unit: PlanDraft["unit"]; watch: Watch; onChange: (s: NurseDraft) => void }) {
+  const w = useBabyWords();
   const via = step.atBreast;
   return (
     <>
-      <NumberRange label={step.each_side ? "Minutes on each side" : "Minutes"} word="min" aria={`${name}, nursing minutes`} value={step.minutes} max={MAX_MINUTES} onChange={(minutes) => onChange({ ...step, minutes })} watch={watch} wkey={`${step.key}:min`} />
+      <MinutesField
+        label={step.each_side ? "Minutes on each side" : "Minutes"}
+        aria={`${name}, nursing minutes`}
+        value={step.minutes}
+        upTo={step.upTo}
+        onChange={(minutes, upTo) => onChange({ ...step, minutes, upTo })}
+        watch={watch}
+        wkey={`${step.key}:min`}
+      />
       <div>
         <Label>Side</Label>
         {/* Either side (the usual turns), or one side only; one side turns Each side off, and Each side turns it back to Either. */}
@@ -425,9 +469,17 @@ function NurseFields({ step, name, unit, watch, onChange }: { step: NurseDraft; 
       {via !== "none" && (
         <>
           <AmountRange label={`How much ${AT_BREAST_WORDS[via].inThe}`} aria={`${name}, milk ${AT_BREAST_WORDS[via].inThe}`} value={step.atBreastMl} unit={unit} onChange={(atBreastMl) => onChange({ ...step, atBreastMl })} watch={watch} wkey={`${step.key}:ml`} />
-          <MilkChoice name={name} value={step.atBreastMilk} options={MILKS.slice(0, 3)} onChange={(atBreastMilk) => onChange({ ...step, atBreastMilk })} />
+          <MilkChoice name={name} value={step.atBreastMilk} options={MILKS} onChange={(atBreastMilk) => onChange({ ...step, atBreastMilk })} />
         </>
       )}
+      {/* Practice at the breast before a bottle: offered, never missed, and the bottle after it is the feed, not a top-up. */}
+      <IfNeeded
+        name={name}
+        label={`Only if ${w.he} wants to`}
+        hint="Offer the breast, like practice before a bottle"
+        checked={step.if_needed}
+        onChange={(if_needed) => onChange({ ...step, if_needed })}
+      />
     </>
   );
 }
@@ -435,21 +487,56 @@ function NurseFields({ step, name, unit, watch, onChange }: { step: NurseDraft; 
 function PumpFields({ step, name, watch, onChange }: { step: PumpDraft; name: string; watch: Watch; onChange: (s: PumpDraft) => void }) {
   return (
     <>
-      <NumberRange label="Minutes" word="min" aria={`${name}, pump minutes`} value={step.minutes} max={MAX_MINUTES} onChange={(minutes) => onChange({ ...step, minutes })} watch={watch} wkey={`${step.key}:min`} />
+      <MinutesField label="Minutes" aria={`${name}, pump minutes`} value={step.minutes} upTo={step.upTo} onChange={(minutes, upTo) => onChange({ ...step, minutes, upTo })} watch={watch} wkey={`${step.key}:min`} />
       <IfNeeded name={name} hint="If still full after the feed" checked={step.if_needed} onChange={(if_needed) => onChange({ ...step, if_needed })} />
     </>
   );
 }
 
-/** "Only if needed" on a pump or bottle step: said "if needed" or "if still hungry" in the plan's words, and never missed on Today. */
-function IfNeeded({ name, hint, checked, onChange }: { name: string; hint: string; checked: boolean; onChange: (v: boolean) => void }) {
+/**
+ * "Only if needed" on a pump or bottle step (said "if needed" or "if still hungry" in the plan's words), or "Only if she
+ * wants to" on nursing (the breast offered): never missed on Today.
+ */
+function IfNeeded({ name, label = "Only if needed", hint, checked, onChange }: { name: string; label?: string; hint: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
     <div className="flex min-h-[44px] items-center justify-between gap-4">
       <span className="min-w-0">
-        <Label className="mb-0">Only if needed</Label>
+        <Label className="mb-0">{label}</Label>
         <span className={cx(tone.muted, "block text-[13px] leading-snug")}>{hint}</span>
       </span>
-      <Switch checked={checked} onChange={onChange} label={`${name}: only if needed`} />
+      <Switch checked={checked} onChange={onChange} label={`${name}: ${label.charAt(0).toLowerCase()}${label.slice(1)}`} />
+    </div>
+  );
+}
+
+/**
+ * A step's minutes: a number or from–to ("12 to 18 min"), or with Up to on, its most in one box ("up to 10 min"), as the
+ * plan says "Nurse up to 10 min". Switching keeps what's typed in each.
+ */
+function MinutesField({ label, aria, value, upTo, onChange, watch, wkey }: {
+  label: string;
+  aria: string;
+  value: RangeDraft;
+  upTo: boolean;
+  onChange: (minutes: RangeDraft, upTo: boolean) => void;
+  watch: Watch;
+  wkey: string;
+}) {
+  return (
+    <div>
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        <Label className="mb-0">{label}</Label>
+        <Chip raised selected={upTo} onClick={() => onChange(value, !upTo)} aria-label={`${aria}: up to, the most`}>
+          Up to
+        </Chip>
+      </div>
+      <div className="mt-1">
+        {upTo ? (
+          <OneNumber lead="up to" word="min" aria={`${aria}, at most`} value={upToOf(value)} max={MAX_MINUTES} onChange={(n) => onChange(n == null ? EMPTY_RANGE : { ...value, max: n }, true)} watch={watch} wkey={`${wkey}:max`} />
+        ) : (
+          <NumberRange word="min" aria={aria} value={value} max={MAX_MINUTES} onChange={(minutes) => onChange(minutes, false)} watch={watch} wkey={wkey} />
+        )}
+      </div>
     </div>
   );
 }
@@ -464,30 +551,35 @@ function BottleFields({ step, name, unit, hasTarget, afterNurse, watch, onChange
   onChange: (s: BottleDraft) => void;
 }) {
   const w = useBabyWords();
+  const amount = step.amount;
   return (
     <>
       <div>
         <Label>How much</Label>
         <div role="group" aria-label={`${name}: how much`} className="flex flex-wrap gap-2">
-          <Chip raised selected={step.amount === "ml"} onClick={() => onChange({ ...step, amount: "ml" })}>
-            An amount
-          </Chip>
-          <Chip raised selected={step.amount === "target"} onClick={() => onChange({ ...step, amount: "target" })}>
-            Up to the target
-          </Chip>
+          {AMOUNTS.map((o) => (
+            <Chip key={o.value} raised selected={amount === o.value} onClick={() => onChange({ ...step, amount: o.value })}>
+              {o.label}
+            </Chip>
+          ))}
         </div>
       </div>
-      {step.amount === "ml" ? (
-        <AmountRange aria={`${name}, amount`} value={step.ml} unit={unit} onChange={(ml) => onChange({ ...step, ml })} watch={watch} wkey={`${step.key}:ml`} />
-      ) : (
-        !hasTarget && <p className={cx(tone.muted, "text-[13px] leading-snug")}>Set the target per feed above, so it says how much.</p>
+      {amount === "ml" && <AmountRange aria={`${name}, amount`} value={step.ml} unit={unit} onChange={(ml) => onChange({ ...step, ml })} watch={watch} wkey={`${step.key}:ml`} />}
+      {/* Up to or at least: one number, its most or its least ("Bottle up to 60 ml", "Bottle at least 60 ml"). */}
+      {amount === "up_to" && (
+        <OneAmount lead="up to" aria={`${name}, amount, at most`} value={upToOf(step.ml)} unit={unit} onChange={(n) => onChange({ ...step, ml: n == null ? EMPTY_RANGE : { ...step.ml, max: n } })} watch={watch} wkey={`${step.key}:ml:max`} />
       )}
+      {amount === "at_least" && (
+        <OneAmount lead="at least" aria={`${name}, amount, at least`} value={leastOf(step.ml)} unit={unit} onChange={(n) => onChange({ ...step, ml: n == null ? EMPTY_RANGE : { ...step.ml, min: n } })} watch={watch} wkey={`${step.key}:ml:min`} />
+      )}
+      {amount === "target" && !hasTarget && <p className={cx(tone.muted, "text-[13px] leading-snug")}>Set the target per feed above, so it says how much.</p>}
       <MilkChoice name={name} value={step.milk} options={MILKS} onChange={(milk) => onChange({ ...step, milk })} />
       <div>
         <Label optional>How it&apos;s given</Label>
+        {/* A bottle (or a paced one), or instead of a bottle a cup, a spoon or a finger feed. */}
         <div role="group" aria-label={`${name}: how it's given`} className="flex flex-wrap gap-2">
-          {VIAS.map((o) => (
-            <Chip key={o.value} raised selected={step.via === o.value} onClick={() => onChange({ ...step, via: step.via === o.value ? null : o.value })}>
+          {GIVEN.map((o) => (
+            <Chip key={o.value} raised selected={step.given === o.value} onClick={() => onChange({ ...step, given: step.given === o.value ? null : o.value })}>
               {o.label}
             </Chip>
           ))}
@@ -554,6 +646,13 @@ function NightEditor({ draft, change, watch }: { draft: PlanDraft; change: Chang
   const w = useBabyWords();
   const n = draft.night;
   const setNight = (patch: Partial<PlanDraft["night"]>) => change((d) => ({ ...d, night: { ...d.night, ...patch } }));
+  // On demand with nothing in Up to: whenever she's hungry at night, with no time to wake her by.
+  const hungry = nightHungry(n);
+  const howOften = !n.onDemand
+    ? `Leave empty to keep the day's. For whenever ${w.hes} hungry, pick On demand and leave Up to empty.`
+    : hungry
+      ? `Whenever ${w.hes} hungry: no set time at night, and no waking ${w.him} for a feed.`
+      : `When ${w.hes} hungry, and at least this often. Leave Up to empty for whenever ${w.hes} hungry.`;
   return (
     <FormSection title="At night">
       <div className={GROUP}>
@@ -582,17 +681,17 @@ function NightEditor({ draft, change, watch }: { draft: PlanDraft; change: Chang
                   watch={watch}
                   wkey="night-every"
                 />
-                <p className={cx(tone.muted, "text-[13px] leading-snug")}>
-                  {n.onDemand ? `When ${w.hes} hungry, and at least this often. Leave empty to keep the day's.` : "Leave empty to keep the day's."}
-                </p>
+                <p className={cx(tone.muted, "text-[13px] leading-snug")}>{howOften}</p>
               </div>
             </div>
-            <Toggle
-              label="Wake to feed at night"
-              hint={wakeHint(intervalShown(n.every, n.onDemand) ?? intervalShown(draft.every, draft.onDemand), w)}
-              checked={n.wake}
-              onChange={(wake) => setNight({ wake })}
-            />
+            {!hungry && (
+              <Toggle
+                label="Wake to feed at night"
+                hint={wakeHint(intervalShown(n.every, n.onDemand) ?? intervalShown(draft.every, draft.onDemand), w)}
+                checked={n.wake}
+                onChange={(wake) => setNight({ wake })}
+              />
+            )}
           </>
         )}
       </div>
@@ -603,14 +702,18 @@ function NightEditor({ draft, change, watch }: { draft: PlanDraft; change: Chang
 
 /**
  * The night's own feeds, taking turns in this order, laid out like Taking turns by day (none: the same turns as by
- * day; one: every night feed is that one). Each leaves the day's turns, unless it's the only one there.
+ * day; one: every night feed is that one). Each leaves the day's turns, unless it's the only one there. With two or
+ * more, By the clock gives each its own time instead (From): it's the night's feed from then until the next one's
+ * (a partner's bottles until 2 AM, then nursing). Moved, a feed takes the place's time; the times stay in order.
  */
 function NightTurns({ draft, change }: { draft: PlanDraft; change: Change }) {
   const turns = draft.night.order;
   const set = (keys: string[]) => change((d) => setNightTurns(d, keys));
   const addable = draft.feeds.filter((f) => !turns.includes(f.key));
-  const hint =
-    turns.length > 1
+  const clock = turns.length > 1 && draft.night.byClock;
+  const hint = clock
+    ? "At night each one is the feed from its time until the next one's, and the last until the night ends. They don't take a turn by day."
+    : turns.length > 1
       ? "At night they take turns in this order, then start again. They don't take a turn by day."
       : turns.length
         ? "Every feed at night is this one. It doesn't take a turn by day."
@@ -621,19 +724,43 @@ function NightTurns({ draft, change }: { draft: PlanDraft; change: Change }) {
         <p className={tone.label}>The night&apos;s feeds</p>
         <p className={cx(tone.muted, "mt-0.5 text-[13px] leading-snug")}>{hint}</p>
       </div>
+      {turns.length > 1 && (
+        <div className={GROUP}>
+          <Toggle
+            label="By the clock"
+            hint="Each feed has its own hours of the night, instead of taking turns feed by feed."
+            checked={draft.night.byClock}
+            onChange={(byClock) => change((d) => ({ ...d, night: { ...d.night, byClock } }))}
+          />
+        </div>
+      )}
       {turns.length > 0 && (
         <ol aria-label="The night's feeds" className={cx(tone.card, tone.divide, "overflow-hidden")}>
           {turns.map((k, i) => (
-            <li key={k} className="flex min-h-[52px] items-center gap-1 py-1 pr-1.5 pl-4">
-              <span className="w-5 shrink-0 text-[15px] font-semibold text-mp-ink-2 tabular-nums">{i + 1}</span>
-              <span className="min-w-0 flex-1 text-[15px] text-mp-ink [overflow-wrap:anywhere]">{feedLabel(draft, k)}</span>
-              {turns.length > 1 && (
-                <>
-                  <IconButton icon="chevron-up" label={`Move ${feedLabel(draft, k)} earlier at night`} disabled={i === 0} onClick={() => set(move(turns, i, -1))} />
-                  <IconButton icon="chevron-down" label={`Move ${feedLabel(draft, k)} later at night`} disabled={i === turns.length - 1} onClick={() => set(move(turns, i, 1))} />
-                </>
+            <li key={k} className={cx("py-1 pr-1.5 pl-4", clock && "pb-3")}>
+              <div className="flex min-h-[44px] items-center gap-1">
+                <span className="w-5 shrink-0 text-[15px] font-semibold text-mp-ink-2 tabular-nums">{i + 1}</span>
+                <span className="min-w-0 flex-1 text-[15px] text-mp-ink [overflow-wrap:anywhere]">{feedLabel(draft, k)}</span>
+                {turns.length > 1 && (
+                  <>
+                    <IconButton icon="chevron-up" label={`Move ${feedLabel(draft, k)} earlier at night`} disabled={i === 0} onClick={() => set(move(turns, i, -1))} />
+                    <IconButton icon="chevron-down" label={`Move ${feedLabel(draft, k)} later at night`} disabled={i === turns.length - 1} onClick={() => set(move(turns, i, 1))} />
+                  </>
+                )}
+                <IconButton icon="x" label={`Take ${feedLabel(draft, k)} out of the night's feeds`} onClick={() => set(turns.filter((x) => x !== k))} />
+              </div>
+              {clock && (
+                <label className="mt-1 mr-2.5 ml-6 flex items-center gap-3">
+                  <span className={cx(tone.label, "shrink-0")}>From</span>
+                  <input
+                    type="time"
+                    aria-label={`${feedLabel(draft, k)} at night, from`}
+                    value={draft.night.starts[i] ?? ""}
+                    onChange={(e) => change((d) => setNightStart(d, i, e.target.value))}
+                    className={cx(tone.input, "min-w-0 flex-1 tabular-nums")}
+                  />
+                </label>
               )}
-              <IconButton icon="x" label={`Take ${feedLabel(draft, k)} out of the night's feeds`} onClick={() => set(turns.filter((x) => x !== k))} />
             </li>
           ))}
         </ol>
@@ -773,6 +900,131 @@ function AmountRange({ label, aria, value, unit, onChange, watch, wkey }: { labe
   );
 }
 
+/** One number with its word before it ("up to [10] min", "at least [60] ml"): a step's most, or a bottle's least. */
+function OneNumber({ lead, word, aria, value, max, onChange, watch, wkey, toShown = (n) => n, fromShown = (n) => n }: {
+  lead: string;
+  word: string;
+  aria: string;
+  value: number | null;
+  max: number;
+  onChange: (n: number | null) => void;
+  watch: Watch;
+  wkey: string;
+  toShown?: (n: number | null) => number | null;
+  fromShown?: (n: number | null) => number | null;
+}) {
+  const [bad, setBad] = useState(false);
+  const report = (invalid: boolean) => {
+    setBad(invalid);
+    watch(wkey)(invalid);
+  };
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className={cx(tone.muted, "text-[15px]")}>{lead}</span>
+        <NumberBox value={toShown(value)} max={max} ariaLabel={aria} onChange={(v) => onChange(fromShown(v))} onInvalid={report} />
+        <span className={cx(tone.muted, "text-[15px]")}>{word}</span>
+      </div>
+      <NumberProblem show={bad} />
+    </div>
+  );
+}
+
+/** A bottle's one amount, its most or its least, in the plan's unit, kept in ml; the other unit under it with amounts both ways on. */
+function OneAmount({ lead, aria, value, unit, onChange, watch, wkey }: { lead: string; aria: string; value: number | null; unit: PlanDraft["unit"]; onChange: (ml: number | null) => void; watch: Watch; wkey: string }) {
+  const { volumeBoth } = useMaple();
+  const other = volumeBoth && value != null && value > 0 ? amountText({ min: value, max: value }, unit === "ml" ? "oz" : "ml", false) : null;
+  return (
+    <div>
+      <OneNumber lead={lead} word={unit} aria={`${aria}, in ${unit}`} value={value} max={amountMax(unit)} toShown={(ml) => shownAmount(ml, unit)} fromShown={(n) => typedAmount(n, unit)} onChange={onChange} watch={watch} wkey={wkey} />
+      {other && <p className={cx(tone.muted, "mt-1.5 text-xs tabular-nums")}>= {other}</p>}
+    </div>
+  );
+}
+
+/**
+ * A count or amount in 24 hours with its two ends, each optional: at least (the first box) and up to (the second), as
+ * the care team gave them ("at least 8", "8 to 12", "up to 10"). `other`: the other unit under it, for milk.
+ */
+function EndsField({ title, word, aria, value, max, onChange, watch, wkey, toShown = (n) => n, fromShown = (n) => n, other }: {
+  title: string;
+  word: string;
+  aria: string;
+  value: RangeDraft;
+  max: number;
+  onChange: (r: RangeDraft) => void;
+  watch: Watch;
+  wkey: string;
+  toShown?: (n: number | null) => number | null;
+  fromShown?: (n: number | null) => number | null;
+  other?: string | null;
+}) {
+  const [bad, setBad] = useState({ min: false, max: false });
+  const report = (end: "min" | "max") => (invalid: boolean) => {
+    setBad((b) => (b[end] === invalid ? b : { ...b, [end]: invalid }));
+    watch(`${wkey}:${end}`)(invalid);
+  };
+  const end = (which: "min" | "max", label: string) => (
+    <label className="flex flex-col gap-1">
+      <span className={cx(tone.muted, "text-[13px]")}>{label}</span>
+      <NumberBox
+        value={toShown(value[which])}
+        max={max}
+        ariaLabel={`${aria}, ${label.toLowerCase()}`}
+        onChange={(v) => onChange({ ...value, [which]: fromShown(v) })}
+        onInvalid={report(which)}
+      />
+    </label>
+  );
+  return (
+    <div role="group" aria-label={aria}>
+      <p className={cx(tone.label, "mb-1.5")}>{title}</p>
+      <div className="flex flex-wrap items-end gap-x-3 gap-y-2">
+        {end("min", "At least")}
+        {end("max", "Up to")}
+        <span className={cx(tone.muted, "pb-2.5 text-[15px]")}>{word}</span>
+      </div>
+      <NumberProblem show={bad.min || bad.max} />
+      {other && <p className={cx(tone.muted, "mt-1.5 text-xs tabular-nums")}>= {other}</p>}
+    </div>
+  );
+}
+
+/**
+ * Feeds and milk in 24 hours, as the care team gave them ("at least 8 feeds in 24 hours", "450–550 ml"): at least, up
+ * to, or both. Today shows what was logged in the last 24 hours beside it, as context, never as a warning.
+ */
+function PerDayEditor({ draft, change, watch }: { draft: PlanDraft; change: Change; watch: Watch }) {
+  const { volumeBoth } = useMaple();
+  const unit = draft.unit;
+  const { feeds, ml } = draft.perDay;
+  const setPerDay = (patch: Partial<PlanDraft["perDay"]>) => change((d) => ({ ...d, perDay: { ...d.perDay, ...patch } }));
+  const lo = ml.min ?? ml.max;
+  const hi = ml.max ?? ml.min;
+  const other = volumeBoth && lo != null && hi != null && lo > 0 ? amountText({ min: Math.min(lo, hi), max: Math.max(lo, hi) }, unit === "ml" ? "oz" : "ml", false) : null;
+  return (
+    <FormSection title="In 24 hours">
+      <div className={cx(tone.card, "space-y-4 px-4 py-4")}>
+        <EndsField title="Feeds" word="feeds" aria="feeds in 24 hours" value={feeds} max={PLAN_LIMITS.dayFeeds[1]} onChange={(f) => setPerDay({ feeds: f })} watch={watch} wkey="day-feeds" />
+        <EndsField
+          title="Milk"
+          word={unit}
+          aria={`milk in 24 hours, in ${unit}`}
+          value={ml}
+          max={amountMax(unit, PLAN_LIMITS.dayMl[1])}
+          toShown={(n) => shownAmount(n, unit)}
+          fromShown={(n) => typedAmount(n, unit)}
+          onChange={(m) => setPerDay({ ml: m })}
+          watch={watch}
+          wkey="day-ml"
+          other={other}
+        />
+        <p className={cx(tone.muted, "text-[13px] leading-snug")}>Only if your plan gives a number: at least, up to, or both. Today shows what was logged in the last 24 hours beside it.</p>
+      </div>
+    </FormSection>
+  );
+}
+
 /** Hours from–to in half-hour steps, kept in minutes; two steppers abreast where they fit, else one above the other. */
 const toHours = (m: number | null) => (m == null ? null : Math.round((m / 60) * 100) / 100);
 const toMinutes = (h: number | null) => (h == null ? null : Math.round(h * 600) / 10);
@@ -791,7 +1043,8 @@ function HoursRange({ title, aria, value, onChange, watch, wkey }: { title?: str
 
 /**
  * The time between feeds: every so often (From–To hours), or on demand up to a time ("feed on demand, at least every
- * 3 hours": one Up to box, its most). Switching keeps what's typed in each.
+ * 3 hours": one Up to box, its most; left empty, whenever she's hungry). Switching keeps what's typed in each; the Up
+ * to box cleared is empty, both ends (never the From from before showing up in it).
  */
 function IntervalField({ title, aria, value, onDemand, onChange, onDemandChange, watch, wkey }: {
   title: string;
@@ -821,7 +1074,7 @@ function IntervalField({ title, aria, value, onDemand, onChange, onDemandChange,
             ariaLabel={`${aria}, up to`}
             value={toHours(upToOf(value))}
             other={null}
-            onChange={(h) => onChange({ ...value, max: toMinutes(h) })}
+            onChange={(h) => onChange(h == null ? EMPTY_RANGE : { ...value, max: toMinutes(h) })}
             onInvalid={watch(`${wkey}:max`)}
           />
         </div>
