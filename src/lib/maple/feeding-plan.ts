@@ -1285,9 +1285,10 @@ const wantsBottle = (v: PlanFeedView, target: FeedTarget | null) =>
  * Whether a bottle of `ml` is no more than what a feed still wants of it (wantsBottle): up to the most of its milk at
  * the breast, or of a bottle step's amount less what it already has (its own, or the target it's up to); a step with no
  * amount takes one under the target per feed's smaller end (one at it is a feed's worth), and anything without a
- * target. A bottle logged without an amount can't say, so it fits.
+ * target. A bottle logged without an amount can't say, so it fits. The plan's late join reads a bottle on its own by
+ * it; a part linked to its feed the same way (a late top-up from Siri or the chat) should be held to it too.
  */
-function fitsWanted(v: PlanFeedView, ml: number | null, target: FeedTarget | null): boolean {
+export function fitsWanted(v: PlanFeedView, ml: number | null, target: FeedTarget | null): boolean {
   if (ml === null) return true;
   return v.steps.some((s) => {
     if (s.milkMissing && s.step.do === "nurse" && s.step.supplement) return ml <= s.step.supplement.ml.max;
