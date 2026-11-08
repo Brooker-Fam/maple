@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { atBreastOf, describeEntry, feedPartWords, milkWords, planUnitsOf } from "@/lib/maple/describe";
 import { feedRowParts } from "@/lib/maple/feed-rows";
-import { AT_BREAST_WORDS, feedById, feedingPlanOf, type AtBreastVia, type FeedingPlan, type Range } from "@/lib/maple/feeding-plan";
+import { AT_BREAST_WORDS, bottleNeed, feedById, feedingPlanOf, type AtBreastVia, type FeedingPlan, type Range } from "@/lib/maple/feeding-plan";
 import {
   addPart,
   edgeBounds,
@@ -27,7 +27,7 @@ import {
 } from "@/lib/maple/feed";
 import { bottleCues, feedCues, typicalBottle } from "@/lib/maple/guidelines";
 import { formatRange, formatTime } from "@/lib/maple/time";
-import { feedTargetOf, formatVolume, formatVolumeRange, ML_PER_FL_OZ, mlToOz, ozToMl } from "@/lib/maple/units";
+import { feedTargetOf, formatVolume, formatVolumeRange, ML_PER_FL_OZ, mlToOz, ozToMl, type FeedTarget } from "@/lib/maple/units";
 import {
   BOTTLE_VIAS,
   type BottleVia,
@@ -112,11 +112,11 @@ import {
  * "Top-up · 12:20 PM feed", its quick amounts the plan's range. A saved part
  * opens as "Syringe at the breast" or "Top-up". With a plan saved, a part's
  * amounts (and a plan step's) are in the plan's unit, the app's beside them.
- * A part whose amount is more than the plan gives for it and reaches the
- * target per feed (more than the plan gives, with no target) offers "A feed of
- * its own" where the time rule leaves it one (a full bottle the dock's tile or
- * a Fix opened as the part): a bottle with no top_up_of or plan feed, given now
- * unless its time was moved, milk at the breast becoming Bottle or Paced bottle.
+ * A part whose amount is more than the plan gives for it (one with no amount
+ * of its own: at the target per feed) offers "A feed of its own" where the
+ * time rule leaves it one (a full bottle the dock's tile or a Fix opened as
+ * the part): a bottle with no top_up_of or plan feed, given now unless its
+ * time was moved, milk at the breast becoming Bottle or Paced bottle.
  *
  * A nursing feed's parts: "Nipple shield" (data.shield, on the feed itself;
  * an edit sends it against the version shown, as the other fields), and milk
@@ -526,16 +526,17 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   // ── A feed of its own ──
   // A feed's part opened for its feed (milk at the breast, a top-up: no Breast or Bottle to choose, and it says which
   // feed it's with) can be said to be a bottle on its own instead, when its amount is more than the plan gives for
-  // that part and reaches the target per feed (with no target saved, more than the plan gives): a full bottle the
-  // dock's tile or a Fix opened as the part. It then names no feed and no plan feed (top_up_of, plan), so it counts
-  // as a feed, the plan reading it as one too, and milk at the breast becomes a bottle (Bottle or Paced bottle),
-  // given now unless its time was moved. Only where the time rule wouldn't make it part of a feed anyway (feed.ts).
+  // that part (partGives: a top-up up to the target gives the target; with no amount at all, once it reaches the
+  // target per feed): a full bottle the dock's tile or a Fix opened as the part. It then names no feed and no plan feed (top_up_of,
+  // plan), so it counts as a feed, the plan reading it as one too (feeding-plan.ts fitsWanted, by the same amounts),
+  // and milk at the breast becomes a bottle (Bottle or Paced bottle), given now unless its time was moved. Only where
+  // the time rule wouldn't make it part of a feed anyway (feed.ts).
   const partOpened = !e && method === "bottle" && (forBreast || forTopUp);
   const [openVia] = useState<AtBreastVia | null>(() => (forBreast ? (pstr(preset, "via") as AtBreastVia) : null));
   const partRun = partOpened && linkTo != null ? otherRuns.find((r) => r.entries.some((x) => x.id === linkTo)) ?? null : null;
   const partPlanId = pstr(preset, "plan") ?? partRun?.entries.find((x) => x.data.plan)?.data.plan;
-  const partAmount = partOpened ? partRange(plan, partPlanId, forBreast ? (breastVia ?? openVia) : "top-up") : null;
-  const over = amountMl != null && amountMl > 0 && (partAmount ? amountMl > partAmount.max : !!target) && (!target || amountMl >= target.min);
+  const partAmount = partOpened ? partGives(plan, partPlanId, forBreast ? (breastVia ?? openVia ?? "syringe") : "top-up", target) : null;
+  const over = amountMl != null && amountMl > 0 && (partAmount ? amountMl > partAmount.max : !!target && amountMl >= target.min);
   const whenMoved = (when?.getTime() ?? null) !== (fromPreset?.getTime() ?? null);
   const ownFits = topUpRunFor(otherRuns, (whenMoved && when ? when : now()).getTime(), now()) === null;
   const ownShown = partOpened && !readOnly && (own || (over && ownFits));
@@ -1443,6 +1444,23 @@ function partRange(plan: FeedingPlan | null, feedId: string | undefined, part: A
   for (const s of feed.steps) {
     if (s.do === "nurse") nursed = true;
     else if (s.do === "bottle" && nursed && s.ml) return s.ml;
+  }
+  return null;
+}
+
+/**
+ * What the plan gives for one of a feed's parts, as feeding-plan.ts reads a late bottle against it (fitsWanted): its
+ * milk at the breast's amount, or its top-up's (the bottle step after the nursing: its own amount, or the target per
+ * feed it's up to, bottleNeed). Null when the plan gives none: then a bottle at the target is a feed's worth.
+ */
+function partGives(plan: FeedingPlan | null, feedId: string | undefined, part: AtBreastVia | "top-up", target: FeedTarget | null): Range | null {
+  if (part !== "top-up") return partRange(plan, feedId, part);
+  const feed = plan ? feedById(plan, feedId) : null;
+  if (!feed) return null;
+  let nursed = false;
+  for (const s of feed.steps) {
+    if (s.do === "nurse") nursed = true;
+    else if (s.do === "bottle" && nursed) return bottleNeed(s, target) ?? s.ml ?? null;
   }
   return null;
 }

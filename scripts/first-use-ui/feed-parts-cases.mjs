@@ -6,8 +6,10 @@
  * feed, and the feed form saves a shield and milk at the breast with a feed logged afterwards, and lists a saved
  * feed's. A part's form says what it is ("Milk at the breast", "SNS at the breast", "Top-up"), a bottle's "last bottle"
  * is never milk at the breast, a plan feed's milk at the breast is the plan's (in its unit), a feed's form says which
- * of the plan's feeds it was, and While you slept counts a feed still going once. Made-up feeds and amounts on the
- * fixture's clock (9:30 AM in the family's zone), in ml; the plan is the invented one in feeding-plan-cases.mjs.
+ * of the plan's feeds it was, a part's form opened for a feed offers "A feed of its own" for a full bottle, Last fed
+ * adds up the night's bottles of one feed, and While you slept counts a feed still going once, with what was given
+ * after a pause. Made-up feeds and amounts on the fixture's clock (9:30 AM in the family's zone, or a later one the
+ * case sets), in ml; the plan is the invented one in feeding-plan-cases.mjs.
  */
 export function feedPartsCases({ fixture, freshState, record, writes, assert }) {
   const metric = (f) => f.page.addInitScript(() => localStorage.setItem("maple-units", "metric"));
@@ -381,7 +383,7 @@ export function feedPartsCases({ fixture, freshState, record, writes, assert }) 
         assert.deepEqual(f.errors, []);
       } finally { await f.close(); }
     }],
-    ["Feed parts: a late top-up's form offers A feed of its own once the amount reaches the target, and saves a bottle on its own", async () => {
+    ["Feed parts: a late top-up's form offers A feed of its own once the amount is more than the plan gives, and saves a bottle on its own", async () => {
       /** "08:15" on Oct 28 (EDT) as an ISO instant. */
       const at = (hhmm) => { const [h, m] = hhmm.split(":").map(Number); return new Date(Date.UTC(2026, 9, 28, h + 4, m)).toISOString(); };
       // 10:40–11:00 AM, Nurse, top up from the plan, its 25–35 ml top-up not logged; the target per feed is 50–70 ml.
@@ -405,13 +407,13 @@ export function feedPartsCases({ fixture, freshState, record, writes, assert }) 
         await form.waitFor();
         const amount = form.getByRole("textbox", { name: "millilitres", exact: true });
         const own = form.getByRole("switch", { name: "A feed of its own", exact: true });
-        // At the plan's amount, or over it but short of the target, it's the top-up: no way out offered.
-        for (const ml of ["35", "45"]) {
-          await amount.fill(ml);
-          assert.equal(await own.count(), 0, `${ml} ml is still the top-up`);
-        }
-        await amount.fill("60");
+        // Up to the plan's amount it's the top-up: no way out offered. Over it, the plan reads a bottle as a feed of its own.
+        await amount.fill("35");
+        assert.equal(await own.count(), 0, "35 ml is the top-up");
+        await amount.fill("40");
         await own.waitFor();
+        assert.match(await form.textContent(), /40 ml is more than the plan's 25–35 ml top-up\./);
+        await amount.fill("60");
         assert.equal(await own.getAttribute("aria-checked"), "false");
         assert.match(await form.textContent(), /60 ml is more than the plan's 25–35 ml top-up\./);
         const before = await own.boundingBox();
@@ -446,6 +448,30 @@ export function feedPartsCases({ fixture, freshState, record, writes, assert }) 
         assert.equal(await form.getByRole("switch", { name: "A feed of its own", exact: true }).count(), 0);
         assert.deepEqual(f.errors, []);
       } finally { await f.close(); }
+      // A top-up up to the target gives the target (over 70 ml is a feed of its own); one with no amount at all, a
+      // feed's worth from the target's smaller end (50 ml).
+      for (const [step, under, over, why] of [
+        [{ do: "bottle", to_target: true, milk: "either", via: "paced" }, "70", "75", "75 ml is more than the plan's 50–70 ml top-up."],
+        [{ do: "bottle", milk: "either", via: "paced" }, "45", "50", "50 ml reaches the target per feed, 50–70 ml."],
+      ]) {
+        state = planned(at("12:20"));
+        state.baby.settings.feeding_plan = { ...PLAN, feeds: PLAN.feeds.map((x) => (x.id === "p1f2" ? { ...x, steps: [x.steps[0], step] } : x)) };
+        f = await fixture({ state, records: state.entries });
+        try {
+          await metric(f);
+          await f.page.goto("https://first-use.example.test/#today");
+          await tile(f).click();
+          const form = f.page.getByRole("dialog", { name: /^Top-up · 10:40\sAM feed$/ });
+          const amount = form.getByRole("textbox", { name: "millilitres", exact: true });
+          await amount.fill(under);
+          await form.getByRole("button", { name: `Log ${under} ml top-up`, exact: true }).waitFor();
+          assert.equal(await form.getByRole("switch", { name: "A feed of its own", exact: true }).count(), 0, `${under} ml is the top-up`);
+          await amount.fill(over);
+          await form.getByRole("switch", { name: "A feed of its own", exact: true }).waitFor();
+          assert(((await form.textContent()) ?? "").includes(why), why);
+          assert.deepEqual(f.errors, []);
+        } finally { await f.close(); }
+      }
     }],
     ["Feed parts: milk at the breast's form, opened for a feed, offers A feed of its own for a full bottle, logged now as a bottle", async () => {
       const at = (hhmm) => { const [h, m] = hhmm.split(":").map(Number); return new Date(Date.UTC(2026, 9, 28, h + 4, m)).toISOString(); };
