@@ -1086,5 +1086,207 @@ export function feedingPlanCases({ fixture, freshState, record, writes, assert }
         await g.close();
       }
     }],
+
+    // ── plans other families bring home ──────────────────────────────────
+
+    ["Feeding plan: the breast offered only if she wants to is Start Left or Right with a quiet Not this time, then the bottle, never a top-up", async () => {
+      // Practice at the breast 5–10 min only if she wants to, then 60 ml of breast milk by paced bottle, every 3 hours.
+      const plan = {
+        v: 1,
+        unit: "ml",
+        day: { every: { min: 180, max: 180 } },
+        feeds: [{ id: "p1f1", name: "Practice, then bottle", steps: [{ do: "nurse", minutes: { min: 5, max: 10 }, if_needed: true }, { do: "bottle", ml: { min: 60, max: 60 }, milk: "breastmilk", via: "paced" }] }],
+        order: ["p1f1"],
+        rev: 1,
+        updated_at: "2026-10-27T12:00:00.000Z",
+      };
+      // The last feed, its bottle, at 6:30 AM; it's 9:30.
+      const last = () => [bottle(41, 28, "06:30", 60, { milk: "breastmilk", via: "paced", plan: "p1f1" })];
+      const s = server();
+      const f = await fixture({ state: planned({ plan, entries: last() }), apiResponse: s.apiResponse });
+      try {
+        await metric(f);
+        const c = await today(f);
+        const text = plain(await c.textContent());
+        assert.match(text, /Offer the breast 5–10 min\. Then bottle 60 ml, breast milk, paced bottle/);
+        assert.doesNotMatch(text, /Top up|top-up/);
+        // In its place, the breast is the next physical step: Start Left and Right, and a quiet Not this time under them.
+        const start = c.getByRole("button", { name: "Start Left: Practice, then bottle", exact: true });
+        const not = c.getByRole("button", { name: "Not this time", exact: true });
+        assert.equal(await c.locator("[data-plan-primary]").getByRole("button").count(), 2, "Left and Right");
+        for (const [width, height] of [[375, 667], [320, 568]]) {
+          await f.page.setViewportSize({ width, height });
+          await f.page.waitForTimeout(250);
+          const [sb, nb, db] = await Promise.all([start.boundingBox(), not.boundingBox(), dock(f).boundingBox()]);
+          assert(sb && nb && db, "on screen");
+          assert(sb.y + sb.height <= db.y, `${width}x${height}: Start Left (${sb.y + sb.height}) clears the dock (${db.y})`);
+          assert(nb.y >= sb.y + sb.height - 1 && nb.height >= 44, `${width}x${height}: Not this time under it, 44 px tall`);
+          assert.equal(await f.page.evaluate(() => document.documentElement.scrollWidth), width, `${width}x${height}: no sideways scroll`);
+        }
+        // The dock's Bottle isn't the plan's next step while the breast is.
+        assert.doesNotMatch(plain(await dock(f).getByRole("button", { name: /^Bottle/ }).textContent()), /Next step/);
+        await start.click();
+        await waitFor(f, () => s.timer.length > 0, "the timer start");
+        assert.deepEqual({ side: s.timer[0].side, with: s.timer[0].with }, { side: "L", with: { plan: "p1f1" } });
+        assert.deepEqual(f.errors, []);
+      } finally {
+        await f.close();
+      }
+      // Not this time: set aside on this phone for the plan's turn; the bottle is the big button, a bottle of its own.
+      const g = await fixture({ state: planned({ plan, entries: last() }) });
+      try {
+        await metric(g);
+        const c = await today(g);
+        await c.getByRole("button", { name: "Not this time", exact: true }).click();
+        await c.locator("[data-plan-primary]").getByRole("button", { name: "Log bottle: opens the bottle form", exact: true }).waitFor();
+        assert.equal(await c.getByRole("button", { name: /^Start Left/ }).count(), 0, "the breast's Start is gone");
+        assert.doesNotMatch(plain(await c.textContent()), /Offer the breast/, "and its words, set aside");
+        assert.equal(plain(await dock(g).getByRole("button", { name: /^Bottle/ }).textContent()), "BottleNext step");
+        await g.page.reload();
+        await card(g).waitFor();
+        assert.equal(await card(g).getByRole("button", { name: /^Start Left/ }).count(), 0, "still set aside in this tab");
+        await card(g).getByRole("button", { name: "Log bottle: opens the bottle form", exact: true }).click();
+        const form = g.page.getByRole("dialog", { name: "Feed", exact: true });
+        await form.waitFor();
+        assert.equal(await form.getByRole("textbox", { name: "millilitres", exact: true }).inputValue(), "60", "the plan's amount");
+        assert.doesNotMatch(await form.textContent(), /Top-up|part of that feed/i, "a bottle of its own, never a top-up");
+        assert.equal(writes(g).length, 0, "nothing is logged");
+        assert.deepEqual(g.errors, []);
+      } finally {
+        await g.close();
+      }
+    }],
+
+    ["Feeding plan: a night when she's hungry has no time and never Due since, and the day's due comes back at the night's end", async () => {
+      // Every 3 hours by day, waking her; at night (10 PM–6 AM) when she's hungry: a bottle of 60–90 ml of formula.
+      const plan = {
+        v: 1,
+        unit: "ml",
+        day: { every: { min: 180, max: 180 }, wake: true },
+        night: { from: "22:00", to: "06:00", on_demand: true },
+        feeds: [{ id: "p1f1", name: "Bottle", steps: [{ do: "bottle", ml: { min: 60, max: 90 }, milk: "formula" }] }],
+        order: ["p1f1"],
+        rev: 1,
+        updated_at: "2026-10-27T12:00:00.000Z",
+      };
+      // Her last bottle at 9:40 PM. At 11 PM and at 2:30 AM she's asleep.
+      const eve = () => [bottle(41, 28, "21:40", 70, { milk: "formula", plan: "p1f1" })];
+      for (const now of [at(28, "23:00"), at(29, "02:30")]) {
+        const f = await fixture({ state: planned({ plan, now, entries: eve() }) });
+        try {
+          await metric(f);
+          const c = await today(f);
+          const text = plain(await c.textContent());
+          assert.match(text, /^Night feed/, now);
+          // No sex set: the baby's name stands in for the pronoun.
+          assert.match(text, /When River's hungry/, now);
+          assert.doesNotMatch(text, /Due|Wake River|in \d/, `${now}: no time at night`);
+          assert.equal(await c.locator("[data-plan-hungry]").count(), 1);
+          assert(await c.locator("[data-plan-primary]").getByRole("button", { name: /^Log bottle/ }).isVisible(), "the night's feed and its step");
+          assert.deepEqual(f.errors, []);
+        } finally {
+          await f.close();
+        }
+      }
+      // The night over: the day's due, from the night's end.
+      const g = await fixture({ state: planned({ plan, now: at(29, "06:05"), entries: eve() }) });
+      try {
+        await metric(g);
+        const c = await today(g);
+        const text = plain(await c.textContent());
+        assert.match(text, /^Next feed/);
+        assert.match(text, /Due now \(6:00 AM\)/);
+        assert.doesNotMatch(text, /hungry/);
+        assert.deepEqual(g.errors, []);
+      } finally {
+        await g.close();
+      }
+    }],
+
+    ["Feeding plan: a night by the clock says the turn's hours beside its name, and Then the night feed says when its turn starts", async () => {
+      // A split night: 10 PM–6 AM, the partner's bottle until 2 AM, then nursing; every 2.5–3 hours by day.
+      const plan = {
+        v: 1,
+        unit: "ml",
+        day: { every: { min: 150, max: 180 } },
+        night: { from: "22:00", to: "06:00", feed: "p1f2", order: ["p1f2", "p1f1"], starts: ["22:00", "02:00"] },
+        feeds: [
+          { id: "p1f1", name: "Nurse", steps: [{ do: "nurse", minutes: { min: 10, max: 15 }, each_side: true }] },
+          { id: "p1f2", name: "Partner's bottle", steps: [{ do: "bottle", ml: { min: 60, max: 90 }, milk: "breastmilk", via: "paced" }] },
+        ],
+        order: ["p1f1"],
+        rev: 1,
+        updated_at: "2026-10-27T12:00:00.000Z",
+      };
+      const eve = () => [nursing(41, 28, [["L", "20:00", "20:15"], ["R", "20:15", "20:30"]], { plan: "p1f1" })];
+      // 11 PM, after the 8 PM feed: the partner's turn.
+      const f = await fixture({ state: planned({ plan, now: at(28, "23:00"), entries: eve() }) });
+      try {
+        await metric(f);
+        const c = await today(f);
+        assert.equal(await c.getByRole("heading").textContent(), "Partner's bottle");
+        assert.match(plain(await c.textContent()), /^Night feedPlanPartner's bottleuntil 2 AM/);
+        assert.equal(plain(await c.getAttribute("aria-label")), "Night feed: Partner's bottle, until 2 AM");
+        assert.deepEqual(f.errors, []);
+      } finally {
+        await f.close();
+      }
+      // 3 AM, the partner's bottle given at 11 PM: nursing's turn, until the night's end.
+      const g = await fixture({ state: planned({ plan, now: at(29, "03:00"), entries: [...eve(), bottle(42, 28, "23:00", 70, { milk: "breastmilk", via: "paced", plan: "p1f2" })] }) });
+      try {
+        await metric(g);
+        const c = await today(g);
+        assert.equal(await c.getByRole("heading").textContent(), "Nurse");
+        assert.match(plain(await c.textContent()), /^Night feedPlanNurseuntil 6 AM/);
+        assert.deepEqual(g.errors, []);
+      } finally {
+        await g.close();
+      }
+      // 9:30 PM, on the breast: then the night's first turn, from 10 PM.
+      const h = await fixture({ state: planned({ plan, now: at(28, "21:40"), entries: [nursing(43, 28, [["L", "21:30", null]], { plan: "p1f1" })] }) });
+      try {
+        await metric(h);
+        const c = await today(h);
+        assert.match(plain(await c.textContent()), /Then the night feed: Partner's bottle · from 10 PM/);
+        assert.deepEqual(h.errors, []);
+      } finally {
+        await h.close();
+      }
+    }],
+
+    ["Feeding plan: the plan's feeds in 24 hours are one quiet line on the card, and a cup feed's Log feed opens the bottle form with no way of giving", async () => {
+      // A cup feed: 20–30 ml of breast milk by cup, every 3 hours; at least 8 feeds in 24 hours.
+      const plan = {
+        v: 1,
+        unit: "ml",
+        day: { every: { min: 180, max: 180 } },
+        per_day: { feeds: { min: 8 } },
+        feeds: [{ id: "p1f1", name: "Cup feed", steps: [{ do: "bottle", ml: { min: 20, max: 30 }, milk: "breastmilk", by: "cup" }] }],
+        order: ["p1f1"],
+        rev: 1,
+        updated_at: "2026-10-27T12:00:00.000Z",
+      };
+      const entries = ["00:30", "03:30", "06:30"].map((t, i) => bottle(41 + i, 28, t, 25, { milk: "breastmilk", plan: "p1f1" }));
+      const f = await fixture({ state: planned({ plan, entries }) });
+      try {
+        await metric(f);
+        const c = await today(f);
+        const line = c.locator("[data-plan-day]");
+        assert.equal(plain(await line.textContent()), "3 feeds in the last 24 hours · plan: at least 8");
+        // Context, as quiet as the card's eyebrow: never a warning color.
+        const [ink, quiet] = await Promise.all([line.evaluate((el) => getComputedStyle(el).color), c.locator("p").first().evaluate((el) => getComputedStyle(el).color)]);
+        assert.equal(ink, quiet, "the line's color is the card's quiet ink");
+        assert.match(plain(await c.textContent()), /Cup 20–30 ml, breast milk/);
+        await c.getByRole("button", { name: "Log feed: opens the bottle form", exact: true }).click();
+        const form = f.page.getByRole("dialog", { name: "Feed", exact: true });
+        await form.waitFor();
+        assert.equal(await form.getByRole("textbox", { name: "millilitres", exact: true }).inputValue(), "20", "the plan's amount");
+        assert.equal(await form.getByRole("region", { name: "How it was given", exact: true }).getByRole("button", { pressed: true }).count(), 0, "no way of giving said");
+        assert.equal(writes(f).length, 0);
+        assert.deepEqual(f.errors, []);
+      } finally {
+        await f.close();
+      }
+    }],
   ];
 }

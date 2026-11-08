@@ -22,10 +22,11 @@
  * to do and nothing owed.
  *
  * The breast offered only if she wants to ("Offer the breast 5–10 min",
- * practice before a bottle) has its Start beside its row from the first, with
- * a quiet "Not this time", while the bottle after it keeps the big button
- * ("Log bottle", never a top-up: afterNursing); once anything after it is
- * logged, her chance has passed. A bottle step given other than by bottle (by
+ * practice before a bottle) is the next physical step in its place: Start
+ * Left and Right, with a quiet "Not this time". Once she's had her chance (she
+ * nursed, Not this time, or anything after it is logged), the bottle after it
+ * is the big button ("Log bottle", never a top-up: afterNursing). A bottle
+ * step given other than by bottle (by
  * cup, spoon or finger) is "Log feed", the bottle form with no way of giving;
  * one with an amount it must reach at least ("Gave 40 ml · at least 60 ml")
  * stays open as one up to the target does; one up to an amount (a cap) leaves
@@ -381,13 +382,15 @@ function sidesSoFar(run: NursingRun): string | null {
  * Which step is next: the next physical step. None while she's on the breast (or on a break in a feed still going):
  * nothing else can be done yet. While a pump runs, the first bottle still to give. Otherwise the first step still to
  * do (not logged, or a bottle short of its amount); none when nothing is. A step only if needed is next only when no
- * step that isn't is left: it never takes the big button from one.
+ * step that isn't is left: it never takes the big button from one. The breast offered only if she wants to is the
+ * exception: in its place it's the next physical step (practice at the breast before the bottle), until she's had
+ * her chance (she nursed, it was set aside, or a step after it is logged).
  */
 function nextStep(view: PlanFeedView, closed: (v: StepView) => boolean): number | null {
   if (view.group?.run?.live) return null;
   const pumping = view.steps.some((v) => v.step.do === "pump" && v.status === "running");
   const todo = view.steps.filter((v) => v.status === "todo" && !closed(v) && (!pumping || v.step.do === "bottle"));
-  return (todo.find((v) => !ifNeeded(v.step)) ?? todo[0])?.i ?? null;
+  return (todo.find((v) => !ifNeeded(v.step) || v.step.do === "nurse") ?? todo[0])?.i ?? null;
 }
 
 const NONE: ReadonlySet<string> = new Set();
@@ -406,9 +409,9 @@ const NONE: ReadonlySet<string> = new Set();
  * PLAN_PUMP_EARLY_MS from due, as a pump that early begins it). A feed where
  * she only nursed in a plan feed with no nursing (nursedOnly) has the plan's
  * words and nothing to do. The breast offered only if she wants to (practice
- * before a bottle) has its Start beside its row from the first, with a quiet
- * "Not this time", and the bottle after it the big button; once a step after
- * it is logged and she didn't nurse, her chance has passed ("Not this time").
+ * before a bottle) is the big button in its place, with a quiet "Not this
+ * time"; once she's had her chance (she nursed, it was set aside, or a step
+ * after it is logged: "Not this time"), the bottle after it is.
  * `words`: the baby's (BabyWords), for "She's done". `closed`: the steps this
  * phone set aside (She's done, Not needed, Not this time), by row key: each
  * reads as done, and the next step moves on past it. `at`: the moment it's
@@ -433,14 +436,10 @@ export function stepRows(fp: FeedPlanNow, view: PlanFeedView = fp.focus, words: 
   // The big button: the next step; but one only if needed never takes it from her milk at the breast still to log.
   const milkOwed = view.steps.some((v) => v.status === "done" && milkLeft(v));
   const primary = next !== null && !(ifNeeded(view.steps[next].step) && milkOwed) ? next : null;
-  /**
-   * A row's action: the big button, beside it (a step only if needed whose turn has come, in a feed begun; the breast
-   * offered only if she wants to, from the first: it comes before what has the big button), or none.
-   */
+  /** A row's action: the big button, beside it (a step only if needed whose turn has come, in a feed begun), or none. */
   const role = (v: StepView): "action" | "secondary" | null => {
     if (v.i === primary) return "action";
-    const begun = view.start !== null || v.step.do === "nurse";
-    return ifNeeded(v.step) && v.status === "todo" && !aside(v) && begun && next !== null && v.i <= next ? "secondary" : null;
+    return ifNeeded(v.step) && v.status === "todo" && !aside(v) && view.start !== null && next !== null && v.i <= next ? "secondary" : null;
   };
   // A feed that pumps first (the night's): its bottle, before the pump, for whoever gives it. Before the feed, only once
   // it's close to due (PLAN_PUMP_EARLY_MS, as a pump that early begins it), so an early tap never starts the night feed.

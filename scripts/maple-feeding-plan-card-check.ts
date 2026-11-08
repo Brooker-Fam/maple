@@ -763,20 +763,23 @@ const OFFER = parseFeedingPlan(
 const [PRACTICE, AFTER_BOTTLE] = OFFER.feeds;
 const PRACTICE_BOTTLE = { method: "bottle", amount_ml: 60, milk: "breastmilk", via: "paced", plan: PRACTICE.id };
 
-check("the breast offered only if she wants to: its Start beside its row with Not this time; the bottle is the big button, never a top-up", () => {
+check("the breast offered only if she wants to: Start Left or Right with a quiet Not this time; then the bottle, the big button, never a top-up", () => {
   let fp = at(OFFER, [], "09:00");
   let rows = stepRows(fp, fp.focus, SHE);
   eq(shape(rows), [["todo", "Offer the breast 5–10 min", null], ["todo", "Bottle 60 ml, breast milk, paced bottle", null]]);
-  eq([carry(rows), rows.map((r) => r.optional)], [[[null, "nurse", NOT_THIS_TIME], ["form", null, null]], [true, false]]);
-  eq(rows[0].secondary, { kind: "nurse", shield: false });
-  eq(form(rows[1].action), { label: "Log bottle", aria: "Log bottle: opens the bottle form", preset: PRACTICE_BOTTLE });
-  // The dock: the bottle is the plan's next step (outlined), so no side is.
+  // In its place it's the next physical step: Start, with Not this time; the bottle waits for her chance to pass.
+  eq([carry(rows), rows.map((r) => r.optional)], [[["nurse", null, NOT_THIS_TIME], [null, null, null]], [true, false]]);
+  eq(rows[0].action, { kind: "nurse", shield: false });
+  // The dock outlines the next side, as for any nursing next.
   const r = reading(fp, "09:00");
-  eq([r.primary?.action.kind, r.nurseNext, r.bottle?.word, r.bottle?.primary, r.bottle?.preset], ["form", false, "Next step", true, PRACTICE_BOTTLE]);
-  // Not this time, set aside on this phone: the offer reads done, the bottle keeps its button.
+  eq([r.primary?.action.kind, r.nurseNext, r.bottle], ["nurse", true, null]);
+  // Not this time, set aside on this phone: the offer reads done, and the bottle is the big button (the dock's Next step).
   const aside = stepRows(fp, fp.focus, SHE, new Set([`${PRACTICE.id}:0`]));
   eq([shape(aside)[0], carry(aside)], [["done", "Offer the breast 5–10 min", NOT_THIS_TIME], [[null, null, null], ["form", null, null]]]);
-  eq(planReading(fp, { now: D("09:00"), tz: TZ, words: SHE, closed: (start, key) => start === null && key === `${PRACTICE.id}:0` }).rows[0].status, NOT_THIS_TIME, "before the feed, by the plan's turn");
+  eq(form(aside[1].action), { label: "Log bottle", aria: "Log bottle: opens the bottle form", preset: PRACTICE_BOTTLE });
+  // Before the feed, it's set aside by the plan's turn (no feed start yet).
+  const passed = planReading(fp, { now: D("09:00"), tz: TZ, words: SHE, closed: (start, key) => start === null && key === `${PRACTICE.id}:0` });
+  eq([passed.rows[0].status, passed.primary?.action.kind, passed.nurseNext, passed.bottle?.word, passed.bottle?.preset], [NOT_THIS_TIME, "form", false, "Next step", PRACTICE_BOTTLE]);
   // On the breast: nothing else while she's on.
   fp = at(OFFER, [nurse("L 09:00-", { plan: PRACTICE.id })], "09:05");
   rows = stepRows(fp, fp.focus, SHE);

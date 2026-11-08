@@ -454,10 +454,11 @@ export default function NextFeedCard() {
   const canOther = !readOnly && !underway && (chosen || others.length > 0);
 
   // Before a feed (or, when she only nursed, the plan's words for it): its first step and the action, the rest on one
-  // line. The first step is the first with an action: the big one, or a quiet one beside it (the breast offered only if
-  // she wants to, before the bottle's big button).
+  // line. The first step is the first with an action: the big one, or a quiet one beside it. A step set aside before
+  // the feed (the breast offered, Not this time) has left it.
   const asWords = !underway || quiet;
   const lead = !asWords ? -1 : Math.max(0, rows.findIndex((r) => (primary ? r === primary.row || !!r.secondary : r.state !== "note")));
+  const leadRows = !asWords ? [] : rows.slice(0, lead + 1).filter((r) => r.state !== "done");
   const later = !asWords ? [] : rows.slice(lead + 1);
   const laterSteps = later.filter((r) => r.state !== "note").map((r) => lowerFirst(r.text));
   // "Then pump 15 min; then top up 25–35 ml, …", then the plan's notes ("Burp halfway").
@@ -542,7 +543,7 @@ export default function NextFeedCard() {
           */}
           <p className={cx("leading-snug [overflow-wrap:anywhere]", quiet ? "text-[14px] text-mp-ink-2" : "text-[15px] text-mp-ink")}>
             {quiet && <span className="sr-only">The plan for this feed: </span>}
-            {rows.slice(0, lead + 1).map((r, i) => (
+            {leadRows.map((r, i) => (
               <span key={r.key} className={r.state === "note" ? "text-mp-ink-2" : undefined}>
                 {i > 0 ? " · " : ""}
                 <Units text={r.text} />
@@ -556,6 +557,14 @@ export default function NextFeedCard() {
           </p>
           {besideFirst && beside}
           {primary && !readOnly && <div className={besideFirst ? "mt-1" : short ? "mt-2" : "mt-2.5"}>{actionView(primary.action, true)}</div>}
+          {/* The breast offered only if she wants to: its quiet way to leave it for the bottle (Not this time). */}
+          {primary?.row.close && primary.action.kind === "nurse" && !readOnly && (
+            <div className="-mb-1.5 mt-0.5 flex flex-wrap items-center">
+              <Button variant="ghost" size="sm" disabled={busy} onClick={() => act(() => p.closeRow(primary.row.key))} className="-ml-3 font-medium text-mp-ink-2!">
+                {primary.row.close}
+              </Button>
+            </div>
+          )}
           {!besideFirst && beside}
           {laterWords && short && primary && !readOnly && (
             <p className="mt-1.5 text-[14px] leading-snug text-mp-ink-2 [overflow-wrap:anywhere]">
