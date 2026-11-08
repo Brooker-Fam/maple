@@ -54,6 +54,11 @@ export function useSheetBase() {
   };
 }
 
+/** Opens another entry's sheet from inside one (a nursing feed's milk at the breast, from its form). */
+export function useOpenSheet() {
+  return useSheets().open;
+}
+
 /** A preset value of the right type, or undefined. */
 export const pstr = (p: Record<string, unknown> | undefined, k: string) => (typeof p?.[k] === "string" ? (p[k] as string) : undefined);
 export const pnum = (p: Record<string, unknown> | undefined, k: string) =>

@@ -1,12 +1,13 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { adminActsAs } from "@/lib/maple/insights";
-import { minutesText, staleFeed } from "@/lib/maple/feed";
+import { atBreastOf, feedPartWords, milkWords } from "@/lib/maple/describe";
+import { minutesText, nursingRuns, staleFeed } from "@/lib/maple/feed";
 import { nightFeedLine } from "@/lib/maple/guidelines/sleep";
 import { DEFAULT_TZ, formatDuration, formatTime, localParts } from "@/lib/maple/time";
-import type { Entry, FeedData, Side, TimerKind } from "@/lib/maple/types";
+import type { Entry, EntryOf, FeedData, Side, TimerKind } from "@/lib/maple/types";
 import { useBabyWords, useVoice } from "./familyWords";
 import { fixPreset, KIND_TITLE, LiveBlock, PartRows, SIDE_NAME, timerNumbers, useCompact, useStillGoing, type FixExpand, type FixTarget, type TimerNumbers } from "./FeedParts";
 import { Icon, KindBadge, type IconName } from "./icons";
@@ -16,7 +17,7 @@ import { SIDE_COLOR, SIDE_INK } from "./palette";
 import { useSheets } from "./sheets";
 import { useClusterInfo } from "./sheets/ClusterInfoSheet";
 import { Button, cx, tone } from "./ui";
-import { useMaple, useNow } from "./useMaple";
+import { ApiError, useMaple, useNow } from "./useMaple";
 import { useTimerActions } from "./useTimerActions";
 
 /**
@@ -38,6 +39,11 @@ import { useTimerActions } from "./useTimerActions";
  * and 6 AM (the family's timezone) it says quietly what to do if the
  * parent gets sleepy (guidelines/sleep.ts nightFeedLine, NICHD's two
  * options); no notice, nothing sent.
+ *
+ * A nursing feed's own parts sit in one row of small chips above Edit times
+ * (FeedExtras): the nipple shield, on or off, and milk at the breast, which
+ * opens the bottle form for it and, once logged, says what was given ("20 ml
+ * in the SNS") and opens it to change.
  */
 
 export { SIDE_COLOR, SIDE_NAME, timerNumbers };
@@ -319,6 +325,8 @@ export default function TimerCard({ entry, ask }: { entry: Entry; ask?: ReactNod
               </span>
             </button>
           )}
+          {/* The feed's own parts: small chips, never a primary button (the dock has those). */}
+          {isFeed && <FeedExtras entry={entry as EntryOf<"feed">} controls={controls} disabled={waiting} compact={compact} />}
           {controls &&
             (ownDone ? (
               <div className={cx("flex gap-2", compact ? "mt-2.5" : "mt-3")}>
@@ -337,6 +345,130 @@ export default function TimerCard({ entry, ask }: { entry: Entry; ask?: ReactNod
       {lantern && controls && <Lantern entry={entry} onClose={() => setLantern(false)} dim={isNight()} />}
       {clusterInfo.sheet}
     </motion.section>
+  );
+}
+
+/** A small chip: a 44px target around a quiet pill. */
+const CHIP_HIT = "group flex min-h-[44px] shrink-0 items-center disabled:opacity-45";
+const CHIP =
+  "inline-flex min-h-[32px] items-center gap-1 rounded-full px-3 text-[13px] font-semibold transition group-active:scale-[0.97] group-disabled:group-active:scale-100";
+
+/**
+ * A nursing feed's parts while she's on (FeedExtras' row): the nipple shield,
+ * a toggle saved on the feed itself (data.shield, a PATCH made against the
+ * version this phone shows: if a tap or the other phone changed the feed
+ * first, it's made once more on what's there now, else it says it wasn't
+ * saved), and milk at the breast: "Milk at the breast" opens the bottle form
+ * for it (by syringe unless the last one went in an SNS, its amount and milk
+ * as last time, tied to this feed), and once it's logged the chip says what
+ * was given ("20 ml in the SNS") and opens it to change. Viewers see what's
+ * on, with nothing to tap.
+ */
+function FeedExtras({ entry, controls, disabled, compact }: { entry: EntryOf<"feed">; controls: boolean; disabled: boolean; compact: boolean }) {
+  const { state, update, toast, units, now: clock } = useMaple();
+  const { open } = useSheets();
+  // The shield as tapped, shown at once until the server's answer is in.
+  const [want, setWant] = useState<boolean | null>(null);
+  const busy = useRef(false);
+  const shield = want ?? !!entry.data.shield;
+  const entries = state?.entries;
+  const tz = state?.baby.timezone ?? DEFAULT_TZ;
+  // This feed's milk at the breast and top-ups (the whole feed: a side started again within 10 minutes is the same one).
+  const given = useMemo(() => {
+    if (!entries) return [];
+    return nursingRuns(entries, clock()).find((r) => r.entries.some((e) => e.id === entry.id))?.topUps ?? [];
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `clock` is the server-corrected now; the log decides it.
+  }, [entries, entry.id]);
+  // The newest milk given at the breast: how it went in and how much, for the next one's form.
+  const last = useMemo(() => entries?.find((e): e is EntryOf<"feed"> => e.kind === "feed" && e.data.method === "bottle" && !!atBreastOf(e.data)) ?? null, [entries]);
+
+  if (!controls && !shield && !given.length) return null;
+
+  const setShield = async (next: boolean) => {
+    if (busy.current) return;
+    busy.current = true;
+    setWant(next);
+    const save = (base: Entry) => update(base.id, { data: { shield: next ? true : null }, expect_updated_at: base.updated_at }, { toast: "", throwOnError: true });
+    try {
+      try {
+        await save(entry);
+      } catch (err) {
+        // Changed since this phone's copy (a tap of its own, the other phone): the shield is its own field, so once more on the feed as it is now.
+        const latest = err instanceof ApiError && err.status === 409 ? (err.body as { entry?: Entry } | null)?.entry : undefined;
+        if (!latest || latest.id !== entry.id || latest.kind !== "feed") throw err;
+        if (!!latest.data.shield === next) return;
+        await save(latest);
+      }
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) toast("The feed just changed on another phone, so the shield wasn't saved. Tap it again.", { tone: "info" });
+      else if (err instanceof ApiError) toast(err.status < 500 ? err.message : "The shield wasn't saved. Try again in a moment.", { tone: "error" });
+      else toast("You're offline, so the shield wasn't saved. Try again when you're back online.", { tone: "error" });
+    } finally {
+      busy.current = false;
+      setWant(null);
+    }
+  };
+
+  const via = (last && atBreastOf(last.data)) ?? "syringe";
+  const addMilk = () =>
+    open({
+      kind: "feed",
+      preset: {
+        method: "bottle",
+        via,
+        ...(last?.data.amount_ml != null ? { amount_ml: last.data.amount_ml } : {}),
+        ...(last?.data.milk ? { milk: last.data.milk } : {}),
+        top_up_of: entry.id,
+      },
+    });
+  const atBreast = given.filter((b) => atBreastOf(b.data));
+
+  return (
+    <div role="group" aria-label="With this feed" className={cx("-mb-1.5 flex flex-wrap items-center gap-x-2", compact ? "mt-0.5" : "mt-1")}>
+      {controls ? (
+        <button type="button" disabled={disabled} aria-pressed={shield} aria-label="Nipple shield" onClick={() => void setShield(!shield)} className={CHIP_HIT}>
+          <span className={cx(CHIP, shield ? "bg-mp-surface text-mp-accent-fg ring-[1.5px] ring-mp-accent-fg/70 ring-inset" : "bg-mp-sunken text-mp-ink-2")}>
+            {shield && <Icon name="check" size={14} strokeWidth={2.4} />}
+            Shield
+          </span>
+        </button>
+      ) : (
+        shield && (
+          <span className={cx(CHIP, "my-1.5 bg-mp-sunken text-mp-ink-2")}>
+            <Icon name="check" size={14} strokeWidth={2.4} />
+            Shield
+          </span>
+        )
+      )}
+      {given.map((b) => {
+        // "20 ml in the SNS", "Milk in the syringe", "30 ml top-up": the row's words for it, without the "+".
+        const part = feedPartWords(b, units).slice(2);
+        const words = part.charAt(0).toUpperCase() + part.slice(1);
+        const more = [milkWords(b.data, units), b.data.via === "paced" ? "paced bottle" : null].filter(Boolean).join(" · ");
+        return (
+          <button
+            key={b.id}
+            type="button"
+            onClick={() => open({ kind: "feed", entry: b })}
+            aria-label={`${controls && b.id > 0 ? "Edit: " : ""}${words}${more ? ` · ${more}` : ""}, at ${formatTime(b.started_at, tz)}`}
+            className={CHIP_HIT}
+          >
+            <span className={cx(CHIP, "bg-mp-sunken text-mp-ink")}>
+              {words}
+              {controls && <Icon name="chevron-right" size={13} className="-mr-1 text-mp-ink-3" />}
+            </span>
+          </button>
+        );
+      })}
+      {controls && !atBreast.length && (
+        <button type="button" disabled={disabled} onClick={addMilk} className={CHIP_HIT}>
+          <span className={cx(CHIP, "bg-mp-sunken text-mp-ink-2")}>
+            <Icon name="plus" size={14} strokeWidth={2.2} />
+            Milk at the breast
+          </span>
+        </button>
+      )}
+    </div>
   );
 }
 

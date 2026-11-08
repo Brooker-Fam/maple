@@ -3,12 +3,13 @@
  * the app's lists, the MCP tools' replies, and the CSV export so every surface
  * words things the same way.
  */
-import { feedMinutes, minutesShort } from "./feed";
+import { bottleAmount, feedMinutes, minutesShort } from "./feed";
+import { AT_BREAST_WORDS, type AtBreastVia } from "./feeding-plan";
 import { JAUNDICE_LABEL, STOOL_COLOR_INFO } from "./guidelines";
 import { milestoneLabel, NEUTRAL_MILESTONE_WORDS, type MilestoneWords } from "./milestones";
 import { formatDuration } from "./time";
 import { formatLength, formatTemp, formatVolume, formatWeight } from "./units";
-import type { Entry, EntryKind, FeedData, UnitSystem } from "./types";
+import type { Entry, EntryKind, EntryOf, FeedData, UnitSystem } from "./types";
 
 export const KIND_LABELS: Record<EntryKind, string> = {
   feed: "Feed",
@@ -80,6 +81,36 @@ export function milkWords(d: FeedData, units: UnitSystem = "us"): string | null 
   return parts.length === 2 ? parts.join(" + ") : parts.length ? `mixed, ${parts[0]}` : "mixed";
 }
 
+/** Milk given at the breast while she nursed (an SNS or a syringe), or null for a bottle given as one. */
+export function atBreastOf(d: FeedData): AtBreastVia | null {
+  return d.via === "sns" || d.via === "syringe" ? d.via : null;
+}
+
+/**
+ * A feed's part, the way its nursing row shows it: milk at the breast ("+ 20 ml
+ * in the SNS", "+ milk in the syringe" with no amount said) or a top-up by
+ * bottle ("+ 30 ml top-up", "+ top-up").
+ */
+export function feedPartWords(b: EntryOf<"feed">, units: UnitSystem = "us"): string {
+  const ml = bottleAmount(b.data);
+  const vol = ml != null ? formatVolume(ml, units) : null;
+  const at = atBreastOf(b.data);
+  if (at) return `+ ${vol ?? "milk"} ${AT_BREAST_WORDS[at].inThe}`;
+  return vol ? `+ ${vol} top-up` : "+ top-up";
+}
+
+/** Several parts in one line (a cluster's): one part's own words, else "+ 60 ml in 2 top-ups" ("+ 2 top-ups" with no amounts said). */
+export function feedPartsSummary(parts: readonly EntryOf<"feed">[], units: UnitSystem = "us"): string | null {
+  if (!parts.length) return null;
+  if (parts.length === 1) return feedPartWords(parts[0], units);
+  let ml: number | null = null;
+  for (const b of parts) {
+    const a = bottleAmount(b.data);
+    if (a != null) ml = (ml ?? 0) + a;
+  }
+  return ml != null ? `+ ${formatVolume(ml, units)} in ${parts.length} top-ups` : `+ ${parts.length} top-ups`;
+}
+
 function durationOf(e: Entry, now: Date): number | null {
   if (!e.ended_at && !e.active) return null;
   const end = e.ended_at ? Date.parse(e.ended_at) : now.getTime();
@@ -92,7 +123,9 @@ function durationOf(e: Entry, now: Date): number | null {
  * isn't happening "now": it reads "Nursing timer · L 12m, R 5m", its minutes
  * counted to when it was removed (its updated_at), not on to the present.
  * `topUp`: a bottle given with a nursing feed (feed.ts topUpIds), which reads
- * "Top-up": part of that feed, not a feed of its own.
+ * as part of that feed, not a feed of its own: "Top-up", or for milk given at
+ * the breast while she nursed, "SNS at the breast" / "Syringe at the breast".
+ * A nursing feed with a nipple shield says so ("shield").
  */
 export function describeEntry(
   e: Entry,
@@ -108,14 +141,17 @@ export function describeEntry(
   switch (e.kind) {
     case "feed": {
       if (e.data.method === "bottle") {
-        // "Top-up · 35 ml · breast milk · paced bottle", "SNS · 30 ml · formula", "Syringe · 30 ml", "Bottle · 50 ml · 30 ml breast milk + 20 ml formula".
+        // "Top-up · 35 ml · breast milk · paced bottle", "SNS · 30 ml · formula", "Syringe · 30 ml", "Bottle · 50 ml · 30 ml
+        // breast milk + 20 ml formula". Milk given at the breast with a feed is part of that nursing: "Syringe at the
+        // breast · 20 ml · formula", never a separate bottle.
         const via = e.data.via;
-        title = opts.topUp ? "Top-up" : via === "sns" ? "SNS" : via === "syringe" ? "Syringe" : "Bottle";
+        const atBreast = atBreastOf(e.data);
+        title = atBreast ? `${AT_BREAST_WORDS[atBreast].name}${opts.topUp ? " at the breast" : ""}` : opts.topUp ? "Top-up" : "Bottle";
         if (e.data.amount_ml != null) bits.push(formatVolume(e.data.amount_ml, units));
         const milk = milkWords(e.data, units);
         if (milk) bits.push(milk);
-        const how =
-          via === "paced" ? "paced bottle" : via === "sns" && title !== "SNS" ? "SNS" : via === "syringe" && title !== "Syringe" ? "syringe" : via === "bottle" && title !== "Bottle" ? "bottle" : null;
+        // The title already names milk given at the breast.
+        const how = via === "paced" ? "paced bottle" : via === "bottle" && title !== "Bottle" ? "bottle" : null;
         if (how) bits.push(how);
       } else {
         title = live ? "Nursing now" : stopped ? "Nursing timer" : "Nursed";
@@ -135,6 +171,7 @@ export function describeEntry(
           if (sides.length) bits.push(sides.join(", "));
           if (started) bits.push(started);
         }
+        if (e.data.shield) bits.push("shield");
       }
       break;
     }
