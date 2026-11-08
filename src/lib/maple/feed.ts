@@ -162,10 +162,21 @@ export const TOP_UP_AFTER_MS = 30 * MIN;
 /**
  * A bottle that names its feed (data.top_up_of: the feeding plan's top-up,
  * given late) is that feed's top-up up to this long after it ended, unless
- * another feed began first.
+ * another feed began first. Milk given at the breast (a syringe or an SNS),
+ * logged late, goes with the feed before it on the same terms: it's only
+ * ever given while she nurses.
  */
 export const TOP_UP_LINK_MS = 3 * HOUR;
 export const TOP_UP_BEFORE_MS = SAME_FEED_MS;
+/**
+ * A bottle that carries a feeding plan's feed (data.plan) given less than
+ * this after the last bottle of a feed that began with a bottle of the same
+ * plan feed, with no nursing between, is more of that feed (the plan's
+ * pumped milk, then formula to finish): not a feed of its own, and "Last fed"
+ * stays at its first bottle. Bottles without a plan feed are each a feed, as
+ * they always were.
+ */
+export const SAME_BOTTLE_FEED_MS = 45 * MIN;
 
 export const other = (s: Side): Side => (s === "L" ? "R" : "L");
 
@@ -1383,8 +1394,10 @@ export function suggestNextSide(last: FeedData | null | undefined): Side | null 
 // of taps read the same: an evening tapped Pause / Back on and the same
 // evening tapped Done / a side again give the same feeds, the same cluster
 // and the same "Last fed". A bottle given with nursing is that feed's top-up
-// (TOP_UP_AFTER_MS, TOP_UP_BEFORE_MS): part of it, never a feed of its own,
-// and never part of a cluster on its own. Any other bottle is a feed.
+// (TOP_UP_AFTER_MS, TOP_UP_BEFORE_MS; milk at the breast logged late, up to
+// TOP_UP_LINK_MS): part of it, never a feed of its own, and never part of a
+// cluster on its own. A feeding plan's second bottle of a bottle feed is more
+// of that feed (SAME_BOTTLE_FEED_MS). Any other bottle is a feed.
 
 /** One stretch toward a run: a part of a timed feed, or a whole feed logged by minutes (side null). */
 type RunPart = { entry: EntryOf<"feed">; side: StretchSide | null; start: number; end: number | null; first: boolean };
@@ -1605,7 +1618,7 @@ export function nursingRuns(entries: readonly Entry[], now: Date): NursingRun[] 
   flush();
   // Top-ups: each bottle given with a feed rides along with it.
   const bottles = entries.filter(isBottleFeed).sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at) || a.id - b.id);
-  for (const b of bottles) topUpRunFor(runs, Date.parse(b.started_at), now, b.data.top_up_of)?.topUps.push(b);
+  for (const b of bottles) topUpRunFor(runs, Date.parse(b.started_at), now, b.data.top_up_of, b.data.via)?.topUps.push(b);
   return runs;
 }
 
@@ -1617,9 +1630,12 @@ export function nursingRuns(entries: readonly Entry[], now: Date): NursingRun[] 
  * `now`. The bottle form asks it before saving, so it says how a bottle will
  * count. `link` (data.top_up_of, a nursing entry's id): the feed it names, if
  * the bottle came after it began, under TOP_UP_LINK_MS after it ended, and
- * before the next feed; else the time rule.
+ * before the next feed; else the time rule. `via` (data.via): milk given at
+ * the breast (a syringe or an SNS) is only ever given while she nurses, so
+ * one the time rule leaves alone, logged late, is the latest feed's that
+ * began before it, if that feed ended under TOP_UP_LINK_MS before it.
  */
-export function topUpRunFor(runs: readonly NursingRun[], at: number, now: Date, link?: number | null): NursingRun | null {
+export function topUpRunFor(runs: readonly NursingRun[], at: number, now: Date, link?: number | null, via?: FeedData["via"] | null): NursingRun | null {
   if (!Number.isFinite(at)) return null;
   if (link != null) {
     const i = runs.findIndex((r) => r.entries.some((e) => e.id === link));
@@ -1628,12 +1644,18 @@ export function topUpRunFor(runs: readonly NursingRun[], at: number, now: Date, 
     if (r && at >= r.start && (r.end === null || at - r.end <= TOP_UP_LINK_MS) && (!next || next.start > at)) return r;
   }
   let after: NursingRun | null = null;
+  let began: NursingRun | null = null;
   for (const r of runs) {
     if (at >= r.start && at <= (r.end ?? now.getTime())) return r;
     if (r.end !== null && at > r.end && at - r.end < TOP_UP_AFTER_MS) after = r;
+    if (r.start <= at) began = r;
   }
   if (after) return after;
-  return runs.find((r) => r.start > at && r.start - at < TOP_UP_BEFORE_MS) ?? null;
+  const before = runs.find((r) => r.start > at && r.start - at < TOP_UP_BEFORE_MS);
+  if (before) return before;
+  // Milk at the breast logged late (the latest feed that began before it is the one with no feed between).
+  if ((via === "syringe" || via === "sns") && began && began.end !== null && at - began.end <= TOP_UP_LINK_MS) return began;
+  return null;
 }
 
 /** The ids of every bottle that is a feed's top-up. */
@@ -1678,20 +1700,62 @@ export function milkSplit(d: FeedData): { formula: number; breastmilk: number } 
 
 /**
  * Every feed as the family counts them, oldest first by when each began: a
- * nursing feed (a run, its top-ups with it) or a bottle given on its own. What
- * the day's feed count, the usual gap, the recaps and Claude's summaries count.
- * Pass `runs` when you already have them (worked out from these entries).
+ * nursing feed (a run, its top-ups with it) or a bottle given on its own (with
+ * `more`: a feeding plan's later bottles of the same feed, SAME_BOTTLE_FEED_MS).
+ * What the day's feed count, the usual gap, the recaps and Claude's summaries
+ * count. Pass `runs` when you already have them (worked out from these entries).
  */
-export type CountedFeed = { start: number; run: NursingRun; bottle: null } | { start: number; run: null; bottle: EntryOf<"feed"> };
+export type CountedFeed =
+  | { start: number; run: NursingRun; bottle: null }
+  | { start: number; run: null; bottle: EntryOf<"feed">; more: EntryOf<"feed">[] };
 
-export function countedFeeds(entries: readonly Entry[], now: Date, runs: readonly NursingRun[] = nursingRuns(entries, now)): CountedFeed[] {
+type BottleFeed = { start: number; bottle: EntryOf<"feed">; more: EntryOf<"feed">[] };
+
+/**
+ * Bottles given on their own (not top-ups), oldest first, as feeds: each is
+ * a feed, except a bottle carrying a feeding plan's feed (data.plan) given
+ * under SAME_BOTTLE_FEED_MS after the last bottle of a feed that began with a
+ * bottle of that plan feed, with no nursing since it began: that's more of it.
+ */
+function bottleFeeds(entries: readonly Entry[], runs: readonly NursingRun[]): BottleFeed[] {
   const topUp = topUpIds(runs);
-  const out: CountedFeed[] = runs.map((run) => ({ start: run.start, run, bottle: null }));
+  const bottles: { e: EntryOf<"feed">; at: number }[] = [];
   for (const e of entries) {
     if (!isBottleFeed(e) || topUp.has(e.id)) continue;
-    const start = Date.parse(e.started_at);
-    if (!Number.isNaN(start)) out.push({ start, run: null, bottle: e });
+    const at = Date.parse(e.started_at);
+    if (!Number.isNaN(at)) bottles.push({ e, at });
   }
+  bottles.sort((a, b) => a.at - b.at);
+  const out: BottleFeed[] = [];
+  for (const { e, at } of bottles) {
+    const prev = out[out.length - 1];
+    if (prev && e.data.plan && prev.bottle.data.plan === e.data.plan) {
+      const lastAt = prev.more.length ? Date.parse(prev.more[prev.more.length - 1].started_at) : prev.start;
+      const nursed = runs.some((r) => r.start >= prev.start && r.start <= at);
+      if (at - lastAt < SAME_BOTTLE_FEED_MS && !nursed) {
+        prev.more.push(e);
+        continue;
+      }
+    }
+    out.push({ start: at, bottle: e, more: [] });
+  }
+  return out;
+}
+
+/**
+ * The ids of every bottle that is more of a bottle feed begun before it (a
+ * feeding plan's formula to finish, SAME_BOTTLE_FEED_MS): its milk counts,
+ * but it's not a feed of its own, as a top-up isn't (topUpIds).
+ */
+export function sameFeedBottleIds(entries: readonly Entry[], now: Date, runs: readonly NursingRun[] = nursingRuns(entries, now)): Set<number> {
+  const out = new Set<number>();
+  for (const f of bottleFeeds(entries, runs)) for (const b of f.more) out.add(b.id);
+  return out;
+}
+
+export function countedFeeds(entries: readonly Entry[], now: Date, runs: readonly NursingRun[] = nursingRuns(entries, now)): CountedFeed[] {
+  const out: CountedFeed[] = runs.map((run) => ({ start: run.start, run, bottle: null }));
+  for (const f of bottleFeeds(entries, runs)) out.push({ start: f.start, run: null, bottle: f.bottle, more: f.more });
   return out.sort((a, b) => a.start - b.start);
 }
 
@@ -1759,15 +1823,16 @@ export type LastFed = {
 /**
  * Her last feed by the 10-minute rule (or a bottle on its own), and the
  * moment "Last fed" counts from: whichever of the last run's anchor
- * (runAnchor) and the last bottle's start is later. A top-up is part of its
- * feed, so it never moves "Last fed". Feed-gap checks use the same moment, so
- * the warning and the big number agree. Pass `runs` when you already have them.
+ * (runAnchor) and the last bottle feed's start is later. A top-up is part of
+ * its feed, and a feeding plan's second bottle is part of its bottle feed
+ * (SAME_BOTTLE_FEED_MS), so neither moves "Last fed". Feed-gap checks use the
+ * same moment, so the warning and the big number agree. Pass `runs` when you
+ * already have them.
  */
 export function lastFedAnchor(entries: readonly Entry[], now: Date, runs: readonly NursingRun[] = nursingRuns(entries, now)): LastFed | null {
   const run = runs[runs.length - 1] ?? null;
-  const topUp = topUpIds(runs);
   let bottle: EntryOf<"feed"> | null = null;
-  for (const e of entries) if (isBottleFeed(e) && !topUp.has(e.id) && (!bottle || Date.parse(e.started_at) > Date.parse(bottle.started_at))) bottle = e;
+  for (const f of bottleFeeds(entries, runs)) if (!bottle || f.start > Date.parse(bottle.started_at)) bottle = f.bottle;
   const a = run ? runAnchor(run) : null;
   const b = bottle ? Date.parse(bottle.started_at) : null;
   if (bottle && b !== null && (!a || b > a.at)) {
@@ -2006,7 +2071,7 @@ export function clusterLine(c: FeedCluster, tz: string = DEFAULT_TZ): string {
 
 /** How Maple's Log counts feeds (product rules, not guidance): the Cluster feeding sheet's last lines. */
 export const FEED_COUNT_RULE =
-  "Off the breast for under 10 minutes is the same feed, whether Pause or Done was tapped. Three or more feeds, each starting less than 30 minutes after the last one ended, make a cluster, and each feed in it counts. A bottle given during a feed, under 10 minutes before it, or less than 30 minutes after it ended is that feed's top-up: part of it, not a feed of its own.";
+  "Off the breast for under 10 minutes is the same feed, whether Pause or Done was tapped. Three or more feeds, each starting less than 30 minutes after the last one ended, make a cluster, and each feed in it counts. A bottle given during a feed, under 10 minutes before it, or less than 30 minutes after it ended is that feed's top-up: part of it, not a feed of its own. Milk given at the breast, in a syringe or an SNS, is always part of the nursing it went with, even logged up to 3 hours after that feed ended.";
 /** Last fed's info line, when a feed can count from 40 minutes before it ended. */
 export const lastFedRule = (vo: Voice) =>
   `Counted from when ${vo.their} last feed began. A long back-and-forth stretch counts from 40 minutes before ${vo.they} finished, or from when ${vo.they} went on ${vo.their} last side if that side alone ran longer.`;
