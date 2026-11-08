@@ -765,6 +765,136 @@ async function main() {
       ok(!started.error && /timer started on the left at .*\(That's the side the feeding plan's next feed, "Left, pump the right", nurses on\.\)/.test(started.text), started.text);
       eq((await tool(alpha.member, A, "stop_timer", { timer: "nursing" })).error, false, "stopped");
     });
+
+    await test(`${shape}: plans other families bring home: when hungry at night, turns by the clock, offering the breast, up to and at least, a spoon, feeds in 24 hours and long notes, read back, saved, given back as set_feeding_plan takes them and sent back as read`, async () => {
+      // Invented: on demand by day, at least every 3 hours, waking her; at night (9 PM to 5 AM) when she's hungry, a
+      // partner's bottle until 1 AM, then practice at the breast before a paced bottle; a spoon top-up by day; at least 8
+      // feeds and 450 to 550 ml in 24 hours; a sheet's notes section longer than an older release reads.
+      const notes = [
+        "Signs of enough milk: 6 or more wet diapers a day by day 5, and yellow stools by day 4.",
+        "Store pumped milk in the fridge up to 4 days, or the freezer up to 6 months.",
+        "Warm milk in a bowl of warm water, never the microwave.",
+        "Hold her upright for 15 minutes after each feed.",
+        "Bring the log to the weight check.",
+        "Call the clinic with questions about the plan on weekdays, or the after-hours line at night.",
+      ].join(" ");
+      const OTHERS = {
+        from: "Feeding clinic",
+        day: { every: 180, on_demand: true, wake: true },
+        night: { from: "9 PM", to: "5 AM", on_demand: true, order: ["Partner's bottle", "Practice, then bottle"], starts: ["21:00", "1 AM"] },
+        feeds: [
+          { name: "Practice, then bottle", steps: [{ do: "nurse", minutes: { max: 10 }, if_needed: true }, { do: "bottle", ml: { min: 60 }, milk: "breastmilk", via: "paced" }, { do: "pump", minutes: 15, up_to: true }] },
+          { name: "Partner's bottle", steps: [{ do: "bottle", ml: 90, up_to: true, milk: "formula" }] },
+          { name: "Nurse, spoon top-up", steps: [{ do: "nurse", each_side: true }, { do: "bottle", ml: [10, 15], milk: "breastmilk", by: "spoon" }] },
+        ],
+        order: ["Practice, then bottle", "Nurse, spoon top-up"],
+        per_day: { feeds: { min: 8 }, ml: [450, 550] },
+        notes,
+      };
+      const base_rev = feedingPlanOf(await settings(A))!.rev;
+      const rb = await tool(alpha.owner, A, "set_feeding_plan", { plan: OTHERS, base_rev });
+      ok(!rb.error && rb.json.confirm_needed === true, rb.text);
+      for (const line of [
+        "Day: on demand, at least every 3 hours, waking her if she's asleep, taking turns: Practice, then bottle, then Nurse, spoon top-up, then start again",
+        "• Practice, then bottle: Offer the breast up to 10 min; then bottle at least 60 ml, breast milk, paced bottle; then pump up to 15 min",
+        "• Partner's bottle: Bottle up to 90 ml, formula",
+        "• Nurse, spoon top-up: Nurse on each side; then top up 10–15 ml by spoon, breast milk",
+        "Night (9 PM–5 AM): when hungry, by the clock: Partner's bottle from 9 PM, then Practice, then bottle from 1 AM",
+        "At least 8 feeds in 24 hours",
+        "450–550 ml in 24 hours",
+        `Notes: ${notes}`,
+      ]) {
+        ok(rb.text.split("\n").includes(line), `reads back "${line}": ${rb.text}`);
+      }
+      const saved = await tool(alpha.owner, A, "set_feeding_plan", { plan: OTHERS, base_rev, confirmed: true, read_back: rb.json.read_back });
+      ok(saved.json.saved === true, saved.text);
+      // Stored as the plan's own keys: the one number with its flag, on_demand on its own at night, the starts beside the
+      // turns, the milk in ml, and the notes as an older release reads them (their start) with the whole of them beside.
+      const raw = (await settings(A)).feeding_plan as Record<string, unknown>;
+      ok(typeof raw.notes === "string" && raw.notes.length <= 300 && raw.notes.endsWith("…") && raw.notes_full === notes, `stored notes: ${JSON.stringify([raw.notes, raw.notes_full])}`);
+      const stored = feedingPlanOf(await settings(A))!;
+      const [practice, partner, spoon] = stored.feeds;
+      eq(
+        [stored.day, stored.night, practice.steps, partner.steps, spoon.steps[1], stored.per_day],
+        [
+          { every: { min: 180, max: 180 }, on_demand: true, wake: true },
+          { from: "21:00", to: "05:00", on_demand: true, feed: partner.id, order: [partner.id, practice.id], starts: ["21:00", "01:00"] },
+          [
+            { do: "nurse", minutes: { min: 10, max: 10 }, up_to: true, if_needed: true },
+            { do: "bottle", ml: { min: 60, max: 60 }, at_least: true, milk: "breastmilk", via: "paced" },
+            { do: "pump", minutes: { min: 15, max: 15 }, up_to: true },
+          ],
+          [{ do: "bottle", ml: { min: 90, max: 90 }, up_to: true, milk: "formula" }],
+          { do: "bottle", ml: { min: 10, max: 15 }, milk: "breastmilk", by: "spoon" },
+          { feeds: { min: 8 }, ml: { min: 450, max: 550 } },
+        ],
+        "stored as the plan's own keys"
+      );
+      // In set_feeding_plan's shape: each option as it's sent; sent back, nothing changes.
+      const read = await tool(alpha.owner, A, "feeding_plan");
+      const p = read.json.plan as { day: unknown; night: unknown; feeds: { steps: unknown[] }[]; per_day: unknown; notes: unknown };
+      eq(
+        [p.day, p.night, p.feeds[0].steps, p.feeds[1].steps, p.feeds[2].steps[1], p.per_day, p.notes],
+        [
+          { every: { max: 180 }, wake: true },
+          { from: "21:00", to: "05:00", on_demand: true, order: [partner.id, practice.id], starts: ["21:00", "01:00"] },
+          [
+            { do: "nurse", minutes: 10, up_to: true, if_needed: true },
+            { do: "bottle", ml: 60, at_least: true, milk: "breastmilk", via: "paced" },
+            { do: "pump", minutes: 15, up_to: true },
+          ],
+          [{ do: "bottle", ml: 90, up_to: true, milk: "formula" }],
+          { do: "bottle", ml: [10, 15], milk: "breastmilk", by: "spoon" },
+          { feeds: { min: 8 }, ml: [450, 550] },
+          notes,
+        ],
+        "the plan as set_feeding_plan takes it"
+      );
+      const same = await tool(alpha.owner, A, "set_feeding_plan", { plan: p, target: read.json.target, base_rev: read.json.rev });
+      ok(same.json.unchanged === true, `sent back as read: ${same.text}`);
+      // The plan's next feed still rides maple_status, the chat's lines and Siri, whatever the engine makes of it.
+      const status = await tool(alpha.member, A, "maple_status");
+      ok(!status.error && /Feeding plan/.test(status.text), status.text);
+      ok((await chatLogState({ email: alpha.member }, { fam: A, care: true, now: new Date() })).some((l) => l.startsWith("Feeding plan")), "the chat's [App] line");
+    });
+
+    await test(`${shape}: what the plan can't take comes back in its own words, the way out with it, never the schema's; names in any script`, async () => {
+      const rev = feedingPlanOf(await settings(A))!.rev;
+      const refused = async (plan: unknown) => {
+        const r = await tool(alpha.owner, A, "set_feeding_plan", { plan, base_rev: rev });
+        ok(r.error, r.text);
+        return r.text.replace(/\. Nothing was saved[\s\S]*$/, "");
+      };
+      const notesAll = [{ do: "nurse" }, ...Array.from({ length: 12 }, (_, i) => ({ do: "note", text: `Line ${i + 1}` }))];
+      eq(
+        [
+          await refused({ feeds: [{ name: "Triple feed", steps: notesAll }] }),
+          await refused({ feeds: Array.from({ length: 9 }, (_, i) => ({ name: `Feed ${i + 1}`, steps: [{ do: "nurse" }] })) }),
+          await refused({ feeds: [{ name: "A", steps: [{ do: "nurse" }] }], night: { from: "21:00", to: "05:00", on_demand: true, wake: true } }),
+          await refused({ feeds: [{ name: "A", steps: [{ do: "nurse" }] }], night: { from: "7:00", to: "7:00" } }),
+          await refused({ feeds: [{ name: "A", steps: [{ do: "bottle", ml: [60, 90], up_to: true }] }] }),
+          await refused({ feeds: [{ name: "A", steps: [{ do: "nurse" }] }], per_day: { feeds: { least: 8 } } }),
+        ],
+        [
+          '"Triple feed" has 8 steps at most: notes count as steps, so put its notes together, or in the plan\'s notes',
+          "A feeding plan has 6 feeds at most",
+          "Night's wake to feed needs a time between feeds, and when hungry has none: leave wake out, or give the night its own time between feeds",
+          "Night would start and end at 7 AM: check AM and PM (7 PM is 19:00)",
+          '"A" step 1: up to is one number (the most milk), not a range',
+          "Feeds in 24 hours needs a number: at least ({min}), up to ({max}), or both",
+        ]
+      );
+      eq(feedingPlanOf(await settings(A))?.rev, rev, "nothing saved");
+      // Feeds named in another script are told apart, and a name that isn't in the plan names nothing.
+      const ru = { feeds: [{ name: "Грудь", steps: [{ do: "nurse", each_side: true }] }, { name: "Бутылочка", steps: [{ do: "bottle", ml: [60, 90], milk: "formula" }] }] };
+      ok((await save(alpha.owner, A, { plan: ru, base_rev: rev })).json.saved === true, "two feeds named in Cyrillic save");
+      const wrong = await tool(alpha.member, A, "start_timer", { timer: "nursing", plan: "Сцеживание" });
+      ok(wrong.error && /^"Сцеживание" isn't a feed in the feeding plan\. Its feeds: "Грудь", "Бутылочка"\./.test(wrong.text), wrong.text);
+      const right = await tool(alpha.member, A, "start_timer", { timer: "nursing", plan: "грудь" });
+      ok(!right.error && /for the feeding plan's "Грудь"/.test(right.text), right.text);
+      eq((await sql(`SELECT data FROM maple_entries WHERE id = $1`, [Number(right.json.id)]))[0].data.plan, feedingPlanOf(await settings(A))!.feeds[0].id, "tagged with its own feed");
+      eq((await tool(alpha.member, A, "stop_timer", { timer: "nursing" })).error, false, "stopped");
+    });
   }
 
   done("feeding-plan-tools");
