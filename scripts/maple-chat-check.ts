@@ -278,27 +278,38 @@ check("the feeding plan in the instructions: build it only from what's written, 
   ok(mcp.includes("maple_status's feeding_plan") && !mcp.includes("[App] lines' Feeding plan line"), "a connector reads maple_status's");
   ok(chat.includes("the [App] lines' Feeding plan line"), "the chat reads its [App] line");
   ok(CHAT_ADDENDUM.includes("the feeding plan's next feed when the family has saved one"), "the [App] lines say they carry it");
-  // Shorthand that could mean two things is asked about; her own medicines and health stay out of the plan; doing
-  // another of its feeds changes nothing; a phone's card may show its own pick; a late part names its feed.
+  // Shorthand that could mean two things is asked about (a time by the clock or start to start too); the care person's
+  // own medicines and health stay out of the plan; doing another of its feeds changes nothing; a phone's card may show
+  // its own pick; a late part names its feed; the last 24 hours are context; a cup, spoon or finger feed logs as a bottle.
   for (const want of [
-    "Shorthand is the family's or their consultant's (s&s, EBM, q3h): when it could mean two things (s&s: a shield and syringe, or an SNS), ask; never pick.",
-    "the supplements she takes herself and her health (everyone in the family reads the plan;",
+    "Shorthand is the family's or their consultant's (s&s, EBM, q3h): when it could mean two things (s&s: a shield and syringe, or an SNS; q3h or 8-11-2-5: by the clock, or start to start as the plan counts), ask; never pick.",
     "Read its read-back to them as it says (for a change, what changes)",
     "A phone's Today card may show a feed picked on that phone instead: when they say which one they're doing, go by that.",
     "Doing another of its feeds next changes nothing in the plan: start_timer with plan when it begins (log_feed with plan once it's over), and the turns go on from it.",
     "A top-up or milk at the breast given late for an earlier feed: log_feed with top_up_of",
+    "The feeds or milk logged in the last 24 hours beside the plan's are context: say them as they are, never as behind or short.",
+    "Milk the plan gives by cup, spoon or finger is logged as a bottle with no via.",
   ]) ok(mcp.includes(want) && chat.includes(want), `says "${want}"`);
   ok(chat.includes("the feed's [entry #…] in the Feeding plan line when it says a step wasn't logged") && mcp.includes("(feeding_plan's or maple_status's top_up_of)"), "where a late part's feed comes from");
-  // Her page, where the family has one: the chat sends them to the app (it can't add her medicines), a connector to add_mom_medicines.
+  // The care person's own health stays out of the plan, by name where the family has the page and never a pronoun (the
+  // app keeps none for them); her page, where there is one: the chat sends them to the app (it can't add her medicines),
+  // a connector to add_mom_medicines. With no page, the parents' own, never "their mom" or "she".
   const robin = toolCopy(2, { name: "June", nickname: null, sex: "female" }, "Robin", "America/New_York");
-  ok(mapleInstructions(robin, { entryNumbers: false, memories: "chat" }).includes("Leave out Robin's own medicines") && mapleInstructions(robin, { entryNumbers: false, memories: "chat" }).includes("put her medicines on her page instead (in the app)"), "the chat: her page in the app");
-  ok(mapleInstructions(robin).includes("put her medicines on her page instead (add_mom_medicines, after its own read-back)"), "a connector: add_mom_medicines");
-  ok(chat.includes("Leave out their mom's own medicines") && !chat.includes("put her medicines on her page instead"), "no page offered without one");
+  const robinChat = mapleInstructions(robin, { entryNumbers: false, memories: "chat" });
+  ok(
+    robinChat.includes("Leave out Robin's own medicines, the supplements Robin takes, and Robin's health (everyone in the family reads the plan; June's milk at the breast stays in it), and offer to put Robin's medicines on Robin's page instead (in the app)."),
+    "the chat: her page in the app"
+  );
+  ok(mapleInstructions(robin).includes("offer to put Robin's medicines on Robin's page instead (add_mom_medicines, after its own read-back)"), "a connector: add_mom_medicines");
+  ok(
+    chat.includes("Leave out the parents' own medicines, the supplements they take, and their health (everyone in the family reads the plan;") && !/medicines on \S+ page instead/.test(chat) && !/the supplements she takes/.test(chat),
+    "no page offered without one, and no mom assumed"
+  );
   const images = systemBlocks({ viewer: false, care: true, model: "zai/glm-5.3-flash", copy: FAMILY_ONE_COPY, images: true })[1].content as string;
   ok(/A photo of a feeding plan from their care team: build the plan from what's printed or written on it with set_feeding_plan/.test(images), "a photo of the plan sheet");
-  ok(images.includes("Leave out anything on it about their mom's own medicines, the supplements she takes herself or her health, and say you left it out: everyone in the family reads the plan."), "the photo leaves her own health out");
+  ok(images.includes("Leave out anything on it about the parents' own medicines, the supplements they take, or their health, and say you left it out: everyone in the family reads the plan."), "the photo leaves the parents' own health out");
   const robinImages = systemBlocks({ viewer: false, care: true, model: "zai/glm-5.3-flash", copy: robin, images: true })[1].content as string;
-  ok(robinImages.includes("about Robin's own medicines") && robinImages.includes("and her medicines go on her page in the app."), "with her page");
+  ok(robinImages.includes("about Robin's own medicines, the supplements Robin takes, or Robin's health") && robinImages.includes("and Robin's medicines go on Robin's page in the app."), "with her page");
   ok(!/[–—]/.test(CHAT_ADDENDUM) && !/[–—]/.test(images), "no dashes");
 });
 

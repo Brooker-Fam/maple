@@ -112,7 +112,8 @@ async function main() {
     const w = { now, tz, vo: FAMILY_ONE_VOICE };
     const going: Now = { ...base, focus: { ...short, state: "underway" }, after: { feed: plan.feeds[0], night: true }, missed: null, others: [] };
     const line = planNowLine(going, w);
-    ok(line.includes("So far: bottle up to 50–70 ml, breast milk first, then formula to finish (40 ml so far). Next: formula to finish, 10–30 ml more; then burp halfway."), line);
+    // Its note is a sentence of its own, in the family's capitals: never one more step after "then".
+    ok(line.includes("So far: bottle up to 50–70 ml, breast milk first, then formula to finish (40 ml so far). Next: formula to finish, 10–30 ml more. Burp halfway."), line);
     eq(planSpeak(going, w), "From the feeding plan: Pump + bottle is underway; still to do: formula to finish, 10 to 30 ml more (40 ml so far).", "Siri");
     // Left like that, the next feed's line says it, as a step the feed didn't finish.
     const after: Now = { ...base, missed: { view: short, steps: short.steps.filter((s) => s.status === "todo") } };
@@ -209,6 +210,216 @@ async function main() {
     eq(owedPart(plain, [fed], T(5, 10, 0), { tz, target, atBreast: false, data: { method: "bottle", amount_ml: 30, via: "paced" } })?.id, (fed as { id: number }).id, "the late top-up");
     const milk = row("feed", T(5, 12, 0), null, { method: "bottle", amount_ml: 30, milk: "breastmilk", plan: plain.feeds[1].id });
     eq(ledBottle(plain, [fed, milk], T(5, 12, 10), { tz, target, data: { method: "bottle", amount_ml: 25, milk: "formula" } })?.part, "its formula to finish", "the bottle feed's formula to finish");
+  });
+
+  await test("plans other families bring home in the plan's line, maple_status's parts, feeding_plan and Siri: no time at night when hungry, the night's turn by the clock, the breast offered, at least, up to and by, notes as sentences", async () => {
+    // Invented plans. Where the reading itself is the engine's (no due at night when hungry, an at-least bottle still to do),
+    // it's built here as the engine's contract gives it, so these words are checked on their own.
+    type Entry = import("../../src/lib/maple/types").Entry;
+    type Now = import("../../src/lib/maple/feeding-plan").FeedPlanNow;
+    const { feedPlanNow } = await import("../../src/lib/maple/feeding-plan");
+    const { planNowLine, planSpeak } = await import("../../src/lib/maple/feeding-plan-mcp");
+    const { makeVoice } = await import("../../src/lib/maple/voice");
+    const { zonedTimeToUtc } = await import("../../src/lib/maple/time");
+    const tz = "America/Chicago";
+    const T = (d: number, h: number, m: number) => zonedTimeToUtc(2026, 11, d, h, m, tz);
+    const SHE = makeVoice({ name: "River", pronoun: "she" });
+    const THEY = makeVoice({ name: "Sky", pronoun: "they" });
+    const w = (at: Date, vo = SHE) => ({ now: at, tz, vo });
+    let next = 1200;
+    const row = (kind: string, a: Date, b: Date | null, data: Record<string, unknown>) =>
+      ({ id: next++, kind, started_at: a.toISOString(), ended_at: b?.toISOString() ?? null, active: false, note: null, created_by: null, updated_by: null, source: "web", created_at: a.toISOString(), updated_at: a.toISOString(), data }) as unknown as Entry;
+    const nursed = (a: Date, b: Date, plan?: string) => row("feed", a, b, { method: "breast", segments: [{ side: "L", start: a.toISOString(), end: b.toISOString() }], ...(plan ? { plan } : {}) });
+
+    // At night when hungry (night.on_demand, no every): never a time, whatever the reading gives at night; the day's due at its end.
+    const hungry = parseFeedingPlan(
+      { day: { every: [150, 180] }, night: { from: "21:00", to: "05:00", on_demand: true, feed: "Nurse + SNS" }, feeds: [{ name: "Nurse + SNS", steps: [{ do: "nurse", minutes: [12, 18], supplement: { via: "sns", ml: 20, milk: "formula" } }] }] },
+      null,
+      T(4, 12, 0)
+    );
+    const evening = nursed(T(4, 19, 30), T(4, 19, 50), hungry.feeds[0].id);
+    const at = T(5, 0, 30);
+    const read = feedPlanNow(hungry, [evening], at, { tz, target: null });
+    // As the engine's contract gives it at night: no due, the night's feed next.
+    const night: Now = { ...read, due: null, focus: { ...read.focus, state: "upcoming", night: true }, missed: null };
+    const want = 'Feeding plan: next is "Nurse + SNS": nurse 12–18 min, 20 ml of formula in the SNS. At night (to 5 AM), when she\'s hungry: no set time.';
+    eq(planNowLine(night, w(at)), want, "no due at night");
+    // A reading that still gives the night a due by the day's interval says no time either.
+    if (read.due?.night) eq(planNowLine({ ...read, missed: null }, w(at)), want, "a night due by the day's interval isn't said");
+    eq(planSpeak(night, w(at)), "Next from the feeding plan: Nurse + SNS, when she's hungry at night.", "Siri");
+    eq(planSpeak(night, w(at, THEY)), "Next from the feeding plan: Nurse + SNS, when they're hungry at night.", "Siri, in the family's pronoun");
+    // A feed underway in the evening, the night's next: no time for it.
+    const going: Now = { ...read, focus: { ...read.focus, state: "underway", night: false }, after: { feed: hungry.feeds[0], night: true }, due: null, missed: null };
+    ok(planNowLine(going, w(at)).endsWith('After it: "Nurse + SNS"; at night (to 5 AM), when she\'s hungry: no set time.'), planNowLine(going, w(at)));
+    // At the night's end the day's due comes back, as the reading gives it.
+    const morning = T(5, 5, 0);
+    const day: Now = { ...night, focus: { ...night.focus, night: false }, due: { from: morning.getTime(), to: morning.getTime(), status: "due", wake: false, night: false, base: T(4, 19, 30).getTime(), for: "focus" } };
+    ok(planNowLine(day, w(morning)).endsWith("Due now (5:00 AM)."), planNowLine(day, w(morning)));
+
+    // Turns by the clock: the night's feed says the hours of its turn.
+    const clock = parseFeedingPlan(
+      {
+        day: { every: [150, 180] },
+        night: { from: "22:00", to: "06:00", every: 180, order: ["Partner's bottle", "Nurse"], starts: ["22:00", "02:00"] },
+        feeds: [{ name: "Nurse", steps: [{ do: "nurse", each_side: true }] }, { name: "Partner's bottle", steps: [{ do: "bottle", ml: [60, 90], milk: "breastmilk", via: "paced" }] }],
+        order: ["Nurse"],
+      },
+      null,
+      T(4, 12, 0)
+    );
+    const nine = T(4, 21, 0);
+    const turn = feedPlanNow(clock, [nursed(T(4, 20, 0), T(4, 20, 25))], nine, { tz, target: null });
+    ok(planNowLine(turn, w(nine)).startsWith('Feeding plan: next is "Partner\'s bottle" (its turn by the clock, 10 PM to 2 AM): bottle 60–90 ml, breast milk, paced bottle.'), planNowLine(turn, w(nine)));
+
+    // The breast offered only if she wants it, then the bottle: the feed's bottle, never a top-up; once the bottle is given
+    // without it, the offer is no longer to come.
+    const practice = parseFeedingPlan(
+      { day: { every: 180 }, feeds: [{ name: "Practice, then bottle", steps: [{ do: "nurse", minutes: [5, 10], if_needed: true }, { do: "bottle", ml: 60, milk: "breastmilk", via: "paced" }, { do: "pump", minutes: 15 }] }] },
+      null,
+      T(4, 6, 0)
+    );
+    const p = practice.feeds[0].id;
+    const offered = T(4, 9, 8);
+    const tried = feedPlanNow(practice, [nursed(T(4, 9, 0), T(4, 9, 6), p)], offered, { tz, target: null });
+    ok(planNowLine(tried, w(offered)).includes("Done: offer the breast 5–10 min (6 min). Next: bottle 60 ml, breast milk, paced bottle; then pump 15 min."), planNowLine(tried, w(offered)));
+    eq(planSpeak(tried, w(offered)), "From the feeding plan: Practice, then bottle is underway; still to do: bottle 60 ml, breast milk, paced bottle, then pump 15 min.", "Siri");
+    const bottleFirst = feedPlanNow(practice, [row("feed", T(4, 9, 0), null, { method: "bottle", amount_ml: 60, milk: "breastmilk", via: "paced", plan: p })], offered, { tz, target: null });
+    eq(bottleFirst.focus.state, "underway", "the bottle begins the feed");
+    ok(planNowLine(bottleFirst, w(offered)).includes("Done: bottle 60 ml, breast milk, paced bottle (60 ml). Next: pump 15 min."), planNowLine(bottleFirst, w(offered)));
+    eq(planSpeak(bottleFirst, w(offered)), "From the feeding plan: Practice, then bottle is underway; still to do: pump 15 min.", "Siri: the offer's moment has gone");
+
+    // At least an amount, short of it (the engine's contract: such a bottle stays to do): what it still needs, at least.
+    const least = parseFeedingPlan(
+      { day: { every: 180 }, feeds: [{ name: "Bottle", steps: [{ do: "bottle", ml: 60, at_least: true, milk: "formula" }, { do: "note", text: "Hold him upright after." }] }, { name: "Cup feed", steps: [{ do: "bottle", ml: 30, at_least: true, milk: "breastmilk", by: "cup" }] }], order: ["Bottle", "Cup feed"] },
+      null,
+      T(4, 6, 0)
+    );
+    const nineTen = T(4, 9, 10);
+    const base = feedPlanNow(least, [row("feed", T(4, 9, 0), null, { method: "bottle", amount_ml: 40, milk: "formula", plan: least.feeds[0].id })], nineTen, { tz, target: null });
+    const short = (feed: number, given: number, need: number): Now => {
+      const f = least.feeds[feed];
+      const steps = f.steps.map((step, i) =>
+        step.do === "bottle"
+          ? { i, step, status: "todo", minutes: null, ml: given, need: { min: need, max: need }, milkMissing: false, entries: [] }
+          : { i, step, status: "info", minutes: null, ml: null, need: null, milkMissing: false, entries: [] }
+      );
+      const focus = { ...base.focus, feed: f, steps, state: "underway", done: false, start: T(4, 9, 0).getTime() } as unknown as Now["focus"];
+      return { ...base, focus, after: null, due: null, missed: null };
+    };
+    eq(
+      planNowLine(short(0, 40, 60), w(nineTen)),
+      'Feeding plan: "Bottle" is underway since 9:00 AM. So far: bottle at least 60 ml, formula (40 ml so far). Next: the rest of the bottle, at least 20 ml more. Hold him upright after.',
+      "at least, with its note as a sentence"
+    );
+    eq(planSpeak(short(0, 40, 60), w(nineTen)), "From the feeding plan: Bottle is underway; still to do: the rest of the bottle, at least 20 ml more (40 ml so far).", "Siri");
+    ok(planNowLine(short(1, 20, 30), w(nineTen)).includes("Next: the rest by cup, at least 10 ml more."), planNowLine(short(1, 20, 30), w(nineTen)));
+    // Half a ml under its amount has reached it (Siri's ounces stored as whole ml before they kept a tenth).
+    ok(!/So far|the rest/.test(planNowLine(short(0, 59.6, 60), w(nineTen))), planNowLine(short(0, 59.6, 60), w(nineTen)));
+
+    // A note left among the steps is a sentence of its own: never "then", never lowercased, never a doubled stop.
+    const spoon = parseFeedingPlan(
+      {
+        day: { every: [150, 210] },
+        feeds: [
+          { name: "Morning bottle", steps: [{ do: "bottle", ml: [60, 90], milk: "breastmilk", via: "paced" }, { do: "pump", minutes: 15 }, { do: "note", text: "Dad gives this one so the other parent can sleep" }] },
+          { name: "Nurse, spoon", steps: [{ do: "nurse", minutes: [10, 15], each_side: true }, { do: "bottle", ml: [10, 15], if_needed: true }, { do: "note", text: "Give it by spoon, not a bottle." }] },
+        ],
+        order: ["Morning bottle", "Nurse, spoon"],
+      },
+      null,
+      T(4, 5, 0)
+    );
+    const dad = feedPlanNow(spoon, [row("feed", T(4, 6, 30), null, { method: "bottle", amount_ml: 75, milk: "breastmilk", via: "paced", plan: spoon.feeds[0].id })], T(4, 6, 40), { tz, target: null });
+    ok(planNowLine(dad, w(T(4, 6, 40))).includes("Next: pump 15 min. Dad gives this one so the other parent can sleep. After it:"), planNowLine(dad, w(T(4, 6, 40))));
+    const nurse = feedPlanNow(spoon, [nursed(T(4, 7, 0), T(4, 7, 25), spoon.feeds[1].id)], T(4, 7, 30), { tz, target: null });
+    ok(planNowLine(nurse, w(T(4, 7, 30))).includes("Next: top up 10–15 ml if still hungry. Give it by spoon, not a bottle. After it:"), planNowLine(nurse, w(T(4, 7, 30))));
+  });
+
+  await test("an edit's read-back names what it changes in the newer options: feeds in 24 hours was and now, up to, at least, by, and the breast offered as the whole feed", async () => {
+    const { planChanges } = await import("../../src/lib/maple/feeding-plan-mcp");
+    const at = new Date("2026-11-04T18:00:00Z");
+    const words = { her: "her", sheIs: "she's" };
+    const edit = (from: ReturnType<typeof parseFeedingPlan>, input: Record<string, unknown>) => parseFeedingPlan({ ...input, base_rev: from.rev }, from, at);
+    const breastfeed = { name: "Breastfeed", steps: [{ do: "nurse", each_side: true }] };
+    const a = parseFeedingPlan({ day: { every: 180 }, feeds: [breastfeed], per_day: { feeds: { min: 8 } } }, null, at);
+    // Feeds in 24 hours pair with the saved plan's, part by part: was and now, never added and removed.
+    eq(planChanges(a, null, edit(a, { day: { every: 180 }, feeds: [breastfeed], per_day: { feeds: [8, 12] } }), null, words).lines, ["Was: At least 8 feeds in 24 hours", "Now: 8–12 feeds in 24 hours"], "a count in 24 hours");
+    eq(planChanges(a, null, edit(a, { day: { every: 180 }, feeds: [breastfeed], per_day: { feeds: { min: 8 }, ml: { min: 400 } } }), null, words).lines, ["Added: At least 400 ml in 24 hours"], "milk in 24 hours added");
+    // Up to, at least and by, part by part; a bottle after the breast offered is the feed's bottle, never a top-up.
+    const practice = (nurse: Record<string, unknown>, bottle: Record<string, unknown>, pump: Record<string, unknown> = { do: "pump", minutes: 15 }) => ({
+      day: { every: 180 },
+      feeds: [{ id: "f1", name: "Practice, then bottle", steps: [{ do: "nurse", minutes: [5, 10], if_needed: true, ...nurse }, { do: "bottle", ml: 60, milk: "breastmilk", ...bottle }, pump] }],
+    });
+    const b = parseFeedingPlan(practice({}, {}), null, at);
+    const id = b.feeds[0].id;
+    const withId = (input: ReturnType<typeof practice>) => ({ ...input, feeds: input.feeds.map((f) => ({ ...f, id })) });
+    eq(planChanges(b, null, edit(b, withId(practice({}, { ml: 75 }))), null, words).lines, ['Changed in "Practice, then bottle": bottle 75 ml (was 60 ml).'], "the feed's bottle, never its top-up");
+    eq(
+      planChanges(b, null, edit(b, withId(practice({}, { ml: 60, at_least: true, by: "cup" }, { do: "pump", minutes: 15, up_to: true }))), null, words).lines,
+      ['Changed in "Practice, then bottle": cup at least 60 ml (was 60 ml); given by cup (was by bottle); pump up to 15 min (was 15 min).'],
+      "at least, by cup and a pump's most, each with what it was"
+    );
+    // The breast no longer only offered: its words and the bottle's after it change, so the whole feed reads as it was and is.
+    eq(
+      planChanges(b, null, edit(b, withId(practice({ if_needed: undefined }, {}))), null, words).lines,
+      ["Was: Practice, then bottle: Offer the breast 5–10 min; then bottle 60 ml, breast milk; then pump 15 min", "Now: Practice, then bottle: Nurse 5–10 min; then top up 60 ml, breast milk; then pump 15 min"],
+      "the whole feed"
+    );
+    const nurse = parseFeedingPlan({ day: { every: 180 }, feeds: [{ name: "Nurse, top up", steps: [{ do: "nurse", minutes: 10, each_side: true }, { do: "bottle", ml: 30 }] }] }, null, at);
+    const capped = edit(nurse, { day: { every: 180 }, feeds: [{ id: nurse.feeds[0].id, name: "Nurse, top up", steps: [{ do: "nurse", minutes: 10, up_to: true, each_side: true }, { do: "bottle", ml: 30, up_to: true }] }] });
+    eq(planChanges(nurse, null, capped, null, words).lines, ['Changed in "Nurse, top up": nurse up to 10 min each side (was 10 min each side); top up to 30 ml (was 30 ml).'], "a nursing's most and a top-up's");
+  });
+
+  await test("a late bottle for the breast offered before it is that feed's bottle, never its top-up, in log_feed's and Siri's words", async () => {
+    type Entry = import("../../src/lib/maple/types").Entry;
+    const { owedPart, owedPartLine, planBottleSpeak } = await import("../../src/lib/maple/feeding-plan-mcp");
+    const { zonedTimeToUtc } = await import("../../src/lib/maple/time");
+    const tz = "America/Chicago";
+    const T = (h: number, m: number) => zonedTimeToUtc(2026, 11, 4, h, m, tz);
+    const practice = parseFeedingPlan(
+      { day: { every: 180 }, feeds: [{ name: "Practice, then bottle", steps: [{ do: "nurse", minutes: [5, 10], if_needed: true }, { do: "bottle", ml: 60, milk: "breastmilk", via: "paced" }] }] },
+      null,
+      T(6, 0)
+    );
+    const fed = { id: 1300, kind: "feed", started_at: T(9, 0).toISOString(), ended_at: T(9, 6).toISOString(), active: false, note: null, created_by: null, updated_by: null, source: "web", created_at: T(9, 0).toISOString(), updated_at: T(9, 0).toISOString(), data: { method: "breast", segments: [{ side: "L", start: T(9, 0).toISOString(), end: T(9, 6).toISOString() }], plan: practice.feeds[0].id } } as unknown as Entry;
+    const owed = owedPart(practice, [fed], T(9, 15), { tz, target: null, atBreast: false, data: { method: "bottle", amount_ml: 60, via: "paced" } });
+    eq(owed?.part, "bottle", "its bottle");
+    ok(owedPartLine(owed!, tz).startsWith('The feeding plan\'s 9:00 AM feed ("Practice, then bottle") still had its bottle to log, so this was saved with that feed [entry #1300].'), owedPartLine(owed!, tz));
+    eq(planBottleSpeak({ owed, led: null }, tz), ", for the 9:00 AM feed", "Siri never calls it a top-up");
+  });
+
+  await test("set_feeding_plan's description and the plan's instructions never assume a mother: the care person by name with no pronoun, else the parents'", async () => {
+    const { registerFeedingPlanTools } = await import("../../src/lib/maple/feeding-plan-mcp");
+    const { toolCopy } = await import("../../src/lib/maple/mcp-tools");
+    const describe = (copy: import("../../src/lib/maple/mcp-tools").ToolCopy) => {
+      const out = new Map<string, { description: string; inputSchema: Record<string, { description?: string }> }>();
+      registerFeedingPlanTools({ registerTool: (name: string, cfg: { description: string; inputSchema: Record<string, { description?: string }> }) => void out.set(name, cfg) } as unknown as McpServer, copy);
+      return out.get("set_feeding_plan")!;
+    };
+    // Invented: a care page for "Sam" with a baby boy; and a family with no care page.
+    const sam = describe(toolCopy(3, { name: "Ezra", nickname: null, sex: "male" }, "Sam", "America/Los_Angeles"));
+    ok(sam.description.includes("Everyone in the family reads it, so leave out Sam's own medicines and health (Sam's page keeps those).") && !/\bher page\b/.test(sam.description), sam.description);
+    const none = describe(toolCopy(4, { name: "Rowan", nickname: null, sex: null }, null, "America/Los_Angeles"));
+    ok(none.description.includes("Everyone in the family reads it, so leave out the parents' own medicines and health.") && !/\bMom\b|\bher page\b/.test(none.description), none.description);
+    // How the plan's own words go in: at least and up to never fill in the other end; cup, spoon or finger; feeds a day;
+    // when hungry at night; the night's turns by the clock; a pump on its own clock and a dream feed; clock times; a dated step-down.
+    const plan = String(sam.inputSchema.plan.description);
+    for (const want of [
+      '"up to N" is N with up_to (minutes or ml), "at least N" is ml N with at_least: never fill in the other end.',
+      'by:"cup"|"spoon"|"finger" (instead of a bottle)',
+      "breastmilk_first (breast milk first, then formula to finish; pumped or donor milk is breast milk)",
+      "on_demand (with no every: when he's hungry at night, no wake)",
+      "starts: one time for each when they go by the clock",
+      'per_day: {feeds, ml} in 24 hours as written ("8 to 12 feeds a day")',
+      "if_needed (the breast offered only if he wants it, practice before a bottle)",
+    ]) ok(plan.includes(want), `the plan's schema says "${want}": ${plan}`);
+    for (const want of [
+      "q3h or 8-11-2-5: by the clock, or start to start as the plan counts), ask; never pick; clock times go in the notes word for word.",
+      "A pump is a feed's step only when it's done at that feed; pumping on its own clock (at work, a stash pump) goes in the notes.",
+      "A feed given once a night (a dream feed) takes no turn: leave it out of the turns (Today offers it as another choice) or give it its own start in night.starts; ask when it's unclear.",
+      "An amount that steps down by date: save today's, put the dates in a note step on that feed, and tell them to ask for the change on the day.",
+    ]) ok(sam.description.includes(want), `the description says "${want}"`);
+    ok(!/pumped milk, then formula/.test(plan + sam.description), "never \"pumped milk, then formula to finish\"");
   });
 
   for (const shape of ["production", "final"] as Shape[]) {
@@ -353,7 +564,17 @@ async function main() {
       // The night's feed left out, with the day's turns given: it's in neither.
       const left = await ask({ ...INPUT, order: ["Nurse + SNS", "Nurse, top up"], night: { ...INPUT.night, feed: null } });
       ok(left.includes('Ask with it: "Pump + bottle" isn\'t in the day\'s turns or the night\'s feed, so Today only offers it as another choice. If it\'s the night\'s feed, set night.feed to it; if it takes a turn by day, add it to order.'), left);
-      ok(!/Ask with it/.test(await ask(INPUT)), "none for a plan without them");
+      // A feed given once a night (a dream feed) is right as it is out of the turns, or takes its own start by the clock.
+      ok(left.includes("Given once a night (a dream feed), it's right as it is, or it can have its own start in night.starts."), left);
+      // The night's feed pumps first: Today takes a pump as its part only up to an hour before its bottle, so a pump on its own clock goes in the notes.
+      const pumps = await ask(INPUT);
+      eq(
+        pumps.split("\n").filter((l) => l.startsWith("Ask with it")),
+        ['Ask with it: Today counts a pump as part of "Pump + bottle" only when it starts up to an hour before its bottle. If they pump on their own clock, keep the feed to its bottle and put the pump times in the notes.'],
+        "the one caution for the plan's pump-first feed"
+      );
+      const noPump = { ...INPUT, night: { ...INPUT.night, feed: "Nurse + SNS" }, feeds: INPUT.feeds.slice(0, 2) };
+      ok(!/Ask with it/.test(await ask(noPump)), "none for a plan without them");
       ok(!("feeding_plan" in (await settings(B))), "nothing saved");
     });
 
@@ -534,11 +755,8 @@ async function main() {
         const formula = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 20, unit: "ml", milk: "formula", at: "1:35am" });
         ok(formula.text.includes(`The feeding plan's 1:25 AM feed ("Pump + bottle") still had its formula to finish to give, so this was saved with that feed: part of it, not a feed of its own.`) && /^Feeds today: 1\b/m.test(formula.text), formula.text);
         eq([await planOf(milk.json.id), await planOf(formula.json.id)], [night, night], "both saved with the night feed");
-        // Last fed at the first bottle; with the log's later bottles of a bottle feed (feed.ts LastFed's more), both, added up.
-        ok(
-          /^Last feed: (1\.18 oz \(35 ml\) bottle of breast milk|1\.86 oz \(55 ml\) by bottle \(1\.18 oz \(35 ml\) breast milk \+ 0\.68 oz \(20 ml\) formula\), one feed,) at 1:25 AM today/.test(await lastFed()),
-          await lastFed()
-        );
+        // Last fed at the first bottle, with the log's later bottles of a bottle feed (feed.ts LastFed's more): both, added up.
+        ok(/^Last feed: 1\.86 oz \(55 ml\) by bottle \(1\.18 oz \(35 ml\) breast milk \+ 0\.68 oz \(20 ml\) formula\), one feed, at 1:25 AM today/.test(await lastFed()), await lastFed());
         // The same sent again (a retry) is the same save, read as the first was.
         const again = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 20, unit: "ml", milk: "formula", at: "1:35am" });
         ok(again.json.deduped === true || again.json.created === false, again.text);
@@ -894,6 +1112,68 @@ async function main() {
       ok(!right.error && /for the feeding plan's "Грудь"/.test(right.text), right.text);
       eq((await sql(`SELECT data FROM maple_entries WHERE id = $1`, [Number(right.json.id)]))[0].data.plan, feedingPlanOf(await settings(A))!.feeds[0].id, "tagged with its own feed");
       eq((await tool(alpha.member, A, "stop_timer", { timer: "nursing" })).error, false, "stopped");
+    });
+
+    await test(`${shape}: feeds and milk in the last 24 hours beside the plan's ride maple_status, the chat's [App] line and feeding_plan, as context; a plan without them reads as before`, async () => {
+      const wipe = () => sql(`UPDATE maple_entries SET deleted_at = NOW() WHERE family_id = $1 AND deleted_at IS NULL`, [A]);
+      await wipe();
+      const rev = feedingPlanOf(await settings(A))!.rev;
+      // Invented: on demand, at least 8 feeds and 450 to 550 ml in 24 hours.
+      const plan = { day: { every: { max: 180 } }, feeds: [{ name: "Bottle", steps: [{ do: "bottle", ml: [60, 90], milk: "formula" }] }], per_day: { feeds: { min: 8 }, ml: [450, 550] } };
+      ok((await save(alpha.owner, A, { plan, base_rev: rev })).json.saved === true, "saved");
+      await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 70, unit: "ml", milk: "formula", minutes_ago: 200 });
+      await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 80, unit: "ml", milk: "formula", minutes_ago: 20 });
+      const day = "2 feeds in the last 24 hours · plan: at least 8 · 150 ml · plan: 450–550 ml";
+      const status = await tool(alpha.member, A, "maple_status");
+      const line = status.text.split("\n").find((l) => l.startsWith("Feeding plan")) ?? "";
+      ok(line.endsWith(`${day}.`), line);
+      eq((status.json.feeding_plan as Record<string, unknown>).per_day, day, "maple_status's parts");
+      const app = (await chatLogState({ email: alpha.member }, { fam: A, care: true, now: new Date() })).find((l) => l.startsWith("Feeding plan")) ?? "";
+      ok(app.endsWith(`${day}.`), `the chat's [App] line: ${app}`);
+      const read = await tool(alpha.member, A, "feeding_plan");
+      ok(read.text.includes(`${day}. Context only: say it as it is, never as behind or short.`), read.text);
+      // Without per_day, none of it.
+      const bare = await save(alpha.owner, A, { plan: { day: plan.day, feeds: plan.feeds }, base_rev: rev + 1 });
+      ok(bare.json.saved === true && !/in the last 24 hours/.test(bare.text), bare.text);
+      const after = await tool(alpha.member, A, "maple_status");
+      ok(!/in the last 24 hours · plan/.test(after.text) && !("per_day" in (after.json.feeding_plan as Record<string, unknown>)), after.text);
+      await wipe();
+    });
+
+    await test(`${shape}: Siri's bottle in ounces keeps a tenth of a ml, as the form does: 4 ounces reads back as 4 oz, and 2 ounces reaches a 2 to 2.5 oz target`, async () => {
+      const wipe = () => sql(`UPDATE maple_entries SET deleted_at = NOW() WHERE family_id = $1 AND deleted_at IS NULL`, [A]);
+      await wipe();
+      const rev = feedingPlanOf(await settings(A))!.rev;
+      // Invented: a bottle up to a 2 to 2.5 oz target, in ounces.
+      ok((await save(alpha.owner, A, { plan: { amounts_in: "oz", day: { every: [180, 240] }, feeds: [{ name: "Formula bottle", steps: [{ do: "bottle", to_target: true, milk: "formula" }] }] }, target: [2, 2.5], base_rev: rev })).json.saved === true, "saved");
+      eq((await siri(alpha.token, { action: "bottle", amount_oz: 2, client_id: "made-up-siri-2oz" })).speak, "Logged a 2 ounce bottle at 12:00 PM, for the feeding plan's Formula bottle.", "Siri");
+      const stored = await sql(`SELECT data FROM maple_entries WHERE family_id = $1 AND deleted_at IS NULL AND kind = 'feed' ORDER BY id DESC LIMIT 1`, [A]);
+      eq(stored[0].data.amount_ml, 59.1, "to a tenth of a ml");
+      const line = (await tool(alpha.member, A, "maple_status")).text.split("\n").find((l) => l.startsWith("Feeding plan")) ?? "";
+      ok(/^Feeding plan: next is "Formula bottle"/.test(line) && !/the rest of the bottle|so far/.test(line), `2 oz reached the target: ${line}`);
+      await wipe();
+      eq((await siri(alpha.token, { action: "bottle", amount_oz: 4, client_id: "made-up-siri-4oz" })).speak, "Logged a 4 ounce bottle at 12:00 PM, for the feeding plan's Formula bottle.", "Siri");
+      const four = await sql(`SELECT data FROM maple_entries WHERE family_id = $1 AND deleted_at IS NULL AND kind = 'feed' ORDER BY id DESC LIMIT 1`, [A]);
+      eq(four[0].data.amount_ml, 118.3, "4 oz");
+      const { amountText } = await import("../../src/lib/maple/feeding-plan");
+      eq(amountText({ min: four[0].data.amount_ml, max: four[0].data.amount_ml }, "oz", false), "4 oz", "reads back as 4 oz, never 3.99");
+      await wipe();
+    });
+
+    await test(`${shape}: a plan's amounts in ml that look like ounces ask with the read-back, and a target too small to save says how to send ounces`, async () => {
+      const rev = feedingPlanOf(await settings(A))!.rev;
+      const ask = async (args: Record<string, unknown>) => (await tool(alpha.owner, A, "set_feeding_plan", { base_rev: rev, ...args })).text.split("\n{")[0];
+      // Invented: a US sheet's "2 to 3 oz" sent without amounts_in.
+      const tiny = await ask({ plan: { day: { every: [180, 240] }, feeds: [{ name: "Formula bottle", steps: [{ do: "bottle", ml: [2, 3], milk: "formula" }] }] }, target: [6, 8] });
+      ok(tiny.includes("• Formula bottle: Bottle 2–3 ml, formula") && tiny.includes('Ask with it: a bottle of 2–3 ml and a target of 6–8 ml a feed are very small. If the plan says ounces, send amounts_in: "oz" with the same numbers.'), tiny);
+      // In ounces, or milk at the breast (often a few ml), or a spoon's few ml: nothing to ask.
+      const oz = await ask({ plan: { amounts_in: "oz", day: { every: [180, 240] }, feeds: [{ name: "Formula bottle", steps: [{ do: "bottle", ml: [2, 3], milk: "formula" }] }] } });
+      ok(!/very small/.test(oz), oz);
+      const small = await ask({ plan: { day: { every: 180 }, feeds: [{ name: "Nurse + syringe", steps: [{ do: "nurse", supplement: { via: "syringe", ml: 5 } }, { do: "bottle", ml: 5, by: "spoon" }] }] } });
+      ok(!/very small/.test(small), small);
+      const refused = await tool(alpha.owner, A, "set_feeding_plan", { plan: { day: { every: [180, 240] }, feeds: [{ name: "Formula bottle", steps: [{ do: "bottle", to_target: true, milk: "formula" }] }] }, target: [2, 3], base_rev: rev });
+      ok(refused.error && refused.text === 'A target per feed is between 5 and 300 ml. If the plan says ounces, send amounts_in: "oz" with the same numbers. Nothing was saved.', refused.text);
+      eq(feedingPlanOf(await settings(A))!.rev, rev, "nothing saved");
     });
   }
 

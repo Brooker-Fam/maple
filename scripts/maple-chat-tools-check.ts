@@ -432,6 +432,38 @@ check("a plan sheet's shorthand and a routine send set_feeding_plan by their wor
   }
 });
 
+/**
+ * A care team's plan in ordinary words, with no "plan", "LC" or shorthand in it (invented): how often beside what, how
+ * many a day, waking to feed, on demand, discharge instructions. Each loads set_feeding_plan on the first step, so it
+ * lands on Today, not in a memory. A night waking with no feed in it, a plain log and a check-in's edit don't.
+ */
+const PLAN_IN_WORDS = [
+  "Pediatrician says 2 oz of formula every 3 hours and wake him at night until Friday",
+  "The midwife wants her fed every 2-3 hours, 8 to 12 feeds a day, and no longer than 4 hours at night",
+  "NICU discharge instructions: 52 ml EBM every 3 hours by bottle, paced, wake to feed",
+  "Health visitor said 90 ml every 3 to 4 hours, and let her sleep at night",
+  "feed every 3 hours, 2 oz formula, at night when she wakes",
+  "the doctor wants him eating every three hours",
+  "we were told to feed at least 8 times a day",
+  "she needs 8-12 feedings in 24 hours",
+  "feed her on demand at night",
+  "wake him to feed every 3 hours",
+];
+const NOT_PLAN_IN_WORDS = ["every 3 hours she wakes up at night, is that normal?", "she has been up every 2 hours", "she pooped 5 times a day", "she ate 2 oz at 3", "log 3 oz formula"];
+
+check("a care team's plan in ordinary words (how often, how many a day, waking to feed) loads set_feeding_plan on the first step, under the ceiling; a night waking or a plain log doesn't", () => {
+  for (const said of PLAN_IN_WORDS) {
+    ok(predictGroups({ said }).includes("feeding"), `loads feeding: "${said}"`);
+    const sel = route(ALEX, said).sel;
+    ok(sel.active.includes("set_feeding_plan") && sel.tokens <= TOOL_CEILING, `the first step sends set_feeding_plan, ${sel.tokens} under the ceiling: "${said}"`);
+  }
+  for (const said of [...NOT_PLAN_IN_WORDS, ...PLAN_EDITS]) ok(!predictGroups({ said }).includes("feeding"), `no feeding by its words alone: "${said}"`);
+  // The midwife's plan names her page's group too (a midwife is also the care person's), and both fit; the sleep plan's
+  // five, which only "at night" and "no longer" point to, go.
+  const midwife = route(ALEX, PLAN_IN_WORDS[1]).sel;
+  eq([midwife.groups.includes("mom"), midwife.groups.includes("feeding")], [true, true], "her page's tools and the plan's");
+});
+
 check("past the ceiling, a smaller group that went before a bigger one comes back once the bigger one is out", () => {
   const sizes = definitionSizes(toolDisclosure(toolsFor(ALEX), { window: [], vo: COPY.v, lastStep: 5 }).tools);
   // Ranked mom, sleep, feeding: feeding goes first, then sleep, and then feeding fits again.
