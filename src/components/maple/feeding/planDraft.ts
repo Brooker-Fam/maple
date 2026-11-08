@@ -16,9 +16,9 @@
  */
 import {
   checkFeedingPlan,
+  feedText,
   PlanConflict,
   PlanError,
-  stepText,
   type AtBreastVia,
   type FeedingPlan,
   type PlanBottleVia,
@@ -363,25 +363,31 @@ export function planShortLine(plan: FeedingPlan | null): string {
   return [plan.from ? `From ${plan.from}` : null, `${n} ${n === 1 ? "feed" : "feeds"}`].filter(Boolean).join(" · ");
 }
 
+/** A note as a sentence of its own: a capital first letter, and a full stop unless it ends with one. */
+const sentence = (s: string) => {
+  const t = s.replace(/[\s,;:]+$/, "");
+  return `${t.charAt(0).toUpperCase()}${t.slice(1)}${/[.!?…]$/.test(t) ? "" : "."}`;
+};
+
 /**
- * A feed's steps in one line, the way the plan reads them (feedText's words),
- * for a folded feed on the form; a step still missing what its words need
- * ("SNS", no amount yet) is just its name.
+ * A feed's steps in one line, for a folded feed on the form: the steps in the
+ * plan's own words (feedText: "Pump 20 min; then bottle up to 50–70 ml"), then
+ * each note as a sentence of its own ("Burp halfway."), never joined with
+ * "then" as if it were another step. A step still missing what its words need
+ * (an SNS with no amount yet) is just its name; an empty note is "Note".
  */
 export function feedSummary(f: FeedDraft, unit: PlanUnit, target: FeedTarget | null): string {
-  let nursed = false;
-  const parts = f.steps.map((s, i) => {
+  if (!f.steps.length) return "No steps yet";
+  const steps: PlanStep[] = [];
+  const notes: string[] = [];
+  for (const s of f.steps) {
     const out = stepOut(s);
-    let words: string;
-    try {
-      words = out.do === "note" ? out.text || "Note" : stepText(out as PlanStep, { unit }, target, { afterNurse: nursed });
-    } catch {
-      words = stepTitle(s, nursed);
-    }
-    if (s.do === "nurse") nursed = true;
-    return i === 0 ? words : `then ${words.charAt(0).toLowerCase()}${words.slice(1)}`;
-  });
-  return parts.length ? parts.join("; ") : "No steps yet";
+    if (out.do === "note") notes.push(sentence(out.text || "Note"));
+    else if (out.do === "nurse" && out.supplement && !out.supplement.ml) steps.push({ do: "nurse" });
+    else steps.push(out as PlanStep);
+  }
+  const said = steps.length ? feedText({ id: f.id ?? f.key, name: f.name, steps }, { unit }, target) : "";
+  return notes.length ? [...(said ? [`${said}.`] : []), ...notes].join(" ") : said;
 }
 
 /** A step's name on its card: a bottle after nursing is the top-up. */

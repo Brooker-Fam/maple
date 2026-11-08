@@ -8,15 +8,17 @@
  *
  * The plans here are invented examples, not any family's. One PASS/FAIL line per case, exit 1 on any failure.
  */
-import { amountText, checkFeedingPlan, parseFeedingPlan, PlanError, type FeedingPlan } from "../src/lib/maple/feeding-plan";
+import { amountText, checkFeedingPlan, feedText, parseFeedingPlan, PlanError, type FeedingPlan } from "../src/lib/maple/feeding-plan";
 import {
   addFeed,
   draftFromShape,
   draftOf,
   draftProblem,
+  feedSummary,
   inputOf,
   move,
   newFeed,
+  newStep,
   PLAN_SHAPES,
   planShortLine,
   problemPlace,
@@ -27,6 +29,7 @@ import {
   takeOutFeed,
   typedAmount,
   type PlanDraft,
+  type StepDraft,
 } from "../src/components/maple/feeding/planDraft";
 
 let passed = 0;
@@ -263,6 +266,29 @@ check("a refusal's words point at its feed and step", () => {
   eq(problemPlace('"Nurse + SNS" step 2: the minutes must be between 1 and 120', d), { feed: d.feeds[0].key, step: d.feeds[0].steps[1].key });
   eq(problemPlace('"nurse, top up" needs at least one step', d), { feed: d.feeds[1].key, step: null });
   eq(problemPlace("Night's start must be a time like 22:00", d), null);
+});
+
+check("a folded feed reads in the plan's words, and a note is a sentence of its own, never joined with \"then\"", () => {
+  const d = draftOf(PLAN, null, "ml");
+  const target = { min: 50, max: 70 };
+  // Without notes, it's the plan's own line for the feed.
+  for (const i of [0, 1]) eq(feedSummary(d.feeds[i], "ml", target), feedText(PLAN.feeds[i], PLAN, target), PLAN.feeds[i].name);
+  // "Pump + bottle" ends with a note: its steps, then the note.
+  const steps = PLAN.feeds[2].steps.filter((s) => s.do !== "note");
+  eq(feedSummary(d.feeds[2], "ml", target), `${feedText({ ...PLAN.feeds[2], steps }, PLAN, target)}. Burp halfway.`);
+  // A note between steps still reads after them, as its own sentence.
+  const [nurse, topUp] = d.feeds[1].steps;
+  const note = (text: string) => ({ ...newStep("note"), text }) as StepDraft;
+  const between = feedSummary({ ...d.feeds[1], steps: [nurse, note("only if still hungry"), topUp] }, "ml", target);
+  eq(between, `${feedText(PLAN.feeds[1], PLAN, target)}. Only if still hungry.`);
+  if (/then only/i.test(between)) throw new Error(`a note joined with "then": ${between}`);
+  const nursing = feedText({ ...PLAN.feeds[1], steps: PLAN.feeds[1].steps.slice(0, 1) }, PLAN, target);
+  eq(feedSummary({ ...d.feeds[1], steps: [nurse, note("Burp halfway!"), note("pump the right side;")] }, "ml", target), `${nursing}. Burp halfway! Pump the right side.`);
+  // Not finished yet: an SNS with no amount is just its name, an empty note is "Note", and no steps says so.
+  const sns = { ...newStep("nurse"), atBreast: "sns" } as StepDraft;
+  eq(feedSummary({ ...d.feeds[0], steps: [sns, d.feeds[0].steps[1]] }, "ml", null), "Nurse; then pump 15 min");
+  eq(feedSummary({ ...d.feeds[0], steps: [d.feeds[0].steps[1], note("")] }, "ml", null), "Pump 15 min. Note.");
+  eq(feedSummary({ ...d.feeds[0], steps: [] }, "ml", null), "No steps yet");
 });
 
 check("the way in's line: who it's from and how many feeds, or the invitation", () => {
