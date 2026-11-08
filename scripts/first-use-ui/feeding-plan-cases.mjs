@@ -966,7 +966,7 @@ export function feedingPlanCases({ fixture, freshState, record, writes, assert }
         const text = plain(await c.textContent());
         assert.match(text, /^Night feed/, "not Now: the plan's routine isn't what's happening");
         assert.match(text, /River's nursing now · 20m/);
-        assert.match(text, /Pump 20 min\. Then bottle up to 50–70 ml, pumped milk first, then formula to finish/);
+        assert.match(text, /Pump 20 min\. Then bottle up to 50–70 ml, breast milk first, then formula to finish/);
         assert.equal(await c.locator("[data-plan-primary]").count(), 0, "nothing to do");
         assert.equal(await c.getByRole("button", { name: /^(?:Start pumping|Log bottle)/ }).count(), 0);
         assert.doesNotMatch(plain(await f.page.getByRole("region", { name: "Nursing timer", exact: true }).textContent()), /then pump/, "the timer card doesn't push the routine");

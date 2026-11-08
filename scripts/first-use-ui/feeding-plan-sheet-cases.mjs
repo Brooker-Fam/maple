@@ -143,7 +143,7 @@ export function feedingPlanSheetCases({ fixture, freshState, assert }) {
         const steps = async (name) => (await sheet.getByRole("article", { name, exact: true }).getByRole("listitem").allTextContents()).map((s) => s.replace(/\s+/g, " ").trim());
         assert.deepEqual(await steps("Nurse + SNS"), ["1Step 1: Nurse 12–18 min with the nipple shield, 20 ml of formula in the SNS", "2Step 2: Pump 15 min"]);
         assert.deepEqual(await steps("Nurse, top up"), ["1Step 1: Nurse 8–12 min each side", "2Step 2: Top up 25–35 ml, formula or breast milk, paced bottle"]);
-        assert.deepEqual(await steps("Pump + bottle"), ["1Step 1: Pump 20 min", "2Step 2: Bottle up to 50–70 ml, pumped milk first, then formula to finish", "Burp halfway"]);
+        assert.deepEqual(await steps("Pump + bottle"), ["1Step 1: Pump 20 min", "2Step 2: Bottle up to 50–70 ml, breast milk first, then formula to finish", "Burp halfway"]);
         assert.match(await sheet.getByRole("article", { name: "Nurse + SNS", exact: true }).textContent(), /Turn 1/);
         assert.match(await sheet.getByRole("article", { name: "Pump + bottle", exact: true }).textContent(), /At night/);
         assert.match(text, /Notes Weigh at the clinic on Friday\./);
@@ -210,7 +210,7 @@ export function feedingPlanSheetCases({ fixture, freshState, assert }) {
         const form = await edit(f, dialog(f, "Feeding plan"));
         // Saved feeds start folded to their steps in the plan's words; a note is its own sentence after them, never "then".
         const folded = form.getByRole("button", { name: /^Pump \+ bottle/, expanded: false });
-        assert.match((await folded.innerText()).replace(/\s+/g, " "), /Pump \+ bottle Pump 20 min; then bottle up to 50–70 ml, pumped milk first, then formula to finish\. Burp halfway Change/);
+        assert.match((await folded.innerText()).replace(/\s+/g, " "), /Pump \+ bottle Pump 20 min; then bottle up to 50–70 ml, breast milk first, then formula to finish\. Burp halfway Change/);
         await unfold(form, "Nurse + SNS");
         await unfold(form, "Nurse, top up");
         // One number reads as one box: "15 to [ ] min".

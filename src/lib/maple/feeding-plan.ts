@@ -43,16 +43,28 @@ export const AT_BREAST_VIAS = ["syringe", "sns"] as const;
 export type AtBreastVia = (typeof AT_BREAST_VIAS)[number];
 export const PLAN_BOTTLE_VIAS = ["bottle", "paced"] as const;
 export type PlanBottleVia = (typeof PLAN_BOTTLE_VIAS)[number];
+/**
+ * Milk given other than by bottle (BottleStep.by): a key of its own, never a new `via`, so a release that doesn't know
+ * it reads a bottle ("Bottle 20–30 ml"); the log keeps such a feed as a bottle with no via.
+ */
+export const PLAN_GIVEN_BY = ["cup", "spoon", "finger"] as const;
+export type PlanGivenBy = (typeof PLAN_GIVEN_BY)[number];
 export const PLAN_UNITS = ["ml", "oz"] as const;
 export type PlanUnit = (typeof PLAN_UNITS)[number];
 
 /** Minutes or ml, smallest first; one number is { min: n, max: n }. */
 export type Range = { min: number; max: number };
 
+/*
+ * up_to and at_least keep their number as the one number ({ min: n, max: n }), so a release that doesn't know them
+ * reads exactly that ("Nurse 10 min", "Bottle 60 ml"): never a { min: 0 } range, which it would refuse.
+ */
 export type NurseStep = {
   do: "nurse";
   /** Minutes at the breast (each side with each_side). */
   minutes?: Range;
+  /** Its minutes are the most ("Nurse up to 10 min"): one number. */
+  up_to?: boolean;
   each_side?: boolean;
   /** On one side only ("left only, pump the right"); never with each_side. */
   side?: Side;
@@ -60,16 +72,27 @@ export type NurseStep = {
   shield?: boolean;
   /** Milk given at the breast while she nurses: a syringe or an SNS, how much, which milk. */
   supplement?: { via: AtBreastVia; ml: Range; milk?: PlanMilk };
+  /**
+   * Only if she wants to (practice at the breast before a bottle): "Offer the breast 5–10 min". Never missed or owed,
+   * and a bottle after it is the feed ("Bottle 60 ml"), never a top-up. A release that doesn't know it reads a nursing.
+   */
+  if_needed?: boolean;
 };
-/** if_needed: only if still full. It never keeps a feed from being done and is never missed. */
-export type PumpStep = { do: "pump"; minutes?: Range; if_needed?: boolean };
+/** if_needed: only if still full. It never keeps a feed from being done and is never missed. up_to: its minutes are the most. */
+export type PumpStep = { do: "pump"; minutes?: Range; up_to?: boolean; if_needed?: boolean };
 export type BottleStep = {
   do: "bottle";
   ml?: Range;
+  /** Its amount is the most ("Bottle up to 60 ml"): one number, never with to_target. */
+  up_to?: boolean;
+  /** Its amount is the least ("Bottle at least 60 ml"): one number, never with to_target or up_to. */
+  at_least?: boolean;
   /** Up to the target per feed (settings.feed_target_ml) instead of an amount of its own. */
   to_target?: boolean;
   milk?: PlanMilk;
   via?: PlanBottleVia;
+  /** Given by cup, spoon or finger instead of a bottle ("Cup 20–30 ml", "Top up 10–15 ml by spoon"); never with via. */
+  by?: PlanGivenBy;
   /** Only if she's still hungry: it never keeps a feed from being done and is never missed. */
   if_needed?: boolean;
 };
@@ -94,13 +117,28 @@ export type FeedingPlan = {
   /**
    * Night, from–to on the family's clock ("23:00"–"05:00"), with its own interval and feed (else the day's). `order`:
    * the night's feeds taking turns, as the day's `order` does; `feed` is always its first, which is all an older
-   * release reads.
+   * release reads. on_demand with no `every`: when she's hungry at night, never woken for a feed (nightWhenHungry; a
+   * release that doesn't know it reads the day's interval at night, as before). `starts`: the night's turns by the
+   * clock, one "HH:MM" for each turn in `order`, in its order, running around the clock from `from` (nightClockTurns;
+   * a release that doesn't know it takes the turns in order).
    */
-  night?: { from: string; to: string; every?: Range; on_demand?: boolean; wake?: boolean; feed?: string; order?: string[] };
+  night?: { from: string; to: string; every?: Range; on_demand?: boolean; wake?: boolean; feed?: string; order?: string[]; starts?: string[] };
   feeds: PlanFeed[];
   /** The day feeds' turns, by id (one id: every day feed is that one). */
   order: string[];
+  /**
+   * Feeds and milk in 24 hours, as the care team gave them ("at least 8 feeds", "450–550 ml"): each part has one end or
+   * both, the milk in ml. Context beside the plan (planDayCounts, perDayText), never a warning. Older releases ignore it.
+   */
+  per_day?: PerDay;
+  /**
+   * The plan's notes, as an older release reads them: the whole notes when they're NOTES_OLDER characters or fewer
+   * (all a release before longer notes takes), else their start, cut at a sentence or a word, with "…". planNotes
+   * gives the whole notes.
+   */
   notes?: string;
+  /** The whole notes when they're longer than NOTES_OLDER (up to PLAN_LIMITS.notes). Read them with planNotes. */
+  notes_full?: string;
   /** Bumped on every save; an edit names the one it started from (base_rev) so a stale one is refused. */
   rev: number;
   updated_at?: string;
@@ -117,17 +155,31 @@ export type FeedingPlan = {
   since_rev?: number;
 };
 
+/** A count or amount in 24 hours with one end or both: "at least 8" is { min: 8 }, "up to 10" { max: 10 }, "8–12" both. */
+export type PerDayRange = { min?: number; max?: number };
+export type PerDay = { feeds?: PerDayRange; ml?: PerDayRange };
+
 export const PLAN_LIMITS = {
   feeds: 6,
   steps: 8,
   name: 40,
   note: 160,
-  notes: 300,
+  notes: 1000,
   from: 60,
   stepMinutes: [1, 120],
   everyMinutes: [30, 8 * 60],
   ml: [1, 300],
+  /** Feeds in 24 hours (per_day.feeds). */
+  dayFeeds: [1, 24],
+  /** Milk in 24 hours, in ml (per_day.ml). */
+  dayMl: [1, 3000],
 } as const;
+
+/**
+ * The most notes a release before longer notes reads (its own PLAN_LIMITS.notes, which it refuses past, losing the
+ * whole plan): longer notes keep their start, cut to this, in `notes`, and the whole of them in `notes_full`.
+ */
+export const NOTES_OLDER = 300;
 
 /** A plan that can't be saved as given: the message says what to change. */
 export class PlanError extends Error {}
@@ -141,21 +193,43 @@ export class PlanConflict extends Error {
 
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
-/** One-line text the family typed: trimmed, inner whitespace collapsed, no control characters. */
-function text(v: unknown, label: string, max: number, opts: { required?: boolean } = {}): string | undefined {
+/** One-line text the family typed: trimmed, inner whitespace collapsed, no control characters. `are`: a plural label ("The notes"). */
+function text(v: unknown, label: string, max: number, opts: { required?: boolean; are?: boolean } = {}): string | undefined {
+  const is = opts.are ? "are" : "is";
   if (v === undefined || v === null || v === "") {
-    if (opts.required) throw new PlanError(`${label} is needed`);
+    if (opts.required) throw new PlanError(`${label} ${is} needed`);
     return undefined;
   }
   if (typeof v !== "string") throw new PlanError(`${label} must be text`);
   const s = v.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
   if (!s) {
-    if (opts.required) throw new PlanError(`${label} is needed`);
+    if (opts.required) throw new PlanError(`${label} ${is} needed`);
     return undefined;
   }
-  if (s.length > max) throw new PlanError(`${label} is too long (${max} characters at most)`);
+  if (s.length > max) throw new PlanError(`${label} ${is} too long (${max} characters at most)`);
   return s;
 }
+
+/**
+ * Notes as a release before longer notes reads them (NOTES_OLDER characters at most, which it refuses past): the
+ * whole notes when they fit, else their start, cut after the last sentence that fits (or the last word), with "…" to
+ * say there's more. Never splits a character made of two code units, which Postgres would refuse.
+ */
+export function notesForOlder(s: string): string {
+  if (s.length <= NOTES_OLDER) return s;
+  let head = "";
+  for (const ch of s) {
+    if (head.length + ch.length > NOTES_OLDER - 1) break;
+    head += ch;
+  }
+  const sentence = Math.max(head.lastIndexOf(". "), head.lastIndexOf("! "), head.lastIndexOf("? "));
+  if (sentence >= NOTES_OLDER / 2) return `${head.slice(0, sentence + 1)} …`;
+  const word = head.lastIndexOf(" ");
+  return `${word >= NOTES_OLDER / 2 ? head.slice(0, word) : head}…`;
+}
+
+/** The plan's whole notes (notes_full when they're longer than an older release reads, else notes), or undefined. */
+export const planNotes = (plan: Pick<FeedingPlan, "notes" | "notes_full">): string | undefined => plan.notes_full ?? plan.notes;
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
@@ -193,7 +267,7 @@ const flag = (v: unknown, label: string): boolean | undefined => {
   return v || undefined;
 };
 
-/** "22:00", "22:30", "10 PM", "10:30pm", "6 am" → "HH:MM" (24-hour). */
+/** "22:00", "22:30", "10 PM", "10:30pm", "6 am" → "HH:MM" (24-hour); midnight written "24:00" is "00:00". */
 export function clockText(v: unknown, label: string): string {
   if (typeof v !== "string") throw new PlanError(`${label} must be a time like 22:00`);
   const m = /^\s*(\d{1,2})(?::(\d{2}))?\s*([ap])?\.?\s*m?\.?\s*$/i.exec(v);
@@ -204,8 +278,8 @@ export function clockText(v: unknown, label: string): string {
   if (ap) {
     if (h < 1 || h > 12) throw new PlanError(`${label} must be a time like 22:00`);
     h = (h % 12) + (ap === "p" ? 12 : 0);
-  }
-  if (h > 23 || min > 59) throw new PlanError(`${label} must be a time like 22:00`);
+  } else if (h === 24 && min === 0) h = 0;
+  if (h > 23 || min > 59) throw new PlanError(`${label} must be a time like 22:00${h === 24 ? " (midnight is 00:00)" : ""}`);
   return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
 }
 
@@ -224,9 +298,10 @@ function sideOf(v: unknown, label: string): Side | undefined {
  * The time between feeds as sent: start to start, a number or a range; or on demand with the most time between them
  * ("feed on demand, at least every 3 hours"), sent as { max }, a range from 0 ([0, 180]), or on_demand with every.
  * On demand is kept as its most ({ max, max }) with on_demand, so a release that doesn't know on_demand reads an
- * exact interval: never due early. On demand with no most is no interval at all (when she's hungry).
+ * exact interval: never due early. On demand with no most is no interval at all (when she's hungry): by day that's
+ * a day with no `every`; at night (`alone`) it's kept as on_demand on its own, so the night doesn't take the day's.
  */
-function interval(v: unknown, demand: unknown, label: string): { every?: Range; on_demand?: true } {
+function interval(v: unknown, demand: unknown, label: string, alone = false): { every?: Range; on_demand?: true } {
   const onDemand = flag(demand, `${label}: on demand`);
   const num = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x);
   let most: unknown;
@@ -237,17 +312,102 @@ function interval(v: unknown, demand: unknown, label: string): { every?: Range; 
     else if (b === 0 && num(a) && a > 0) most = a;
   }
   const every = range(most ?? v, label, PLAN_LIMITS.everyMinutes);
-  if (!every) return {};
+  if (!every) return alone && onDemand ? { on_demand: true } : {};
   return most !== undefined || onDemand ? { every: { min: every.max, max: every.max }, on_demand: true } : { every };
 }
+
+/**
+ * A step's minutes or amount as sent, with its most or its least: a number or a range, as range() reads them; its most
+ * alone ({ max: N }, [0, N], or N with up_to) is N, up to; with `least` (a bottle's amount), its least alone
+ * ({ min: N }, or N with at_least) is N, at least. Either is kept as the one number with its flag, so a release that
+ * doesn't know the flag reads exactly N. `step` labels the step ("\"Feed\" step 2"), `field` its field ("the minutes").
+ */
+function limit(
+  v: unknown,
+  given: { up_to: unknown; at_least?: unknown },
+  step: string,
+  field: string,
+  bounds: readonly [number, number],
+  scale: number,
+  least: boolean
+): { range?: Range; up_to?: true; at_least?: true } {
+  const upTo = flag(given.up_to, `${step}: up to`);
+  const atLeast = least ? flag(given.at_least, `${step}: at least`) : undefined;
+  if (upTo && atLeast) throw new PlanError(`${step}: up to and at least aren't both; its amount is one or the other`);
+  const num = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x) && x > 0;
+  const none = (x: unknown) => x === undefined || x === null || x === 0;
+  let most: number | undefined;
+  let fewest: number | undefined;
+  if (isObj(v)) {
+    if (none(v.min) && num(v.max)) most = v.max;
+    else if (least && none(v.max) && num(v.min)) fewest = v.min;
+  } else if (Array.isArray(v) && v.length === 2) {
+    const [a, b] = v;
+    if (a === 0 && num(b)) most = b;
+    else if (b === 0 && num(a)) most = a;
+  }
+  if (most !== undefined && atLeast) throw new PlanError(`${step}: at least is its smallest amount, so it takes {min} or one number, not {max}`);
+  if (fewest !== undefined && upTo) throw new PlanError(`${step}: up to is its most, so it takes {max} or one number, not {min}`);
+  const r = range(most ?? fewest ?? v, `${step}: ${field}`, bounds, scale);
+  const noun = field === "the minutes" ? "minutes" : "milk";
+  if (!r) {
+    if (upTo) throw new PlanError(`${step}: up to needs its number (the most ${noun})`);
+    if (atLeast) throw new PlanError(`${step}: at least needs its number (the least ${noun})`);
+    return {};
+  }
+  if ((upTo || atLeast) && most === undefined && fewest === undefined && r.min !== r.max) {
+    throw new PlanError(`${step}: ${upTo ? `up to is one number (the most ${noun})` : `at least is one number (the least ${noun})`}, not a range`);
+  }
+  if (most !== undefined || upTo) return { range: r, up_to: true };
+  if (fewest !== undefined || atLeast) return { range: r, at_least: true };
+  return { range: r };
+}
+
+/**
+ * A count or amount in 24 hours as sent (per_day.feeds, per_day.ml): a number (that many), [min, max], [0, max] or
+ * { max } (up to), { min } (at least), or { min, max }. One end or both, within `bounds` (`scale` turns ounces into ml;
+ * `whole`: a count of feeds). Nothing sent is undefined.
+ */
+function perDayRange(v: unknown, label: string, [lo, hi]: readonly [number, number], scale: number, whole: boolean): PerDayRange | undefined {
+  if (v === undefined || v === null) return undefined;
+  let min: unknown;
+  let max: unknown;
+  if (typeof v === "number") min = max = v;
+  else if (Array.isArray(v) && v.length >= 1 && v.length <= 2) {
+    [min, max = v[0]] = v;
+    // [0, N] or [N, 0]: up to N, as the time between feeds reads it.
+    if (v.length === 2 && max === 0) [min, max] = [0, min];
+  } else if (isObj(v)) [min, max] = [v.min, v.max];
+  else throw new PlanError(`${label} must be a number, a range, or {min} (at least) or {max} (up to)`);
+  const none = (x: unknown) => x === undefined || x === null || x === 0;
+  const ends = [none(min) ? undefined : min, none(max) ? undefined : max];
+  if (ends.every((x) => x === undefined)) throw new PlanError(`${label} needs a number: at least ({min}), up to ({max}), or both`);
+  const out: PerDayRange = {};
+  for (const [k, x] of [["min", ends[0]], ["max", ends[1]]] as const) {
+    if (x === undefined) continue;
+    if (typeof x !== "number" || !Number.isFinite(x)) throw new PlanError(`${label} must be a number, a range, or {min} (at least) or {max} (up to)`);
+    if (whole && !Number.isInteger(x)) throw new PlanError(`${label} is a whole number of feeds`);
+    const n = whole ? x : round1(x * scale);
+    if (n < lo || n > hi) throw new PlanError(`${label} must be between ${lo} and ${hi}${scale === 1 ? "" : " (in ml)"}`);
+    out[k] = n;
+  }
+  // Smallest first, as a range is.
+  if (out.min !== undefined && out.max !== undefined && out.min > out.max) [out.min, out.max] = [out.max, out.min];
+  return out;
+}
+
+/** A clock time ("HH:MM") in minutes after a night's start, around the clock. */
+const sinceStart = (hhmm: string, from: string) =>
+  (Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5)) - Number(from.slice(0, 2)) * 60 - Number(from.slice(3, 5)) + 24 * 60) % (24 * 60);
 
 function step(v: unknown, label: string, scale: number): PlanStep {
   if (!isObj(v)) throw new PlanError(`${label} must be a step`);
   const kind = v.do;
   if (kind === "nurse") {
     const out: NurseStep = { do: "nurse" };
-    const minutes = range(v.minutes, `${label}: the minutes`, PLAN_LIMITS.stepMinutes);
-    if (minutes) out.minutes = minutes;
+    const minutes = limit(v.minutes, { up_to: v.up_to }, label, "the minutes", PLAN_LIMITS.stepMinutes, 1, false);
+    if (minutes.range) out.minutes = minutes.range;
+    if (minutes.up_to) out.up_to = true;
     if (flag(v.each_side, `${label}: each side`)) out.each_side = true;
     const side = sideOf(v.side, `${label}: the side`);
     if (side) {
@@ -264,24 +424,39 @@ function step(v: unknown, label: string, scale: number): PlanStep {
       const milk = oneOf(s.milk, PLAN_MILKS, `${label}: the milk`);
       out.supplement = { via, ml, ...(milk ? { milk } : {}) };
     }
+    // Only if she wants to: practice at the breast, "offer the breast".
+    if (flag(v.if_needed, `${label}: only if needed`)) out.if_needed = true;
     return out;
   }
   if (kind === "pump") {
     const out: PumpStep = { do: "pump" };
-    const minutes = range(v.minutes, `${label}: the minutes`, PLAN_LIMITS.stepMinutes);
-    if (minutes) out.minutes = minutes;
+    const minutes = limit(v.minutes, { up_to: v.up_to }, label, "the minutes", PLAN_LIMITS.stepMinutes, 1, false);
+    if (minutes.range) out.minutes = minutes.range;
+    if (minutes.up_to) out.up_to = true;
     if (flag(v.if_needed, `${label}: only if needed`)) out.if_needed = true;
     return out;
   }
   if (kind === "bottle") {
     const out: BottleStep = { do: "bottle" };
-    const ml = range(v.ml, `${label}: the amount`, PLAN_LIMITS.ml, scale);
-    if (ml) out.ml = ml;
-    if (flag(v.to_target, `${label}: up to the target`)) out.to_target = true;
+    const ml = limit(v.ml, { up_to: v.up_to, at_least: v.at_least }, label, "the amount", PLAN_LIMITS.ml, scale, true);
+    if (ml.range) out.ml = ml.range;
+    if (ml.up_to) out.up_to = true;
+    if (ml.at_least) out.at_least = true;
+    if (flag(v.to_target, `${label}: up to the target`)) {
+      if (ml.up_to) throw new PlanError(`${label}: up to the target already says up to; for an amount of its own, give its ml with up to instead`);
+      if (ml.at_least) throw new PlanError(`${label}: at least is an amount of its own, not up to the target; give one or the other`);
+      out.to_target = true;
+    }
     const milk = oneOf(v.milk, PLAN_MILKS, `${label}: the milk`);
     if (milk) out.milk = milk;
     const via = oneOf(v.via, PLAN_BOTTLE_VIAS, `${label}: how it's given`);
     if (via) out.via = via;
+    // By cup, spoon or finger instead of a bottle: a key of its own, never a via (a release that doesn't know it reads a bottle).
+    const by = oneOf(v.by, PLAN_GIVEN_BY, `${label}: given by`);
+    if (by) {
+      if (via) throw new PlanError(`${label}: by ${by} is instead of a bottle, so leave out how the bottle is given (via)`);
+      out.by = by;
+    }
     if (flag(v.if_needed, `${label}: only if needed`)) out.if_needed = true;
     return out;
   }
@@ -289,7 +464,16 @@ function step(v: unknown, label: string, scale: number): PlanStep {
   throw new PlanError(`${label} must be nurse, pump, bottle or note`);
 }
 
-const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+/**
+ * A feed name's key, for telling names apart and finding a feed by name: its letters, marks and numbers in any script
+ * ("Грудь", "Stillen", "Nurse + SNS" is "nurse sns"), case folded, the rest as spaces; a name with none of them (emoji,
+ * punctuation) is itself, trimmed and lowercased. Never empty for a name, so nothing matches an empty one.
+ */
+export function feedNameKey(name: string): string {
+  const s = name.normalize("NFKC").toLowerCase();
+  return s.replace(/[^\p{L}\p{M}\p{N}]+/gu, " ").trim() || s.trim();
+}
+const norm = feedNameKey;
 
 /** A night is this long at most: longer, and its start or end was likely read as AM for PM (11:00 for 11 PM). */
 export const PLAN_NIGHT_MAX_MIN = 16 * 60;
@@ -347,7 +531,11 @@ export function parseFeedingPlan(input: unknown, current: FeedingPlan | null, no
     if (!isObj(f)) throw new PlanError(`${label} must have a name and steps`);
     const name = text(f.name, `${label}'s name`, PLAN_LIMITS.name, { required: true })!;
     if (!Array.isArray(f.steps) || f.steps.length === 0) throw new PlanError(`"${name}" needs at least one step`);
-    if (f.steps.length > PLAN_LIMITS.steps) throw new PlanError(`"${name}" has ${PLAN_LIMITS.steps} steps at most`);
+    if (f.steps.length > PLAN_LIMITS.steps) {
+      // Its notes count as steps: the way out is to put them together, or in the plan's notes.
+      const notes = f.steps.some((s) => isObj(s) && s.do === "note");
+      throw new PlanError(`"${name}" has ${PLAN_LIMITS.steps} steps at most${notes ? ": notes count as steps, so put its notes together, or in the plan's notes" : ""}`);
+    }
     const steps = f.steps.map((s, j) => step(s, `"${name}" step ${j + 1}`, scale));
     if (steps.every((s) => s.do === "note")) throw new PlanError(`"${name}" needs a step besides notes`);
     const nurses = steps.filter((s) => s.do === "nurse").length;
@@ -385,21 +573,41 @@ export function parseFeedingPlan(input: unknown, current: FeedingPlan | null, no
     if (!isObj(n)) throw new PlanError("Night must say from and to");
     const from = clockText(n.from, "Night's start");
     const to = clockText(n.to, "Night's end");
-    if (from === to) throw new PlanError("Night starts and ends at different times");
+    if (from === to) {
+      // Most likely an AM read for a PM ("7 to 7" for 7 PM to 7 AM): say what was read, and the other half of the day.
+      const other = `${String((Number(from.slice(0, 2)) + 12) % 24).padStart(2, "0")}:${from.slice(3, 5)}`;
+      throw new PlanError(`Night would start and end at ${clockWords(from)}: check AM and PM (${clockWords(other)} is ${other})`);
+    }
     if (!opts.stored) nightLength(from, to);
-    const every = interval(n.every, n.on_demand, "Night's time between feeds");
+    // On demand with no most is when she's hungry at night (on_demand on its own), never the day's interval.
+    const every = interval(n.every, n.on_demand, "Night's time between feeds", true);
     night = { from, to };
     if (every.every) night.every = every.every;
     if (every.on_demand) night.on_demand = true;
-    if (flag(n.wake, "Night's wake to feed")) night.wake = true;
+    if (flag(n.wake, "Night's wake to feed")) {
+      // When hungry has no time to wake her by. A saved plan with both (a hand edit) just doesn't wake her.
+      if (night.on_demand && !night.every) {
+        if (!opts.stored) throw new PlanError("Night's wake to feed needs a time between feeds, and when hungry has none: leave wake out, or give the night its own time between feeds");
+      } else night.wake = true;
+    }
     if (n.feed !== undefined && n.feed !== null && n.feed !== "") night.feed = ref(n.feed, "Night's feed");
     // The night's turns: its first is its feed (all an older release reads); one turn is just the night's feed.
     if (n.order !== undefined && n.order !== null) {
       if (!Array.isArray(n.order)) throw new PlanError("The night's turns must be a list of feeds");
       const turns = n.order.map((o, i) => ref(o, `The night's turn ${i + 1}`));
-      if (new Set(turns).size !== turns.length) throw new PlanError("Each feed is in the night's turns once");
+      if (new Set(turns).size !== turns.length) {
+        throw new PlanError("Each feed is in the night's turns once: they start again after the last, so a pattern that repeats a feed goes in the plan's notes");
+      }
       if (turns.length) night.feed = turns[0];
       if (turns.length > 1) night.order = turns;
+    }
+    // The night's turns by the clock: one start for each turn, in its order, around the clock from the night's start.
+    // A saved plan whose starts no longer fit its turns (a hand edit) takes its turns in order, as before.
+    if (n.starts !== undefined && n.starts !== null) {
+      const starts = clockTurns(n.starts, night);
+      if (typeof starts === "string") {
+        if (!opts.stored) throw new PlanError(starts);
+      } else night.starts = starts;
     }
   }
 
@@ -418,7 +626,9 @@ export function parseFeedingPlan(input: unknown, current: FeedingPlan | null, no
   } else {
     if (!Array.isArray(input.order) || input.order.length === 0) throw new PlanError("The order needs at least one feed");
     order = input.order.map((o, i) => ref(o, `The order's feed ${i + 1}`));
-    if (new Set(order).size !== order.length) throw new PlanError("Each feed is in the order once");
+    if (new Set(order).size !== order.length) {
+      throw new PlanError("Each feed is in the order once: the turns start again after the last, so a pattern that repeats a feed goes in the plan's notes");
+    }
   }
 
   const plan: FeedingPlan = { v: 1, unit, day, feeds, order, rev, updated_at: now.toISOString() };
@@ -431,8 +641,29 @@ export function parseFeedingPlan(input: unknown, current: FeedingPlan | null, no
     plan.check_in = input.check_in;
   }
   if (night) plan.night = night;
-  const notes = text(input.notes, "The notes", PLAN_LIMITS.notes);
-  if (notes) plan.notes = notes;
+  if (input.per_day !== undefined && input.per_day !== null) {
+    const pd = input.per_day;
+    if (!isObj(pd)) throw new PlanError("Feeds and milk in 24 hours (per_day) must say feeds, ml or both");
+    const perDay: PerDay = {};
+    const count = perDayRange(pd.feeds, "Feeds in 24 hours", PLAN_LIMITS.dayFeeds, 1, true);
+    if (count) perDay.feeds = count;
+    const ml = perDayRange(pd.ml, "Milk in 24 hours", PLAN_LIMITS.dayMl, scale, false);
+    if (ml) perDay.ml = ml;
+    if (perDay.feeds || perDay.ml) plan.per_day = perDay;
+  }
+  // The notes: up to PLAN_LIMITS.notes, kept so a release that reads NOTES_OLDER at most still reads the plan
+  // (notesForOlder). A saved plan's notes_full is the whole of its notes when its notes are their start; notes sent on
+  // their own (or changed beside it) are the whole notes. An edit that sends back the saved notes as an older release
+  // reads them (their start, with "…") keeps the whole of them.
+  const sentNotes = text(input.notes, "The notes", PLAN_LIMITS.notes, { are: true });
+  const sentFull = typeof input.notes_full === "string" ? text(input.notes_full, "The notes", PLAN_LIMITS.notes, { are: true }) : undefined;
+  const startOf = (full: string, short: string) => short === full || (short.endsWith("…") && full.startsWith(short.slice(0, -1).trimEnd()));
+  let notes = sentFull && sentNotes && startOf(sentFull, sentNotes) ? sentFull : sentNotes;
+  if (!sentFull && notes && current?.notes_full && notes === current.notes) notes = current.notes_full;
+  if (notes) {
+    plan.notes = notesForOlder(notes);
+    if (notes.length > NOTES_OLDER) plan.notes_full = notes;
+  }
   // When it began: an edit keeps the moment the plan it replaces began; a new plan began at this revision, which its
   // save's moment says (planSince), so nothing in it moves between its read-back and the yes.
   // (since_rev before since, as feedingPlanOf adds it, so the same plan reads as the same JSON.)
@@ -533,12 +764,81 @@ function nightTurnsOf(n: NonNullable<FeedingPlan["night"]>): string[] {
 /** The plan's night turns, by id (empty with no night, or a night that goes on with the day's turns). */
 export const nightTurns = (plan: Pick<FeedingPlan, "night">): string[] => (plan.night ? nightTurnsOf(plan.night) : []);
 
-/** A step the plan gives only if needed (a top-up if she's still hungry, a pump if still full). */
-export const ifNeeded = (s: PlanStep): boolean => (s.do === "bottle" || s.do === "pump") && !!s.if_needed;
+/**
+ * A step the plan gives only if needed (a top-up if she's still hungry, a pump if still full, the breast offered only if
+ * she wants it): never missed, and never keeping a feed from being done.
+ */
+export const ifNeeded = (s: PlanStep): boolean => s.do !== "note" && !!s.if_needed;
+
+/**
+ * Whether step `i` of a feed's steps comes after its nursing, so a bottle there is the top-up ("Top up 25–35 ml"):
+ * never after nursing only if she wants to (practice at the breast), where the bottle is the feed ("Bottle 60 ml").
+ */
+export const afterNursing = (steps: readonly PlanStep[], i: number): boolean => steps.slice(0, i).some((s) => s.do === "nurse" && !s.if_needed);
 
 /** Whether the time between feeds is on demand, with its most (the night's own, else the day's, as `every` is). */
 export const onDemandAt = (plan: Pick<FeedingPlan, "day" | "night">, night: boolean): boolean =>
   night && plan.night?.every ? !!plan.night.on_demand : !!plan.day.on_demand;
+
+/**
+ * Whether the plan's night is when she's hungry (night.on_demand with no interval of its own): no due time at night and
+ * never waking her for a feed. A release that doesn't know it reads the day's interval at night.
+ */
+export const nightWhenHungry = (plan: Pick<FeedingPlan, "night">): boolean => !!plan.night?.on_demand && !plan.night.every;
+
+/** One of the night's turns by the clock: its feed (by id), from its start until the next turn's (the night's end for the last). */
+export type ClockTurn = { feed: string; from: string; until: string };
+
+/** The night's turns by the clock (night.starts beside night.order), in order; null when its turns go in order. */
+export function nightClockTurns(plan: Pick<FeedingPlan, "night">): ClockTurn[] | null {
+  const n = plan.night;
+  if (!n?.starts || !n.order || n.order.length < 2 || n.starts.length !== n.order.length) return null;
+  return n.order.map((feed, i) => ({ feed, from: n.starts![i], until: n.starts![i + 1] ?? n.to }));
+}
+
+/**
+ * The night's turn the clock picks for an instant: the one with the latest start at or before it (on the family's clock,
+ * around the clock from the night's start); before the first start, or outside the night, the first. Null when the
+ * night's turns go in order.
+ */
+export function nightTurnAt(plan: Pick<FeedingPlan, "night">, ms: number, tz: string = DEFAULT_TZ): (ClockTurn & { i: number }) | null {
+  const turns = nightClockTurns(plan);
+  if (!turns) return null;
+  const n = plan.night!;
+  const p = localParts(ms, tz);
+  const at = sinceStart(`${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}`, n.from);
+  let i = 0;
+  if (at < sinceStart(n.to, n.from)) for (const [k, x] of turns.entries()) if (sinceStart(x.from, n.from) <= at) i = k;
+  return { ...turns[i], i };
+}
+
+/**
+ * The night's turns by the clock as sent (night.starts): one time for each of its turns (night.order, two or more), in
+ * that order, each inside the night and later than the one before, counting around the clock from the night's start.
+ * A message saying what to change when they don't fit.
+ */
+function clockTurns(v: unknown, night: NonNullable<FeedingPlan["night"]>): string[] | string {
+  const turns = night.order ?? [];
+  if (!Array.isArray(v)) return "The night's start times must be a list of times, one for each of its turns";
+  if (turns.length < 2) return "The night's turns by the clock need two or more of the night's feeds taking turns (order), one start time each";
+  if (v.length !== turns.length) return `The night's turns by the clock need one start time for each turn: ${turns.length} turns, ${v.length} time${v.length === 1 ? "" : "s"}`;
+  let starts: string[];
+  try {
+    starts = v.map((s, i) => clockText(s, `The night's turn ${i + 1}'s start`));
+  } catch (e) {
+    if (e instanceof PlanError) return e.message;
+    throw e;
+  }
+  const length = sinceStart(night.to, night.from);
+  for (const [i, s] of starts.entries()) {
+    const at = sinceStart(s, night.from);
+    if (at >= length) return `The night's turn ${i + 1} would start at ${clockWords(s)}, outside the night (${clockWords(night.from)} to ${clockWords(night.to)})`;
+    if (i > 0 && at <= sinceStart(starts[i - 1], night.from)) {
+      return `The night's turns by the clock go in order through the night: turn ${i + 1} would start at ${clockWords(s)}, not after turn ${i}'s ${clockWords(starts[i - 1])}`;
+    }
+  }
+  return starts;
+}
 
 // ── Words ──────────────────────────────────────────────────────────────────
 
@@ -598,7 +898,8 @@ const MILK_WORDS: Record<PlanMilk, string> = {
   breastmilk: "breast milk",
   formula: "formula",
   either: "formula or breast milk",
-  breastmilk_first: "pumped milk first, then formula to finish",
+  // Pumped or donor milk alike: it's breast milk.
+  breastmilk_first: "breast milk first, then formula to finish",
 };
 
 export const AT_BREAST_WORDS: Record<AtBreastVia, { name: string; inThe: string }> = {
@@ -606,29 +907,60 @@ export const AT_BREAST_WORDS: Record<AtBreastVia, { name: string; inThe: string 
   sns: { name: "SNS", inThe: "in the SNS" },
 };
 
+/** Milk given other than by bottle (BottleStep.by): the step's name ("Cup 20–30 ml"), and how, after nursing ("Top up 10 ml by spoon"). */
+export const GIVEN_BY_WORDS: Record<PlanGivenBy, { name: string; by: string }> = {
+  cup: { name: "Cup", by: "by cup" },
+  spoon: { name: "Spoon", by: "by spoon" },
+  finger: { name: "Finger feed", by: "by finger feeding" },
+};
+
 /**
  * One step in words: "Nurse 12–18 min with the nipple shield, 20 ml of formula in the SNS", "Nurse 15–20 min on the
- * left", "Pump 15 min", "Pump 15 min if needed", "Top up 25–35 ml, formula or breast milk, paced", "Top up 25–35 ml if
- * still hungry".
+ * left", "Nurse up to 10 min", "Offer the breast 5–10 min" (only if she wants to), "Pump 15 min", "Pump 15 min if
+ * needed", "Top up 25–35 ml, formula or breast milk, paced", "Top up 25–35 ml if still hungry", "Bottle at least 60 ml",
+ * "Cup 20–30 ml, breast milk", "Top up 10–15 ml by spoon". `afterNurse`: it comes after the feed's nursing
+ * (afterNursing), so a bottle is its top-up.
  */
 export function stepText(s: PlanStep, plan: Pick<FeedingPlan, "unit">, target: FeedTarget | null, opts: { afterNurse?: boolean } = {}): string {
   if (s.do === "nurse") {
-    const side = s.side ? ` on the ${SIDE_WORDS[s.side]}` : "";
-    const bits = [`Nurse${s.minutes ? ` ${minutesRangeText(s.minutes)}${s.each_side ? " each side" : ""}` : s.each_side ? " on each side" : ""}${side}${s.shield ? " with the nipple shield" : ""}`];
+    const time = s.minutes ? `${s.up_to ? "up to " : ""}${minutesRangeText(s.minutes)}` : "";
+    let head: string;
+    if (s.if_needed) {
+      // Only if she wants to: the breast is offered ("Offer each breast 5–10 min", "Offer the left breast").
+      const which = s.each_side ? "each breast" : s.side ? `the ${SIDE_WORDS[s.side]} breast` : "the breast";
+      head = `Offer ${which}${time ? ` ${time}` : ""}`;
+    } else {
+      const side = s.side ? ` on the ${SIDE_WORDS[s.side]}` : "";
+      head = `Nurse${time ? ` ${time}${s.each_side ? " each side" : ""}` : s.each_side ? " on each side" : ""}${side}`;
+    }
+    const bits = [`${head}${s.shield ? " with the nipple shield" : ""}`];
     if (s.supplement) {
-      const milk = s.supplement.milk && s.supplement.milk !== "either" ? ` of ${MILK_WORDS[s.supplement.milk]}` : "";
-      bits.push(`${amountText(s.supplement.ml, plan.unit)}${milk} ${AT_BREAST_WORDS[s.supplement.via].inThe}`);
+      const amount = amountText(s.supplement.ml, plan.unit);
+      const where = AT_BREAST_WORDS[s.supplement.via].inThe;
+      const milk = s.supplement.milk;
+      // Breast milk first says where it all goes, then the milk: "20 ml in the SNS: breast milk first, then formula to finish".
+      if (milk === "breastmilk_first") bits.push(`${amount} ${where}: ${MILK_WORDS[milk]}`);
+      else bits.push(`${amount}${milk && milk !== "either" ? ` of ${MILK_WORDS[milk]}` : ""} ${where}`);
     }
     return bits.join(", ");
   }
-  if (s.do === "pump") return `Pump${s.minutes ? ` ${minutesRangeText(s.minutes)}` : ""}${s.if_needed ? " if needed" : ""}`;
+  if (s.do === "pump") return `Pump${s.minutes ? ` ${s.up_to ? "up to " : ""}${minutesRangeText(s.minutes)}` : ""}${s.if_needed ? " if needed" : ""}`;
   if (s.do === "bottle") {
-    const verb = opts.afterNurse ? "Top up" : "Bottle";
+    const by = s.by ? GIVEN_BY_WORDS[s.by] : null;
+    const verb = opts.afterNurse ? "Top up" : by ? by.name : "Bottle";
     // "Bottle up to 50–70 ml", but "Top up to 50–70 ml" (never "Top up up to").
     const upTo = opts.afterNurse ? " to" : " up to";
-    const amount = s.ml ? ` ${amountText(s.ml, plan.unit)}` : s.to_target ? (target ? `${upTo} ${amountText(target, plan.unit)}` : `${upTo} the target`) : "";
+    const amount = s.ml
+      ? `${s.up_to ? upTo : s.at_least ? " at least" : ""} ${amountText(s.ml, plan.unit)}`
+      : s.to_target
+        ? target
+          ? `${upTo} ${amountText(target, plan.unit)}`
+          : `${upTo} the target`
+        : "";
+    // After nursing, how it's given goes with the amount ("Top up 10–15 ml by spoon"); on its own, it's the step's name.
+    const how = opts.afterNurse && by ? ` ${by.by}` : "";
     // Only if needed, right after what it is: "Top up 25–35 ml if still hungry, formula or breast milk, paced bottle".
-    const bits = [`${verb}${amount}${s.if_needed ? " if still hungry" : ""}`];
+    const bits = [`${verb}${amount}${how}${s.if_needed ? " if still hungry" : ""}`];
     if (s.milk) bits.push(MILK_WORDS[s.milk]);
     if (s.via === "paced") bits.push("paced bottle");
     return bits.join(", ");
@@ -641,23 +973,87 @@ export function stepText(s: PlanStep, plan: Pick<FeedingPlan, "unit">, target: F
  * of formula in the SNS; then pump 15 min". Notes aren't steps, so they never
  * join with "then": each is a sentence of its own after the steps ("Pump 20
  * min; then bottle up to 50–70 ml. Burp halfway"). No full stop at the end,
- * so a sentence can go on after it.
+ * so a sentence can go on after it. A bottle after nursing only if she wants to
+ * is the feed's bottle, never its top-up (afterNursing).
  */
 export function feedText(f: PlanFeed, plan: Pick<FeedingPlan, "unit">, target: FeedTarget | null): string {
-  let nursed = false;
   const steps: string[] = [];
   const notes: string[] = [];
-  for (const s of f.steps) {
+  f.steps.forEach((s, i) => {
     if (s.do === "note") {
       const note = s.text.replace(/[\s.;,]+$/, "");
       if (note) notes.push(note);
-      continue;
+      return;
     }
-    const t = stepText(s, plan, target, { afterNurse: nursed });
-    if (s.do === "nurse") nursed = true;
+    const t = stepText(s, plan, target, { afterNurse: afterNursing(f.steps, i) });
     steps.push(steps.length === 0 ? t : `then ${t.charAt(0).toLowerCase()}${t.slice(1)}`);
-  }
+  });
   return [steps.join("; "), ...notes].filter(Boolean).join(". ");
+}
+
+/** A count or amount in 24 hours in words: "at least 8", "8–12", "up to 10", "8" (`say` one number, `both` a range). */
+function perDayEnds(r: PerDayRange, say: (n: number) => string, both: (a: number, b: number) => string): string {
+  if (r.min !== undefined && r.max !== undefined) return r.min === r.max ? say(r.min) : both(r.min, r.max);
+  return r.min !== undefined ? `at least ${say(r.min)}` : `up to ${say(r.max!)}`;
+}
+const countEnds = (r: PerDayRange) => perDayEnds(r, String, (a, b) => `${a}–${b}`);
+const mlEnds = (r: PerDayRange, unit: PlanUnit, both: boolean) =>
+  perDayEnds(r, (n) => amountText({ min: n, max: n }, unit, both), (a, b) => amountText({ min: a, max: b }, unit, both));
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/**
+ * The plan's feeds and milk in 24 hours (per_day), one line each, as the care team gave them: "At least 8 feeds in 24
+ * hours", "8–12 feeds in 24 hours", "Up to 10 feeds in 24 hours", "450–550 ml in 24 hours". None without per_day.
+ */
+export function perDayLines(plan: Pick<FeedingPlan, "per_day" | "unit">, both = volumesBoth()): string[] {
+  const pd = plan.per_day;
+  const out: string[] = [];
+  if (pd?.feeds) {
+    const one = (pd.feeds.min ?? 1) === 1 && (pd.feeds.max ?? 1) === 1;
+    out.push(`${cap(countEnds(pd.feeds))} ${one ? "feed" : "feeds"} in 24 hours`);
+  }
+  if (pd?.ml) out.push(`${cap(mlEnds(pd.ml, plan.unit, both))} in 24 hours`);
+  return out;
+}
+
+/** How far back the plan's feeds and milk in 24 hours are counted (planDayCounts). */
+export const PLAN_DAY_MS = 24 * HOUR;
+
+/** What was logged in the 24 hours before now, against the plan's per_day: feeds, and milk in ml. */
+export type PlanDayCounts = { feeds: number; ml: number };
+
+/**
+ * Feeds and milk logged in the 24 hours before `now`, for the plan's per_day (null without it): feeds as the log counts
+ * them (feed.ts countedFeeds: a nursing feed with its top-ups, a bottle on its own, a plan's later bottles with its
+ * first), by when each began; milk in ml, every bottle's amount, milk at the breast too (never nursing, which has no
+ * amount). Only what was logged: never more than that.
+ */
+export function planDayCounts(plan: Pick<FeedingPlan, "per_day">, entries: readonly Entry[], now: Date): PlanDayCounts | null {
+  if (!plan.per_day) return null;
+  const to = now.getTime();
+  const inDay = (ms: number) => ms > to - PLAN_DAY_MS && ms <= to;
+  const feeds = countedFeeds(entries, now).filter((c) => inDay(c.start)).length;
+  let ml = 0;
+  for (const e of entries) if (e.kind === "feed" && e.data.method === "bottle" && inDay(Date.parse(e.started_at))) ml += bottleAmount(e.data) ?? 0;
+  return { feeds, ml: round1(ml) };
+}
+
+/**
+ * The plan's feeds and milk in 24 hours beside what was logged (planDayCounts), one quiet line of context, never a
+ * warning: "7 feeds in the last 24 hours · plan: at least 8", with "· 420 ml · plan: 450–550 ml" when per_day.ml is set
+ * (the milk alone: "420 ml in the last 24 hours · plan: 450–550 ml"). Amounts in `unit` (the plan's), both ways with
+ * `both` (this phone's setting). Null without per_day or counts.
+ */
+export function perDayText(plan: Pick<FeedingPlan, "per_day" | "unit">, counts: PlanDayCounts | null, unit: PlanUnit = plan.unit, both = volumesBoth()): string | null {
+  const pd = plan.per_day;
+  if (!pd || !counts) return null;
+  const parts: string[] = [];
+  if (pd.feeds) {
+    const n = counts.feeds;
+    parts.push(`${n ? `${n} ${n === 1 ? "feed" : "feeds"}` : "No feeds logged"} in the last 24 hours · plan: ${countEnds(pd.feeds)}`);
+  }
+  if (pd.ml) parts.push(`${amountText({ min: counts.ml, max: counts.ml }, unit, both)}${pd.feeds ? "" : " in the last 24 hours"} · plan: ${mlEnds(pd.ml, unit, both)}`);
+  return parts.length ? parts.join(" · ") : null;
 }
 
 /** "Mon, Nov 10" for a check-in day. */
@@ -666,10 +1062,15 @@ export function checkInText(key: string): string {
   return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
 }
 
+/** Feeds taking turns in words, which start again after the last: "taking turns: A, then B, then start again". */
+const takingTurns = (names: readonly string[]) => `taking turns: ${names.join(", then ")}, then start again`;
+
 /**
  * The whole plan as lines, the read-back before a save (chat, Claude) and the
- * sheet's summary: who it's from, the target, the day (how often, the turns),
- * each feed's steps, the night, notes. Every value the plan holds, nothing else.
+ * sheet's summary: who it's from, the target, the day (how often, the turns,
+ * which start again after the last), each feed's steps, the night (when hungry,
+ * its turns, or its turns by the clock), feeds and milk in 24 hours, notes (the
+ * whole of them). Every value the plan holds, nothing else.
  * `words`: the baby's pronouns in the family's words ("him", "he's").
  */
 export function planLines(plan: FeedingPlan, target: FeedTarget | null, words: { her: string; sheIs: string } = { her: "her", sheIs: "she's" }): string[] {
@@ -677,17 +1078,28 @@ export function planLines(plan: FeedingPlan, target: FeedTarget | null, words: {
   if (plan.from || plan.check_in) out.push([plan.from ? `From: ${plan.from}` : null, plan.check_in ? `check in ${checkInText(plan.check_in)}` : null].filter(Boolean).join(" · "));
   out.push(target ? `Target: ${amountText(target, plan.unit)} a feed` : "Target: none set");
   const day = plan.day.every ? `${intervalText(plan.day.every, plan.day.on_demand)}${plan.day.wake ? `, waking ${words.her} if ${words.sheIs} asleep` : ""}` : "when hungry";
-  const turns = plan.order.map((id) => feedById(plan, id)?.name).filter(Boolean) as string[];
-  out.push(`${plan.night ? "Day" : "Feeds"}: ${day}${turns.length > 1 ? `, taking turns: ${turns.join(", then ")}` : turns.length === 1 ? `: ${turns[0]}` : ""}`);
+  const name = (id: string) => feedById(plan, id)?.name;
+  const turns = plan.order.map(name).filter(Boolean) as string[];
+  out.push(`${plan.night ? "Day" : "Feeds"}: ${day}${turns.length > 1 ? `, ${takingTurns(turns)}` : turns.length === 1 ? `: ${turns[0]}` : ""}`);
   for (const f of plan.feeds) out.push(`• ${f.name}: ${feedText(f, plan, target)}`);
   if (plan.night) {
     const n = plan.night;
-    const how = n.every ? intervalText(n.every, n.on_demand) : plan.day.every ? `${intervalText(plan.day.every, plan.day.on_demand)} (as by day)` : "when hungry";
-    const feeds = nightTurns(plan).map((id) => feedById(plan, id)?.name).filter(Boolean) as string[];
-    const which = feeds.length > 1 ? `, taking turns: ${feeds.join(", then ")}` : feeds.length === 1 ? `: ${feeds[0]}` : ", same turns as by day";
+    // Its own interval; else when hungry (on demand with no most); else the day's.
+    const how = n.every ? intervalText(n.every, n.on_demand) : nightWhenHungry(plan) ? "when hungry" : plan.day.every ? `${intervalText(plan.day.every, plan.day.on_demand)} (as by day)` : "when hungry";
+    const clock = nightClockTurns(plan);
+    const feeds = nightTurns(plan).map(name).filter(Boolean) as string[];
+    const which = clock
+      ? `, by the clock: ${clock.map((c) => `${name(c.feed)} from ${clockWords(c.from)}`).join(", then ")}`
+      : feeds.length > 1
+        ? `, ${takingTurns(feeds)}`
+        : feeds.length === 1
+          ? `: ${feeds[0]}`
+          : ", same turns as by day";
     out.push(`Night (${clockWords(n.from)}–${clockWords(n.to)}): ${how}${n.wake ? `, waking ${words.her}` : ""}${which}`);
   }
-  if (plan.notes) out.push(`Notes: ${plan.notes}`);
+  out.push(...perDayLines(plan));
+  const notes = planNotes(plan);
+  if (notes) out.push(`Notes: ${notes}`);
   return out;
 }
 

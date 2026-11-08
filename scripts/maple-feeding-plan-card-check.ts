@@ -175,7 +175,7 @@ check("upcoming: the plan's words, numbered; the first step carries the action a
   // The night's feed picked instead: Start pumping first; the bottle's amount is the target it's up to.
   const night = at(PLAN, [], "09:00", { choose: NIGHT.id });
   const n = stepRows(night, night.focus, SHE);
-  eq(shape(n), [["todo", "Pump 20 min", null], ["todo", "Bottle up to 50–70 ml, pumped milk first, then formula to finish", null], ["note", "Burp halfway", null]]);
+  eq(shape(n), [["todo", "Pump 20 min", null], ["todo", "Bottle up to 50–70 ml, breast milk first, then formula to finish", null], ["note", "Burp halfway", null]]);
   // Its bottle beside its row, for whoever gives it (one parent pumps while the other gives the bottle).
   eq([n.map((r) => r.n), carry(n)], [[1, 2, null], [["pump", null, null], [null, "form", null], [null, null, null]]]);
   eq([night.focus.steps.map((s) => s.need), night.focus.steps[1].status], [[null, { min: 50, max: 70 }, null], "todo"], "need: the target, before any bottle");
@@ -222,7 +222,7 @@ check("on the breast in a feed with no nursing step (the night's, she wouldn't t
   const fp = at(PLAN, log, "+1 00:05");
   eq([fp.focus.state, fp.focus.feed.id, fp.focus.extraNursing], ["underway", NIGHT.id, true]);
   const rows = stepRows(fp, fp.focus, SHE);
-  eq(shape(rows).slice(0, 2), [["done", "Pumped 25m", null], ["todo", "Bottle up to 50–70 ml, pumped milk first, then formula to finish", null]]);
+  eq(shape(rows).slice(0, 2), [["done", "Pumped 25m", null], ["todo", "Bottle up to 50–70 ml, breast milk first, then formula to finish", null]]);
   eq(carry(rows), [[null, null, null], [null, null, null], [null, null, null]]);
 });
 
@@ -260,7 +260,7 @@ check("a running pump leaves a bottle its action: one parent pumps while the oth
   // The night: the pump has begun the night's feed, and its first bottle is the pumped milk.
   let fp = at(PLAN, [...evening(), pump("23:20-")], "23:30");
   let rows = stepRows(fp, fp.focus, SHE);
-  eq([fp.focus.state, fp.focus.feed.id, shape(rows).slice(0, 2)], ["underway", NIGHT.id, [["running", "Pump 20 min", "Pumping now · 10m"], ["todo", "Bottle up to 50–70 ml, pumped milk first, then formula to finish", null]]]);
+  eq([fp.focus.state, fp.focus.feed.id, shape(rows).slice(0, 2)], ["underway", NIGHT.id, [["running", "Pump 20 min", "Pumping now · 10m"], ["todo", "Bottle up to 50–70 ml, breast milk first, then formula to finish", null]]]);
   eq(carry(rows), [[null, null, null], ["form", null, null], [null, null, null]]);
   // Pumped milk first: breast milk, never the last bottle's milk; how much was pumped is the family's to say, so no
   // amount, and the hint says what the whole bottle is up to.
@@ -288,7 +288,7 @@ check("a bottle short of what it's up to stays open: what's given, formula to fi
   const fp = at(PLAN, night, "23:50");
   eq([fp.focus.state, fp.focus.feed.id, fp.focus.done, fp.focus.steps[1].status, fp.focus.steps[1].ml, fp.focus.steps[1].need], ["underway", NIGHT.id, false, "todo", 40, { min: 50, max: 70 }]);
   const rows = stepRows(fp, fp.focus, SHE);
-  eq(shape(rows).slice(0, 2), [["done", "Pumped 20m", null], ["todo", "Bottle up to 50–70 ml, pumped milk first, then formula to finish", "Gave 40 ml · up to 50–70 ml"]]);
+  eq(shape(rows).slice(0, 2), [["done", "Pumped 20m", null], ["todo", "Bottle up to 50–70 ml, breast milk first, then formula to finish", "Gave 40 ml · up to 50–70 ml"]]);
   eq(carry(rows), [[null, null, null], ["form", null, "She's done"], [null, null, null]]);
   eq(form(rows[1].action), { label: "Log formula to finish", aria: "Log formula to finish: 10 ml, opens the bottle form", preset: { method: "bottle", amount_ml: 10, milk: "formula", plan: NIGHT.id } });
   // The close is in the baby's words; without them, the name-free form.
@@ -533,7 +533,7 @@ check("in ounces: what's given, what it's up to and the rest, in the plan's unit
   const target = { min: 59.1, max: 88.7 };
   const fp = at(oz, [pump("13:00-13:20"), bottle("13:22", 29.6, { milk: "breastmilk", plan: oz.feeds[0].id })], "13:25", { target });
   const rows = stepRows(fp, fp.focus, SHE);
-  eq(shape(rows)[1], ["todo", "Bottle up to 2–3 oz, pumped milk first, then formula to finish", "Gave 1 oz · up to 2–3 oz"]);
+  eq(shape(rows)[1], ["todo", "Bottle up to 2–3 oz, breast milk first, then formula to finish", "Gave 1 oz · up to 2–3 oz"]);
   eq(form(rows[1].action), { label: "Log formula to finish", aria: "Log formula to finish: 1 oz, opens the bottle form", preset: { method: "bottle", amount_ml: 29.5, milk: "formula", plan: oz.feeds[0].id } });
 });
 
@@ -571,7 +571,7 @@ check("the night's bottle before its pump: a quiet second action once the feed i
   const given = at(PLAN, [...firstNight(), bottle("+1 02:40", 40, { milk: "breastmilk" })], "+1 02:42");
   eq([given.focus.state, given.focus.feed.id], ["underway", NIGHT.id]);
   const g = stepRows(given, given.focus, SHE, undefined, D("+1 02:42"));
-  eq([shape(g)[1], carry(g)], [["todo", "Bottle up to 50–70 ml, pumped milk first, then formula to finish", "Gave 40 ml · up to 50–70 ml"], [["pump", null, null], [null, "form", "She's done"], [null, null, null]]]);
+  eq([shape(g)[1], carry(g)], [["todo", "Bottle up to 50–70 ml, breast milk first, then formula to finish", "Gave 40 ml · up to 50–70 ml"], [["pump", null, null], [null, "form", "She's done"], [null, null, null]]]);
   eq(form(g[1].secondary), { label: "Log formula to finish", aria: "Log formula to finish: 10 ml, opens the bottle form", preset: { method: "bottle", amount_ml: 10, milk: "formula", plan: NIGHT.id } });
   eq([reading(given, "+1 02:42").bottle?.word, reading(given, "+1 02:42").bottle?.preset.amount_ml], ["To finish", 10]);
   // The pump running: the bottle is the next step, the dock's "Next step".
@@ -599,7 +599,7 @@ check("she only nursed in a plan feed with no nursing: the plan's words, nothing
   const fp = at(PLAN, log, "+1 01:00");
   eq([fp.focus.feed.id, nursedOnly(fp.focus)], [NIGHT.id, true]);
   const rows = stepRows(fp, fp.focus, SHE, undefined, D("+1 01:00"));
-  eq(shape(rows), [["todo", "Pump 20 min", null], ["todo", "Bottle up to 50–70 ml, pumped milk first, then formula to finish", null], ["note", "Burp halfway", null]]);
+  eq(shape(rows), [["todo", "Pump 20 min", null], ["todo", "Bottle up to 50–70 ml, breast milk first, then formula to finish", null], ["note", "Burp halfway", null]]);
   eq(carry(rows), [[null, null, null], [null, null, null], [null, null, null]]);
   const r = reading(fp, "+1 01:00");
   eq([r.primary, r.bottle, r.nurseNext], [null, null, false]);

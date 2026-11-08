@@ -11,8 +11,14 @@
  * The plans here are invented examples, not any family's. One PASS/FAIL line
  * per case, exit 1 on any failure. Times are wall clock in America/New_York.
  */
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { countedFeeds, feedGaps, lastFedAnchor, nursingRuns, sameFeedBottleIds, topUpRunFor, TOP_UP_LINK_MS } from "../src/lib/maple/feed";
 import {
+  afterNursing,
   amountText,
   checkFeedingPlan,
   clockText,
@@ -22,12 +28,23 @@ import {
   dueText,
   everyText,
   feedingPlanOf,
+  feedNameKey,
   feedPlanNow,
   feedText,
+  ifNeeded,
   inNight,
   intervalText,
+  nightClockTurns,
+  nightTurnAt,
+  nightWhenHungry,
+  NOTES_OLDER,
+  notesForOlder,
   parseFeedingPlan,
+  perDayLines,
+  perDayText,
+  planDayCounts,
   planLines,
+  planNotes,
   PlanConflict,
   PlanError,
   planSince,
@@ -186,10 +203,10 @@ check("parse: refuses what can't be a plan, saying what to change", () => {
   throws(() => parseFeedingPlan({ feeds: [{ name: "A", steps: [{ do: "dance" }] }] }, null, NOW0), PlanError, /nurse, pump, bottle or note/);
   throws(() => parseFeedingPlan({ feeds: [{ name: "A", steps: [{ do: "pump" }] }, { name: " a ", steps: [{ do: "pump" }] }] }, null, NOW0), PlanError, /same name/);
   throws(() => parseFeedingPlan(f({ order: ["Nope"] }), null, NOW0), PlanError, /isn't in the plan/);
-  throws(() => parseFeedingPlan(f({ night: { from: "22:00", to: "10 PM" } }), null, NOW0), PlanError, /different times/);
+  throws(() => parseFeedingPlan(f({ night: { from: "22:00", to: "10 PM" } }), null, NOW0), PlanError, /^Night would start and end at 10 PM: check AM and PM \(10 AM is 10:00\)$/);
   throws(() => parseFeedingPlan(f({ day: { every: 10 } }), null, NOW0), PlanError, /between 30 and 480/);
   throws(() => parseFeedingPlan(f({ check_in: "Monday" }), null, NOW0), PlanError, /YYYY-MM-DD/);
-  throws(() => parseFeedingPlan(f({ notes: "x".repeat(301) }), null, NOW0), PlanError, /too long/);
+  throws(() => parseFeedingPlan(f({ notes: "x".repeat(1001) }), null, NOW0), PlanError, /^The notes are too long \(1000 characters at most\)$/);
 });
 
 check("parse: an edit keeps each feed's id by id or by name; a new feed gets the new revision's", () => {
@@ -266,8 +283,8 @@ check("words: each step, and a feed's steps in one line", () => {
   eq(stepText(SNS.steps[0], PLAN, TARGET), "Nurse 12–18 min, 20 ml of formula in the SNS");
   eq(feedText(SNS, PLAN, TARGET), "Nurse 12–18 min, 20 ml of formula in the SNS; then pump 15 min");
   eq(feedText(TOPUP, PLAN, TARGET), "Nurse 8–12 min each side; then top up 25–35 ml, formula or breast milk, paced bottle");
-  eq(feedText(NIGHT, PLAN, TARGET), "Pump 20 min; then bottle up to 50–70 ml, pumped milk first, then formula to finish. Burp halfway");
-  eq(stepText(NIGHT.steps[1], PLAN, null), "Bottle up to the target, pumped milk first, then formula to finish");
+  eq(feedText(NIGHT, PLAN, TARGET), "Pump 20 min; then bottle up to 50–70 ml, breast milk first, then formula to finish. Burp halfway");
+  eq(stepText(NIGHT.steps[1], PLAN, null), "Bottle up to the target, breast milk first, then formula to finish");
   eq(stepText({ do: "nurse", shield: true, supplement: { via: "syringe", ml: { min: 15, max: 15 } } }, PLAN, null), "Nurse with the nipple shield, 15 ml in the syringe");
 });
 
@@ -275,10 +292,10 @@ check("words: the read-back holds every value, and nothing else", () => {
   eq(planLines(PLAN, TARGET), [
     "From: Feeding clinic · check in Fri, Mar 13",
     "Target: 50–70 ml a feed",
-    "Day: every 2.5–3.5 hours, taking turns: Nurse + SNS, then Nurse, top up",
+    "Day: every 2.5–3.5 hours, taking turns: Nurse + SNS, then Nurse, top up, then start again",
     "• Nurse + SNS: Nurse 12–18 min, 20 ml of formula in the SNS; then pump 15 min",
     "• Nurse, top up: Nurse 8–12 min each side; then top up 25–35 ml, formula or breast milk, paced bottle",
-    "• Pump + bottle: Pump 20 min; then bottle up to 50–70 ml, pumped milk first, then formula to finish. Burp halfway",
+    "• Pump + bottle: Pump 20 min; then bottle up to 50–70 ml, breast milk first, then formula to finish. Burp halfway",
     "Night (11 PM–5 AM): every 3 hours, waking her: Pump + bottle",
   ]);
 });
@@ -824,7 +841,7 @@ check("on demand: in words, and the read-back says it by day and at night", () =
   const p = parseFeedingPlan({ ...INPUT, day: { every: [0, 180], wake: true }, night: { ...INPUT.night, every: { max: 180 } } }, null, NOW0);
   const lines = planLines(p, TARGET);
   eq([lines[2], lines[6]], [
-    "Day: on demand, at least every 3 hours, waking her if she's asleep, taking turns: Nurse + SNS, then Nurse, top up",
+    "Day: on demand, at least every 3 hours, waking her if she's asleep, taking turns: Nurse + SNS, then Nurse, top up, then start again",
     "Night (11 PM–5 AM): on demand, at least every 3 hours, waking her: Pump + bottle",
   ]);
   // A night without an interval of its own goes on with the day's, on demand too.
@@ -906,10 +923,10 @@ check("turns at night: night.order by name or id, its first the night's feed; on
   eq([one.night?.feed, "order" in one.night!], [NIGHT.id, false]);
   // An older release reads the night's feed: its first turn.
   eq(TURNS.night?.feed, TURNS.night?.order?.[0]);
-  throws(() => parseFeedingPlan({ ...INPUT, night: { ...INPUT.night, order: ["Pump + bottle", "Pump + bottle"] } }, null, NOW0), PlanError, /^Each feed is in the night's turns once$/);
+  throws(() => parseFeedingPlan({ ...INPUT, night: { ...INPUT.night, order: ["Pump + bottle", "Pump + bottle"] } }, null, NOW0), PlanError, /^Each feed is in the night's turns once: they start again after the last/);
   throws(() => parseFeedingPlan({ ...INPUT, night: { ...INPUT.night, order: ["Pump + bottle", "Nope"] } }, null, NOW0), PlanError, /^The night's turn 2 names a feed that isn't in the plan$/);
   throws(() => parseFeedingPlan({ ...INPUT, night: { ...INPUT.night, order: "Pump + bottle" } }, null, NOW0), PlanError, /^The night's turns must be a list of feeds$/);
-  eq(planLines(TURNS, TARGET)[7], "Night (11 PM–5 AM): every 3 hours, waking her, taking turns: Pump + bottle, then Nurse, pump");
+  eq(planLines(TURNS, TARGET)[7], "Night (11 PM–5 AM): every 3 hours, waking her, taking turns: Pump + bottle, then Nurse, pump, then start again");
 });
 
 check("turns at night: each night feed takes the next turn, by the night's turns as the day's go; the day's turns never move", () => {
@@ -1192,6 +1209,347 @@ check("validate: a nursing feed keeps its shield and plan feed; a bottle keeps i
     refused = true;
   }
   ok(refused, "a plan tag that isn't an id is refused");
+});
+
+// ── plans other families bring home: the plan's newer options ──────────────
+// Each is a new optional key, so a release before it reads the stored plan (the rollback check at the end runs that
+// release's own parser). Invented plans: a formula feed by day that wakes her and lets her sleep at night, a split
+// night (a partner's bottle, then nursing), practice at the breast before a paced bottle, caps and a least, a cup or a
+// spoon, and feeds and milk in 24 hours.
+
+/** A plan from bits, one feed unless given: what a careful model would send to set_feeding_plan. */
+const plan = (extra: Record<string, unknown>, feeds: unknown[] = [{ name: "Bottle", steps: [{ do: "bottle", ml: [60, 90], milk: "formula" }] }]) =>
+  parseFeedingPlan({ feeds, ...extra }, null, NOW0);
+/** One step, read and said as the first of a feed (or after its nursing, when `afterNurse`). */
+const oneStep = (step: Record<string, unknown>, afterNurse = false) => {
+  const p = plan({}, [{ name: "Feed", steps: afterNurse ? [{ do: "nurse" }, step] : [step] }]);
+  const s = p.feeds[0].steps[afterNurse ? 1 : 0];
+  return { step: s, words: stepText(s, p, null, { afterNurse }) };
+};
+
+check("night when hungry: on demand with no most at night is kept, says when hungry, and never wakes her", () => {
+  const p = plan({ day: { every: 180, wake: true }, night: { from: "9 PM", to: "5 AM", on_demand: true, feed: "Bottle" } });
+  eq(p.night, { from: "21:00", to: "05:00", on_demand: true, feed: p.feeds[0].id }, "on_demand on its own: when hungry");
+  eq([nightWhenHungry(p), nightWhenHungry(PLAN), nightWhenHungry(plan({ night: { from: "21:00", to: "05:00" } }))], [true, false, false]);
+  eq(planLines(p, null).slice(1), ["Day: every 3 hours, waking her if she's asleep: Bottle", "• Bottle: Bottle 60–90 ml, formula", "Night (9 PM–5 AM): when hungry: Bottle"]);
+  // With its most it's on demand as before; by day, on demand with no most is a day with no interval (when hungry).
+  eq(plan({ night: { from: "21:00", to: "05:00", on_demand: true, every: { max: 240 } } }).night, { from: "21:00", to: "05:00", every: { min: 240, max: 240 }, on_demand: true });
+  eq(plan({ day: { on_demand: true } }).day, {});
+  // Waking her needs a time to wake her by: refused on a save, dropped from a stored plan (a hand edit), which still reads.
+  const wake = { night: { from: "21:00", to: "05:00", on_demand: true, wake: true } };
+  throws(() => plan(wake), PlanError, /^Night's wake to feed needs a time between feeds, and when hungry has none: leave wake out, or give the night its own time between feeds$/);
+  throws(() => checkFeedingPlan({ feeding_plan: { feeds: [{ name: "Bottle", steps: [{ do: "bottle" }] }], ...wake } }, null, NOW0), PlanError, /when hungry has none/);
+  eq(feedingPlanOf({ feeding_plan: { ...p, night: { ...p.night, wake: true } } })?.night, p.night, "stored with both: no wake");
+});
+
+check("night turns by the clock: one start for each turn, in order through the night; said with their hours", () => {
+  const input = {
+    day: { every: [150, 180] },
+    night: { from: "21:00", to: "05:00", order: ["Partner's bottle", "Nurse"], starts: ["21:00", "1 AM"] },
+    order: ["Nurse"],
+  };
+  const feeds = [
+    { name: "Nurse", steps: [{ do: "nurse", each_side: true }] },
+    { name: "Partner's bottle", steps: [{ do: "bottle", ml: [60, 90], milk: "breastmilk", via: "paced" }] },
+  ];
+  const p = plan(input, feeds);
+  const [nurse, partner] = p.feeds;
+  eq(p.night, { from: "21:00", to: "05:00", feed: partner.id, order: [partner.id, nurse.id], starts: ["21:00", "01:00"] });
+  eq(planLines(p, null)[4], "Night (9 PM–5 AM): every 2.5–3 hours (as by day), by the clock: Partner's bottle from 9 PM, then Nurse from 1 AM");
+  eq(nightClockTurns(p), [{ feed: partner.id, from: "21:00", until: "01:00" }, { feed: nurse.id, from: "01:00", until: "05:00" }]);
+  // The turn for a moment: the latest start at or before it; before the first start (or outside the night), the first.
+  const at = (hhmm: string) => nightTurnAt(p, ms(hhmm), TZ);
+  eq(["21:00", "22:30", "+1 00:59", "+1 01:00", "+1 04:30", "20:00", "+1 06:00"].map((h) => at(h)?.feed), [partner.id, partner.id, partner.id, nurse.id, nurse.id, partner.id, partner.id]);
+  eq(at("+1 02:00"), { feed: nurse.id, from: "01:00", until: "05:00", i: 1 });
+  const late = plan({ ...input, night: { ...input.night, starts: ["22:00", "01:00"] } }, feeds);
+  eq([nightTurnAt(late, ms("21:30"), TZ)?.feed, nightTurnAt(late, ms("22:10"), TZ)?.feed], [partner.id, partner.id], "before the first start, the first turn");
+  // With no starts the turns go in order, as before; the stored plan without them reads as it always did.
+  eq([nightClockTurns(PLAN), nightTurnAt(PLAN, ms("23:30"), TZ)], [null, null]);
+  // What doesn't fit says what to change: two or more turns, one time each, inside the night, in order.
+  const refused = (night: Record<string, unknown>) => throws(() => plan({ ...input, night: { ...input.night, ...night } }, feeds), PlanError).message;
+  eq(
+    [
+      refused({ order: ["Partner's bottle"], starts: ["21:00"] }),
+      refused({ starts: ["21:00"] }),
+      refused({ starts: ["21:00", "06:00"] }),
+      refused({ starts: ["01:00", "21:00"] }),
+      refused({ starts: ["21:00", "noon"] }),
+    ],
+    [
+      "The night's turns by the clock need two or more of the night's feeds taking turns (order), one start time each",
+      "The night's turns by the clock need one start time for each turn: 2 turns, 1 time",
+      "The night's turn 2 would start at 6 AM, outside the night (9 PM to 5 AM)",
+      "The night's turns by the clock go in order through the night: turn 2 would start at 9 PM, not after turn 1's 1 AM",
+      "The night's turn 2's start must be a time like 22:00",
+    ]
+  );
+  // A stored plan whose starts no longer fit its turns (a hand edit) takes its turns in order, and still reads.
+  const stored = feedingPlanOf({ feeding_plan: { ...p, night: { ...p.night, starts: ["21:00"] } } });
+  eq([stored?.night?.order, stored?.night?.starts], [[partner.id, nurse.id], undefined]);
+});
+
+check("nursing only if she wants to: the breast offered, never missed; the bottle after it is the feed, never a top-up", () => {
+  const p = plan({}, [{ name: "Practice, then bottle", steps: [{ do: "nurse", minutes: [5, 10], if_needed: true }, { do: "bottle", ml: 60, milk: "breastmilk", via: "paced" }] }]);
+  const [offer, bottleStep] = p.feeds[0].steps;
+  eq(offer, { do: "nurse", minutes: { min: 5, max: 10 }, if_needed: true });
+  eq([ifNeeded(offer), ifNeeded(bottleStep), afterNursing(p.feeds[0].steps, 1), afterNursing(TOPUP.steps, 1)], [true, false, false, true]);
+  eq(feedText(p.feeds[0], p, null), "Offer the breast 5–10 min; then bottle 60 ml, breast milk, paced bottle");
+  eq(
+    [{ minutes: [5, 10] }, { minutes: [5, 10], each_side: true }, { minutes: [5, 10], side: "left" }, { minutes: [5, 10], shield: true }, { each_side: true }, {}].map(
+      (x) => oneStep({ do: "nurse", if_needed: true, ...x }).words
+    ),
+    ["Offer the breast 5–10 min", "Offer each breast 5–10 min", "Offer the left breast 5–10 min", "Offer the breast 5–10 min with the nipple shield", "Offer each breast", "Offer the breast"]
+  );
+  throws(() => oneStep({ do: "nurse", if_needed: "yes" }), PlanError, /^"Feed" step 1: only if needed must be true or false$/);
+});
+
+check("caps and a least: up to N and at least N kept as the one number with their flag, said so; contradictions refused", () => {
+  const read = (step: Record<string, unknown>, afterNurse = false) => {
+    const { step: s, words } = oneStep(step, afterNurse);
+    return [s, words];
+  };
+  eq(read({ do: "nurse", minutes: { max: 10 } }), [{ do: "nurse", minutes: { min: 10, max: 10 }, up_to: true }, "Nurse up to 10 min"]);
+  eq(read({ do: "nurse", minutes: [0, 10], each_side: true })[1], "Nurse up to 10 min each side");
+  eq(read({ do: "nurse", minutes: 10, up_to: true, if_needed: true })[1], "Offer the breast up to 10 min");
+  eq(read({ do: "pump", minutes: { min: 0, max: 20 } }), [{ do: "pump", minutes: { min: 20, max: 20 }, up_to: true }, "Pump up to 20 min"]);
+  eq(read({ do: "bottle", ml: { max: 60 } }), [{ do: "bottle", ml: { min: 60, max: 60 }, up_to: true }, "Bottle up to 60 ml"]);
+  eq(read({ do: "bottle", ml: { min: 60 } }), [{ do: "bottle", ml: { min: 60, max: 60 }, at_least: true }, "Bottle at least 60 ml"]);
+  eq([read({ do: "bottle", ml: 30, up_to: true }, true)[1], read({ do: "bottle", ml: 20, at_least: true, milk: "formula" }, true)[1]], ["Top up to 30 ml", "Top up at least 20 ml, formula"]);
+  // In ounces, the one number converts as any amount does.
+  const oz = parseFeedingPlan({ amounts_in: "oz", feeds: [{ name: "Bottle", steps: [{ do: "bottle", ml: { min: 2.5 } }] }] }, null, NOW0);
+  eq([oz.feeds[0].steps[0], stepText(oz.feeds[0].steps[0], oz, null)], [{ do: "bottle", ml: { min: 73.9, max: 73.9 }, at_least: true }, "Bottle at least 2.5 oz"]);
+  // A nursing's {min} is still its one number, as it always was; a plain range keeps both ends.
+  eq([read({ do: "nurse", minutes: { min: 10 } })[0], read({ do: "bottle", ml: [60, 90] })[0]], [{ do: "nurse", minutes: { min: 10, max: 10 } }, { do: "bottle", ml: { min: 60, max: 90 } }]);
+  const no = (step: Record<string, unknown>) => throws(() => oneStep(step), PlanError).message;
+  eq(
+    [
+      no({ do: "nurse", minutes: [5, 10], up_to: true }),
+      no({ do: "bottle", ml: [60, 90], at_least: true }),
+      no({ do: "bottle", ml: { max: 60 }, at_least: true }),
+      no({ do: "bottle", ml: { min: 60 }, up_to: true }),
+      no({ do: "bottle", ml: 60, up_to: true, at_least: true }),
+      no({ do: "bottle", ml: 60, at_least: true, to_target: true }),
+      no({ do: "bottle", ml: 60, up_to: true, to_target: true }),
+      no({ do: "pump", up_to: true }),
+      no({ do: "bottle", at_least: true }),
+    ],
+    [
+      '"Feed" step 1: up to is one number (the most minutes), not a range',
+      '"Feed" step 1: at least is one number (the least milk), not a range',
+      '"Feed" step 1: at least is its smallest amount, so it takes {min} or one number, not {max}',
+      '"Feed" step 1: up to is its most, so it takes {max} or one number, not {min}',
+      "\"Feed\" step 1: up to and at least aren't both; its amount is one or the other",
+      '"Feed" step 1: at least is an amount of its own, not up to the target; give one or the other',
+      '"Feed" step 1: up to the target already says up to; for an amount of its own, give its ml with up to instead',
+      '"Feed" step 1: up to needs its number (the most minutes)',
+      '"Feed" step 1: at least needs its number (the least milk)',
+    ]
+  );
+});
+
+check("other ways of giving: a cup, spoon or finger feed is a bottle step `by` it, never a new via; said by its name", () => {
+  eq(oneStep({ do: "bottle", ml: [20, 30], milk: "breastmilk", by: "cup" }), { step: { do: "bottle", ml: { min: 20, max: 30 }, milk: "breastmilk", by: "cup" }, words: "Cup 20–30 ml, breast milk" });
+  eq(
+    [oneStep({ do: "bottle", ml: [10, 15], by: "spoon" }, true).words, oneStep({ do: "bottle", ml: 5, by: "finger", if_needed: true }, true).words, oneStep({ do: "bottle", ml: 5, by: "finger" }).words, oneStep({ do: "bottle", to_target: true, by: "cup" }).words],
+    ["Top up 10–15 ml by spoon", "Top up 5 ml by finger feeding if still hungry", "Finger feed 5 ml", "Cup up to the target"]
+  );
+  throws(() => oneStep({ do: "bottle", ml: 20, by: "cup", via: "paced" }), PlanError, /^"Feed" step 1: by cup is instead of a bottle, so leave out how the bottle is given \(via\)$/);
+  throws(() => oneStep({ do: "bottle", ml: 20, by: "dropper" }), PlanError, /given by must be one of: cup, spoon, finger/);
+  throws(() => oneStep({ do: "bottle", ml: 20, via: "cup" }), PlanError, /how it's given must be one of: bottle, paced/);
+});
+
+check("feeds and milk in 24 hours: as the care team gave them, said in the read-back; counted from the log as context", () => {
+  const read = (perDay: unknown, amountsIn = "ml") => parseFeedingPlan({ amounts_in: amountsIn, per_day: perDay, feeds: [{ name: "Bottle", steps: [{ do: "bottle" }] }] }, null, NOW0);
+  eq(
+    [{ feeds: { min: 8 } }, { feeds: [8, 12] }, { feeds: { max: 10 } }, { feeds: 8 }, { feeds: [0, 10] }, { ml: [450, 550] }, { feeds: { min: 0, max: 12 }, ml: { min: 450 } }].map((x) => read(x).per_day),
+    [{ feeds: { min: 8 } }, { feeds: { min: 8, max: 12 } }, { feeds: { max: 10 } }, { feeds: { min: 8, max: 8 } }, { feeds: { max: 10 } }, { ml: { min: 450, max: 550 } }, { feeds: { max: 12 }, ml: { min: 450 } }]
+  );
+  eq(read({ ml: [15, 18] }, "oz").per_day, { ml: { min: 443.6, max: 532.3 } }, "milk in ounces is kept in ml");
+  eq(read({}).per_day, undefined, "nothing in it, nothing kept");
+  const no = (perDay: unknown) => throws(() => read(perDay), PlanError).message;
+  eq(
+    [no({ feeds: 0 }), no({ feeds: 25 }), no({ feeds: 8.5 }), no({ ml: 5000 }), no("eight"), no({ feeds: "eight" })],
+    [
+      "Feeds in 24 hours needs a number: at least ({min}), up to ({max}), or both",
+      "Feeds in 24 hours must be between 1 and 24",
+      "Feeds in 24 hours is a whole number of feeds",
+      "Milk in 24 hours must be between 1 and 3000",
+      "Feeds and milk in 24 hours (per_day) must say feeds, ml or both",
+      "Feeds in 24 hours must be a number, a range, or {min} (at least) or {max} (up to)",
+    ]
+  );
+  eq(
+    [{ feeds: { min: 8 } }, { feeds: [8, 12] }, { feeds: { max: 10 } }, { feeds: 1 }, { ml: [450, 550] }, { ml: { min: 450 } }].map((x) => perDayLines(read(x), false)),
+    [["At least 8 feeds in 24 hours"], ["8–12 feeds in 24 hours"], ["Up to 10 feeds in 24 hours"], ["1 feed in 24 hours"], ["450–550 ml in 24 hours"], ["At least 450 ml in 24 hours"]]
+  );
+  const both = read({ feeds: { min: 8 }, ml: [450, 550] });
+  eq(planLines(both, null).slice(-2), ["At least 8 feeds in 24 hours", "450–550 ml in 24 hours"], "after the feeds and the night, before the notes");
+  // The last 24 hours of an invented log: 7 feeds (a nursing feed with its top-up is one; a bottle on its own is one),
+  // 420 ml by bottle and at the breast; a bottle 24.5 hours ago doesn't count.
+  const log = [
+    bottle("07:30", 90, { milk: "formula" }),
+    nurse("L 09:00-09:15"),
+    bottle("09:17", 30, { milk: "formula", via: "paced" }),
+    bottle("12:00", 90, { milk: "formula" }),
+    bottle("15:00", 90, { milk: "formula" }),
+    nurse("L 18:00-18:10, R 18:10-18:20"),
+    bottle("18:05", 20, { milk: "formula", via: "sns" }),
+    bottle("21:00", 100, { milk: "formula" }),
+    nurse("R +1d00:30-+1d00:45"),
+    bottle("+1 03:30", 90, { milk: "breastmilk" }),
+  ];
+  const counts = planDayCounts(both, log, D("+1 08:00"));
+  eq(counts, { feeds: 7, ml: 420 });
+  eq(planDayCounts(PLAN, log, D("+1 08:00")), null, "no per_day: nothing counted");
+  eq(perDayText(both, counts, "ml", false), "7 feeds in the last 24 hours · plan: at least 8 · 420 ml · plan: 450–550 ml");
+  eq(perDayText(both, { feeds: 1, ml: 0 }, "ml", false), "1 feed in the last 24 hours · plan: at least 8 · 0 ml · plan: 450–550 ml");
+  eq(perDayText(both, { feeds: 0, ml: 0 }, "ml", false), "No feeds logged in the last 24 hours · plan: at least 8 · 0 ml · plan: 450–550 ml");
+  eq(perDayText(read({ ml: [450, 550] }), { feeds: 3, ml: 420 }, "ml", false), "420 ml in the last 24 hours · plan: 450–550 ml");
+  eq(perDayText(read({ feeds: [8, 12] }), counts, "ml", false), "7 feeds in the last 24 hours · plan: 8–12");
+  const oz = read({ feeds: [8, 12], ml: [15, 18] }, "oz");
+  eq([perDayText(oz, { feeds: 9, ml: 473.2 }, oz.unit, false), perDayText(PLAN, counts)], ["9 feeds in the last 24 hours · plan: 8–12 · 16 oz · plan: 15–18 oz", null]);
+});
+
+check("words: the turns start again; breast milk first, at the breast and by bottle; midnight; refusals say the way out", () => {
+  eq(planLines(PLAN, TARGET)[2], "Day: every 2.5–3.5 hours, taking turns: Nurse + SNS, then Nurse, top up, then start again");
+  const sns = oneStep({ do: "nurse", minutes: [15, 20], supplement: { via: "sns", ml: 20, milk: "breastmilk_first" } }).words;
+  const syringe = oneStep({ do: "nurse", supplement: { via: "syringe", ml: 10, milk: "breastmilk_first" } }).words;
+  eq([sns, syringe], ["Nurse 15–20 min, 20 ml in the SNS: breast milk first, then formula to finish", "Nurse, 10 ml in the syringe: breast milk first, then formula to finish"]);
+  eq(oneStep({ do: "bottle", ml: [60, 90], milk: "breastmilk_first", via: "paced" }).words, "Bottle 60–90 ml, breast milk first, then formula to finish, paced bottle");
+  eq(["24:00", "24", "0:00"].map((s) => clockText(s, "t")), ["00:00", "00:00", "00:00"]);
+  throws(() => clockText("24:30", "Night's start"), PlanError, /^Night's start must be a time like 22:00 \(midnight is 00:00\)$/);
+  eq(plan({ night: { from: "24:00", to: "6:00" } }).night, { from: "00:00", to: "06:00" });
+  const steps = (n: number, notes: boolean) => [{ do: "nurse" }, ...Array.from({ length: n - 1 }, (_, i) => (notes ? { do: "note", text: `Line ${i + 1}` } : { do: "pump" }))];
+  eq(
+    [throws(() => plan({}, [{ name: "Triple feed", steps: steps(9, true) }]), PlanError).message, throws(() => plan({}, [{ name: "Triple feed", steps: steps(9, false) }]), PlanError).message],
+    ['"Triple feed" has 8 steps at most: notes count as steps, so put its notes together, or in the plan\'s notes', '"Triple feed" has 8 steps at most']
+  );
+  eq(
+    [["7:00", "7:00"], ["19:00", "19:00"], ["00:00", "24:00"]].map(([from, to]) => throws(() => plan({ night: { from, to } }), PlanError).message),
+    ["Night would start and end at 7 AM: check AM and PM (7 PM is 19:00)", "Night would start and end at 7 PM: check AM and PM (7 AM is 07:00)", "Night would start and end at 12 AM: check AM and PM (12 PM is 12:00)"]
+  );
+  const ab = [{ name: "A", steps: [{ do: "nurse" }] }, { name: "B", steps: [{ do: "nurse" }, { do: "pump" }] }];
+  throws(() => plan({ order: ["A", "B", "A"] }, ab), PlanError, /^Each feed is in the order once: the turns start again after the last, so a pattern that repeats a feed goes in the plan's notes$/);
+});
+
+check("notes up to 1000 characters: the whole of them for this release, their start for an older one, kept through every edit", () => {
+  // An invented sheet's notes section, 600-odd characters: more than an older release reads (NOTES_OLDER).
+  const notes = [
+    "Signs of enough milk: 6 or more wet diapers a day by day 5, and yellow stools by day 4.",
+    "Wake for feeds until the weight check.",
+    "Store pumped milk in the fridge up to 4 days, or the freezer up to 6 months.",
+    "Warm milk in a bowl of warm water, never the microwave.",
+    "Hold her upright for 15 minutes after each feed.",
+    "Bring the log to the weight check.",
+    "Call the clinic with questions about the plan on weekdays, or the after-hours line at night.",
+    "Keep each top-up under 30 minutes so she has energy to nurse next time.",
+  ].join(" ");
+  ok(notes.length > NOTES_OLDER && notes.length <= 1000, `${notes.length} characters`);
+  const p = plan({ notes });
+  eq([planNotes(p), p.notes_full, p.notes!.length <= NOTES_OLDER, p.notes!.endsWith(" …"), notes.startsWith(p.notes!.slice(0, -2))], [notes, notes, true, true, true]);
+  eq(p.notes, notesForOlder(notes));
+  eq(planLines(p, null).at(-1), `Notes: ${notes}`, "the read-back says all of them");
+  // Read back from the store: the same plan, the whole notes.
+  const stored = feedingPlanOf({ feeding_plan: JSON.parse(JSON.stringify(p)) })!;
+  eq([planNotes(stored), stored.notes, JSON.stringify(stored) === JSON.stringify({ ...p, since: p.updated_at })], [notes, p.notes, true]);
+  // An edit that sends the notes back as an older release reads them (their start, with "…") keeps the whole of them; a
+  // change replaces them, notes_full and all; notes short enough for any release are kept as they are.
+  const edit = (sent: Record<string, unknown>) => parseFeedingPlan({ feeds: [{ name: "Bottle", steps: [{ do: "bottle" }] }], ...sent }, stored, D("10:00"));
+  eq(planNotes(edit({ notes: stored.notes })), notes);
+  eq(planNotes(edit({ notes: notes })), notes);
+  eq([edit({ notes: "Bring the log to the weight check." }).notes, edit({ notes: "Bring the log to the weight check." }).notes_full], ["Bring the log to the weight check.", undefined]);
+  eq(planNotes(edit({ notes: "Wake for feeds.", notes_full: notes })), "Wake for feeds.", "a stale notes_full beside new notes");
+  eq(planNotes(edit({})), undefined, "removed");
+  // The cut: after the last sentence that fits, else the last word, never more than NOTES_OLDER; never splits an emoji.
+  eq(notesForOlder("short"), "short");
+  const words = notesForOlder("word ".repeat(80).trim());
+  eq([words.length <= NOTES_OLDER, words.endsWith("word…")], [true, true]);
+  const emoji = notesForOlder("🍼".repeat(200));
+  eq([emoji.length <= NOTES_OLDER, /[\uD800-\uDBFF]…$/.test(emoji), [...emoji.slice(0, -1)].every((c) => c === "🍼")], [true, false, true]);
+  throws(() => plan({ notes: "x".repeat(1001) }), PlanError, /^The notes are too long \(1000 characters at most\)$/);
+});
+
+check("feed names in any script: letters and numbers of every script tell feeds apart; a name never matches an empty one", () => {
+  const two = (a: string, b: string) => plan({}, [{ name: a, steps: [{ do: "nurse" }] }, { name: b, steps: [{ do: "bottle" }] }]).feeds.map((f) => f.id);
+  for (const [a, b] of [["Грудь", "Бутылочка"], ["Θηλασμός", "Μπιμπερό"], ["הנקה", "בקבוק"], ["母乳", "奶瓶"], ["स्तनपान", "बोतल"], ["🍼", "🤱"]]) eq(two(a, b), ["p1f1", "p1f2"], `${a} and ${b}`);
+  throws(() => two("Грудь", "грудь!"), PlanError, /same name/);
+  eq([feedNameKey("Nurse, TOP up"), feedNameKey("nurse top-up"), feedNameKey("Stillen"), feedNameKey("Грудь"), feedNameKey("🍼 ")], ["nurse top up", "nurse top up", "stillen", "грудь", "🍼"]);
+  // A name that isn't in the plan names nothing (it used to be the plan's one feed in another script).
+  const ru = [{ name: "Грудь", steps: [{ do: "nurse" }] }, { name: "Bottle", steps: [{ do: "bottle" }] }];
+  throws(() => plan({ order: ["Сцеживание"] }, ru), PlanError, /isn't in the plan/);
+  eq(plan({ order: ["грудь"] }, ru).order, ["p1f1"], "by name, case folded");
+  // An edit that adds a different feed in another script gets a new id, never the removed one's.
+  const saved = plan({}, ru);
+  const edited = parseFeedingPlan({ feeds: [{ name: "Бутылочка", steps: [{ do: "bottle" }] }, { name: "Bottle", steps: [{ do: "bottle" }] }] }, saved, D("10:00"));
+  eq(edited.feeds.map((f) => f.id), ["p2f1", "p1f2"]);
+});
+
+check("rollback: the release before these options reads a plan saved with every one of them, as it reads today's plans", () => {
+  // That release's own feeding-plan.ts (fp/r4-base), from git, beside this tree's other modules (its parser reads
+  // only ML_PER_FL_OZ from them). Skipped, saying so, in a checkout without that commit.
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const OLDER = "386e32d6a5b99ae415e782f0abceef59d4b238b0";
+  const shown = [OLDER, "fp/r4-base"].map((rev) => spawnSync("git", ["show", `${rev}:src/lib/maple/feeding-plan.ts`], { cwd: root, encoding: "utf8" })).find((r) => r.status === 0);
+  if (!shown) {
+    console.log("SKIP rollback: this checkout doesn't have the release before these options (386e32d)");
+    return;
+  }
+  const dir = mkdtempSync(join(tmpdir(), "maple-older-plan-"));
+  let older: typeof import("../src/lib/maple/feeding-plan");
+  try {
+    const file = join(dir, "feeding-plan.ts");
+    const lib = join(root, "src", "lib", "maple");
+    writeFileSync(file, shown.stdout.replace(/from "\.\/(feed|time|types|units)"/g, (_m, mod: string) => `from ${JSON.stringify(join(lib, mod))}`));
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    older = require(file);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  const exported = older as unknown as Record<string, unknown>;
+  ok(!("planDayCounts" in exported) && typeof exported.feedingPlanOf === "function", "the older parser, not this one");
+  // Every new key at once: a night when hungry with its turns by the clock, nursing only if she wants to and up to,
+  // a pump up to, a bottle up to, at least and by cup, feeds and milk in 24 hours, 600-odd characters of notes.
+  const notes = "Hold her upright after each feed. ".repeat(20).trim();
+  const p = parseFeedingPlan(
+    {
+      day: { every: 180, wake: true },
+      night: { from: "21:00", to: "05:00", on_demand: true, order: ["Partner's bottle", "Practice, then bottle"], starts: ["21:00", "01:00"] },
+      feeds: [
+        { name: "Practice, then bottle", steps: [{ do: "nurse", minutes: { max: 10 }, if_needed: true }, { do: "bottle", ml: { min: 60 }, milk: "breastmilk", via: "paced" }, { do: "pump", minutes: [0, 15] }] },
+        { name: "Partner's bottle", steps: [{ do: "bottle", ml: 90, up_to: true, milk: "formula" }] },
+        { name: "Cup feed", steps: [{ do: "bottle", ml: [20, 30], milk: "breastmilk", by: "cup" }, { do: "note", text: "Sip by sip" }] },
+      ],
+      order: ["Practice, then bottle", "Cup feed"],
+      per_day: { feeds: { min: 8 }, ml: [450, 550] },
+      notes,
+    },
+    null,
+    NOW0
+  );
+  const saved = JSON.parse(JSON.stringify(p)) as Record<string, unknown>;
+  const read = older.feedingPlanOf({ feeding_plan: saved });
+  ok(read, "the older release still reads the plan");
+  // What it reads instead: the day's interval at night, the turns in order, a nursing every time, exactly N, a bottle.
+  eq(read!.night, { from: "21:00", to: "05:00", feed: p.feeds[1].id, order: [p.feeds[1].id, p.feeds[0].id] });
+  eq(read!.feeds.map((f) => f.steps), [
+    [{ do: "nurse", minutes: { min: 10, max: 10 } }, { do: "bottle", ml: { min: 60, max: 60 }, milk: "breastmilk", via: "paced" }, { do: "pump", minutes: { min: 15, max: 15 } }],
+    [{ do: "bottle", ml: { min: 90, max: 90 }, milk: "formula" }],
+    [{ do: "bottle", ml: { min: 20, max: 30 }, milk: "breastmilk" }, { do: "note", text: "Sip by sip" }],
+  ]);
+  eq(["per_day" in read!, "notes_full" in read!, read!.notes === p.notes, notes.startsWith(read!.notes!.slice(0, -2))], [false, false, true, true]);
+  // And says it as it says any plan's: never a worse instruction than it gave before these options.
+  eq(older.planLines(read!, null), [
+    "Target: none set",
+    "Day: every 3 hours, waking her if she's asleep, taking turns: Practice, then bottle, then Cup feed",
+    "• Practice, then bottle: Nurse 10 min; then top up 60 ml, breast milk, paced bottle; then pump 15 min",
+    "• Partner's bottle: Bottle 90 ml, formula",
+    "• Cup feed: Bottle 20–30 ml, breast milk. Sip by sip",
+    "Night (9 PM–5 AM): every 3 hours (as by day), taking turns: Partner's bottle, then Practice, then bottle",
+    `Notes: ${p.notes}`,
+  ]);
+  // This release reads it back whole.
+  const now = feedingPlanOf({ feeding_plan: saved })!;
+  eq([now.night, now.per_day, planNotes(now)], [p.night, p.per_day, notes]);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

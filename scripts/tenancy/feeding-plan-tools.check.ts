@@ -112,12 +112,12 @@ async function main() {
     const w = { now, tz, vo: FAMILY_ONE_VOICE };
     const going: Now = { ...base, focus: { ...short, state: "underway" }, after: { feed: plan.feeds[0], night: true }, missed: null, others: [] };
     const line = planNowLine(going, w);
-    ok(line.includes("So far: bottle up to 50–70 ml, pumped milk first, then formula to finish (40 ml so far). Next: formula to finish, 10–30 ml more; then burp halfway."), line);
+    ok(line.includes("So far: bottle up to 50–70 ml, breast milk first, then formula to finish (40 ml so far). Next: formula to finish, 10–30 ml more; then burp halfway."), line);
     eq(planSpeak(going, w), "From the feeding plan: Pump + bottle is underway; still to do: formula to finish, 10 to 30 ml more (40 ml so far).", "Siri");
     // Left like that, the next feed's line says it, as a step the feed didn't finish.
     const after: Now = { ...base, missed: { view: short, steps: short.steps.filter((s) => s.status === "todo") } };
     const missed = planNowLine(after, w);
-    ok(missed.includes('From the 1:55 AM feed ("Pump + bottle"), bottle up to 50–70 ml, pumped milk first, then formula to finish (40 ml so far); not logged: formula to finish, 10–30 ml more.'), missed);
+    ok(missed.includes('From the 1:55 AM feed ("Pump + bottle"), bottle up to 50–70 ml, breast milk first, then formula to finish (40 ml so far); not logged: formula to finish, 10–30 ml more.'), missed);
   });
 
   await test("on demand, a step only if needed and one side in the plan's line and Siri's: when to feed by, what's left, never a miss", async () => {
@@ -696,10 +696,10 @@ async function main() {
       const rb = await tool(alpha.owner, A, "set_feeding_plan", { plan: WAVE, target: [50, 70], base_rev });
       ok(!rb.error && rb.json.confirm_needed === true, rb.text);
       for (const line of [
-        "Day: on demand, at least every 3 hours, waking her if she's asleep, taking turns: Nurse, top up if hungry, then Left, pump the right",
+        "Day: on demand, at least every 3 hours, waking her if she's asleep, taking turns: Nurse, top up if hungry, then Left, pump the right, then start again",
         "Left, pump the right: Nurse 15–20 min on the left; then pump 15 min",
         "Nurse, top up if hungry: Nurse 8–12 min each side; then top up 25–35 ml if still hungry, paced bottle; then pump 10 min if needed",
-        "Night (11 PM–5 AM): on demand, at least every 3.5 hours, taking turns: Pump + bottle, then Left, pump the right",
+        "Night (11 PM–5 AM): on demand, at least every 3.5 hours, taking turns: Pump + bottle, then Left, pump the right, then start again",
       ]) {
         ok(rb.text.includes(line), `reads back "${line}": ${rb.text}`);
       }
@@ -734,8 +734,8 @@ async function main() {
       const same = await tool(alpha.owner, A, "set_feeding_plan", { plan: p, target: read.json.target, base_rev: read.json.rev });
       ok(same.json.unchanged === true, `sent back as read: ${same.text}`);
       // A field in the wrong place is refused, never dropped; each side and one side aren't both.
-      const stray = await tool(alpha.owner, A, "set_feeding_plan", { plan: { feeds: [{ name: "A", steps: [{ do: "nurse", if_needed: true }] }] }, base_rev: read.json.rev });
-      ok(stray.error && /"A" step 1: if_needed isn't a nurse step's \(a nurse step takes minutes, each_side or side/.test(stray.text), stray.text);
+      const stray = await tool(alpha.owner, A, "set_feeding_plan", { plan: { feeds: [{ name: "A", steps: [{ do: "nurse", ml: 30 }] }] }, base_rev: read.json.rev });
+      ok(stray.error && /"A" step 1: ml isn't a nurse step's \(a nurse step takes minutes \(with up_to when they're the most\), each_side or side/.test(stray.text), stray.text);
       const both = await tool(alpha.owner, A, "set_feeding_plan", { plan: { feeds: [{ name: "A", steps: [{ do: "nurse", each_side: true, side: "left" }] }] }, base_rev: read.json.rev });
       ok(both.error && both.text.startsWith('"A" step 1: each side or one side, not both. Nothing was saved'), both.text);
       // start_timer with a plan feed on one side and no side: that side.

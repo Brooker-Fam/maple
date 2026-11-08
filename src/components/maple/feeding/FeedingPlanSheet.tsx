@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { amountText, checkInText, clockWords, feedById, feedingPlanOf, intervalText, nightTurns, PLAN_LIMITS, stepText, type FeedingPlan, type PlanFeed } from "@/lib/maple/feeding-plan";
+import { amountText, checkInText, clockWords, feedById, feedingPlanOf, intervalText, nightTurns, PLAN_LIMITS, planNotes, stepText, type FeedingPlan, type PlanFeed } from "@/lib/maple/feeding-plan";
 import { dayKey, DEFAULT_TZ } from "@/lib/maple/time";
 import type { Baby } from "@/lib/maple/types";
 import { feedTargetOf, type FeedTarget } from "@/lib/maple/units";
@@ -416,10 +416,10 @@ function PlanView({ plan, target, canWrite, onEdit, onRemove, onClose }: { plan:
         ))}
       </section>
 
-      {plan.notes && (
+      {planNotes(plan) && (
         <section aria-label="Notes" className={cx(tone.card, "px-4 py-3.5")}>
           <h3 className={tone.label}>Notes</h3>
-          <p className="mt-1 text-[15px] leading-relaxed text-mp-ink [overflow-wrap:anywhere]">{plan.notes}</p>
+          <p className="mt-1 text-[15px] leading-relaxed text-mp-ink [overflow-wrap:anywhere]">{planNotes(plan)}</p>
         </section>
       )}
 

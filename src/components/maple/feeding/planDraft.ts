@@ -20,6 +20,7 @@ import {
   nightTurns,
   PlanConflict,
   PlanError,
+  planNotes,
   type AtBreastVia,
   type FeedingPlan,
   type PlanBottleVia,
@@ -212,7 +213,8 @@ export function draftOf(plan: FeedingPlan | null, target: FeedTarget | null, uni
       : NIGHT_OFF,
     feeds,
     order: plan.order.map(feedKey).filter(known),
-    notes: plan.notes ?? "",
+    // The whole notes (notes_full past what an older release reads), never their start as it reads them.
+    notes: planNotes(plan) ?? "",
   };
 }
 
