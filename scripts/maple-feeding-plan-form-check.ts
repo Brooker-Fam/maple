@@ -8,11 +8,12 @@
  *
  * The plans here are invented examples, not any family's. One PASS/FAIL line per case, exit 1 on any failure.
  */
-import { amountText, parseFeedingPlan, PlanError, type FeedingPlan } from "../src/lib/maple/feeding-plan";
+import { amountText, checkFeedingPlan, parseFeedingPlan, PlanError, type FeedingPlan } from "../src/lib/maple/feeding-plan";
 import {
   addFeed,
   draftFromShape,
   draftOf,
+  draftProblem,
   inputOf,
   move,
   newFeed,
@@ -227,6 +228,33 @@ check("Put it back: on the form as it is now, so turns moved, taken out or given
   const picked = setNightFeed(n.next, d.feeds[1].key);
   const kept = n.putBack(picked);
   eq([kept.feeds.length, kept.night.feed, kept.order], [3, d.feeds[1].key, [d.feeds[0].key]]);
+});
+
+check("Save checks the draft as the server will, in its words: a feed that only pumps is refused on that feed before anything is sent", () => {
+  const d = draftOf(PLAN, null, "ml");
+  eq(draftProblem(d, PLAN, LATER), null, "the plan as it is");
+  eq(draftProblem(draftOf(null, null, "ml"), null, LATER), "A feeding plan needs at least one feed");
+  // "Pump + bottle" without its bottle: a pump and a note.
+  const dry: PlanDraft = { ...d, feeds: d.feeds.map((f, i) => (i === 2 ? { ...f, steps: f.steps.filter((s) => s.do !== "bottle") } : f)) };
+  const words = draftProblem(dry, PLAN, LATER);
+  eq(words, '"Pump + bottle" needs nursing or a bottle: a pump on its own goes in the plan\'s notes');
+  // The server says the same of the same plan.
+  let server = "";
+  try {
+    checkFeedingPlan({ feeding_plan: { ...inputOf(dry).plan, base_rev: PLAN.rev } }, { feeding_plan: PLAN }, LATER);
+  } catch (e) {
+    server = e instanceof PlanError ? e.message : String(e);
+  }
+  eq(server, words, "the server's words");
+  eq(problemPlace(words!, dry), { feed: d.feeds[2].key, step: null });
+  // A new plan's feed that only pumps, too.
+  const fresh = draftFromShape(PLAN_SHAPES[2], null, "ml");
+  eq(draftProblem({ ...fresh, feeds: [{ ...fresh.feeds[0], steps: fresh.feeds[0].steps.slice(0, 1) }] }, null, LATER), '"Pump and bottle" needs nursing or a bottle: a pump on its own goes in the plan\'s notes');
+  // An untouched plan isn't sent, so only the target is checked.
+  eq(draftProblem(dry, PLAN, LATER, false), null);
+  eq(draftProblem({ ...dry, target: { min: 1, max: null } }, PLAN, LATER, false), "A target per feed is between 5 and 300 ml.");
+  // The form's own rules first.
+  eq(draftProblem({ ...d, night: { ...d.night, to: "" } }, PLAN, LATER), "Say when the night starts and ends, or switch off Different at night.");
 });
 
 check("a refusal's words point at its feed and step", () => {

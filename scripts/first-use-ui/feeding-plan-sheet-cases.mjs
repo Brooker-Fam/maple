@@ -232,6 +232,17 @@ export function feedingPlanSheetCases({ fixture, freshState, assert }) {
         await alerts.first().waitFor();
         assert.deepEqual((await alerts.allTextContents()).map((t) => t.trim()), ["Feed 2's name is needed", "Feed 2's name is needed"], "at the top and by the feed");
         assert.equal(s.patches.length, 0);
+        // A feed left only pumping once its bottle is taken out: the server's words, by that feed, and nothing sent.
+        await box(form, "Feed 2 name").fill("Nurse, top up");
+        await unfold(form, "Pump + bottle");
+        await form.getByRole("group", { name: "Feed 3", exact: true }).getByRole("button", { name: "Take out step 2", exact: true }).click();
+        await form.getByRole("button", { name: "Save the plan", exact: true }).click();
+        await alerts.first().waitFor();
+        const dry = `"Pump + bottle" needs nursing or a bottle: a pump on its own goes in the plan's notes`;
+        assert.deepEqual((await alerts.allTextContents()).map((t) => t.trim()), [dry, dry], "at the top and by the feed");
+        assert.equal(s.patches.length, 0);
+        await f.page.getByRole("button", { name: "Put it back", exact: true }).click();
+        assert.equal(await alerts.count(), 0, "the bottle back, nothing to say");
         // A night without its hours.
         await box(form, "Feed 2 name").fill("Nurse, top up");
         await form.getByLabel("Night starts", { exact: true }).fill("");

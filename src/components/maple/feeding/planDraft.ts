@@ -14,7 +14,19 @@
  * step and leaves every minute and amount for the family to copy from their
  * plan.
  */
-import { stepText, type AtBreastVia, type FeedingPlan, type PlanBottleVia, type PlanMilk, type PlanStep, type PlanUnit, type Range } from "@/lib/maple/feeding-plan";
+import {
+  checkFeedingPlan,
+  PlanConflict,
+  PlanError,
+  stepText,
+  type AtBreastVia,
+  type FeedingPlan,
+  type PlanBottleVia,
+  type PlanMilk,
+  type PlanStep,
+  type PlanUnit,
+  type Range,
+} from "@/lib/maple/feeding-plan";
 import { ML_PER_FL_OZ, type FeedTarget } from "@/lib/maple/units";
 
 /** A from–to in minutes or ml; either end may be empty (one number is both ends). */
@@ -214,6 +226,34 @@ export function inputOf(d: PlanDraft): { plan: PlanInput; target: FeedTarget | n
 const json = (v: unknown) => JSON.stringify(v);
 export const samePlan = (a: PlanDraft, b: PlanDraft) => json(inputOf(a).plan) === json(inputOf(b).plan);
 export const sameTarget = (a: FeedTarget | null, b: FeedTarget | null) => json(a ? rangeOut(a) : null) === json(b ? rangeOut(b) : null);
+
+/**
+ * Why the draft can't be saved yet, before anything is sent (null: it can):
+ * the form's few rules of its own, then the server's check (checkFeedingPlan,
+ * as a save over `base`, the plan the edit began from), so it's in the
+ * server's words, a feed that doesn't feed her included. `plan`: whether the
+ * plan goes at all (an untouched one doesn't, so only the target is checked).
+ * A plan changed on another phone meanwhile is the server's to find.
+ */
+export function draftProblem(d: PlanDraft, base: FeedingPlan | null, now: Date, plan = true): string | null {
+  const input = inputOf(d);
+  if (plan) {
+    if (d.night.on && (!d.night.from || !d.night.to)) return "Say when the night starts and ends, or switch off Different at night.";
+    const short = [d.every, d.night.on ? d.night.every : null].some((r) => r && ((r.min != null && r.min < 30) || (r.max != null && r.max < 30)));
+    if (short) return "The time between feeds is half an hour or more.";
+  }
+  const t = input.target;
+  if (t && (t.min < 5 || t.max > 300)) return d.unit === "oz" ? "A target per feed is between 0.17 and 10.14 oz." : "A target per feed is between 5 and 300 ml.";
+  if (!plan) return null;
+  try {
+    checkFeedingPlan({ feeding_plan: { ...input.plan, ...(base ? { base_rev: base.rev } : {}) } }, base ? { feeding_plan: base } : null, now);
+    return null;
+  } catch (e) {
+    if (e instanceof PlanError) return e.message;
+    if (e instanceof PlanConflict) return null;
+    throw e;
+  }
+}
 
 // ── changing the draft ────────────────────────────────────────────────────
 
