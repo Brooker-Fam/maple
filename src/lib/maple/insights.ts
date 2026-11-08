@@ -16,6 +16,7 @@ import {
   milkSplit,
   nextSideFor,
   nursingRuns,
+  sameFeedBottleIds,
   topUpIds,
   type FeedCluster,
   type LastFed,
@@ -269,6 +270,8 @@ export function statsFor(entries: Entry[], from: Date, to: Date, key: string, no
   const hi = to.getTime();
   const all = runs ?? nursingRuns(entries, now);
   const topUp = topUpIds(all);
+  // A plan feed's second bottle (formula to finish, under 45 minutes after its first): milk of that feed, not a feed.
+  const sameFeed = sameFeedBottleIds(entries, now, all);
   const clustersSeen = new Set<number>();
   for (const r of all) {
     if (r.cluster !== null && !clustersSeen.has(r.cluster)) {
@@ -309,7 +312,7 @@ export function statsFor(entries: Entry[], from: Date, to: Date, key: string, no
               s.atBreastFormulaMl += milk.formula;
               s.atBreastBreastMilkMl += milk.breastmilk;
             }
-          } else {
+          } else if (!sameFeed.has(e.id)) {
             s.feeds++;
             s.bottleFeeds++;
           }

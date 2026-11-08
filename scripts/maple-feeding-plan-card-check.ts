@@ -341,7 +341,7 @@ check("bottle presets say the milk and the amount outright: the plan's, or null 
   const fed = nurse("L 14:00-14:12", { plan: toTarget.feeds[0].id });
   fp = at(toTarget, [fed, bottle("14:14", 30, { milk: "breastmilk", plan: toTarget.feeds[0].id, top_up_of: fed.id })], "14:16");
   const rows = stepRows(fp, fp.focus, SHE);
-  eq([shape(rows)[1], rows[1].close], [["todo", "Top up up to 50–70 ml, breast milk", "Gave 30 ml · up to 50–70 ml"], "She's done"]);
+  eq([shape(rows)[1], rows[1].close], [["todo", "Top up to 50–70 ml, breast milk", "Gave 30 ml · up to 50–70 ml"], "She's done"]);
   eq(form(rows[1].action), {
     label: "Log the rest of the top-up",
     aria: "Log the rest of the top-up: 20 ml, opens the bottle form",

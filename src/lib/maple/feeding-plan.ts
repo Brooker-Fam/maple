@@ -488,7 +488,9 @@ export function stepText(s: PlanStep, plan: Pick<FeedingPlan, "unit">, target: F
   if (s.do === "pump") return `Pump${s.minutes ? ` ${minutesRangeText(s.minutes)}` : ""}`;
   if (s.do === "bottle") {
     const verb = opts.afterNurse ? "Top up" : "Bottle";
-    const amount = s.ml ? ` ${amountText(s.ml, plan.unit)}` : s.to_target ? (target ? ` up to ${amountText(target, plan.unit)}` : " up to the target") : "";
+    // "Bottle up to 50–70 ml", but "Top up to 50–70 ml" (never "Top up up to").
+    const upTo = opts.afterNurse ? " to" : " up to";
+    const amount = s.ml ? ` ${amountText(s.ml, plan.unit)}` : s.to_target ? (target ? `${upTo} ${amountText(target, plan.unit)}` : `${upTo} the target`) : "";
     const bits = [`${verb}${amount}`];
     if (s.milk) bits.push(MILK_WORDS[s.milk]);
     if (s.via === "paced") bits.push("paced bottle");

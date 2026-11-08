@@ -3,7 +3,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { adminActsAs } from "@/lib/maple/insights";
-import { atBreastOf, feedPartWords, milkWords } from "@/lib/maple/describe";
+import { atBreastOf, feedPartWords, milkWords, planUnitsOf } from "@/lib/maple/describe";
 import { minutesText, nursingRuns, staleFeed } from "@/lib/maple/feed";
 import { amountText, type NurseStep, type PlanUnit } from "@/lib/maple/feeding-plan";
 import { nightFeedLine } from "@/lib/maple/guidelines/sleep";
@@ -560,7 +560,7 @@ function FeedExtras({ entry, controls, disabled, compact, parts, plan }: { entry
       )}
       {given.map((b) => {
         // "20 ml in the SNS", "Milk in the syringe", "30 ml top-up": the row's words for it, without the "+".
-        const part = feedPartWords(b, units).slice(2);
+        const part = feedPartWords(b, units, planUnitsOf(state?.baby.settings)).slice(2);
         const words = part.charAt(0).toUpperCase() + part.slice(1);
         const more = [milkWords(b.data, units), b.data.via === "paced" ? "paced bottle" : null].filter(Boolean).join(" · ");
         return (
