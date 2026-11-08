@@ -21,6 +21,7 @@ import { medicinePlanCases } from "./medicine-plan-cases.mjs";
 import { checkinPrivacyCases } from "./checkin-privacy-cases.mjs";
 import { doctorReviewCases } from "./doctor-review-cases.mjs";
 import { accessibilityReviewCases } from "./accessibility-review-cases.mjs";
+import { feedingPlanCases } from "./feeding-plan-cases.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../..");
@@ -110,6 +111,7 @@ const cases = [
   ...checkinPrivacyCases({ fixture, freshState, assert }),
   ...doctorReviewCases({ fixture, freshState, record, writes, assert }),
   ...accessibilityReviewCases({ fixture, freshState, record, assert }),
+  ...feedingPlanCases({ fixture, freshState, record, writes, assert }),
   ...timeCases({ fixture, freshState, record, writes, assert }),
   ...handoffCases({ fixture, freshState, record, writes, assert }),
   ["Every historical entry kind keeps an older family-local date", async () => {
