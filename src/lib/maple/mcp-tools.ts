@@ -74,7 +74,7 @@ import { registerMemoryTools, statusMemories } from "./memory/mcp";
 import { memoryRules } from "./memory/policy";
 import { registerPeopleTools } from "./people-mcp";
 import { feedingPlanStatus, ledBottleLine, namedAt, owedPartLine, planBottleFor, planFeedArg, planShield, registerFeedingPlanTools, type OwedPart, type PlanSide } from "./feeding-plan-mcp";
-import { AT_BREAST_WORDS, feedingPlanOf } from "./feeding-plan";
+import { AT_BREAST_WORDS, feedingPlanOf, type PlanFeed } from "./feeding-plan";
 import { registerSleepTools, sleepStatus, tryRef, undoableGoalWrite, undoableSleep, undoAsk } from "./sleep/mcp";
 import { deleteShift, deleteTry, endArmsSleepForFeed, getTry as getSleepTry } from "./sleep/store";
 import { adminActsAs, alertsOn, byBottle, dailyStats, isVitaminD, memberName, soloBottleMl, summarize, type Summary } from "./insights";
@@ -268,7 +268,7 @@ Duplicates: if a write returns created:false with possible_duplicate, nothing wa
 
 Feeds: log_feed is for a feed that already finished; start_timer, switch_side, pause_nursing and stop_timer track one happening now (reopen_timer undoes a mistaken stop; update_entry with at fixes when a running one started). Sides are "left"/"right". When ${v.they}${v.verb("'s")} going back and forth between sides, switch_side {to:"both"} (or start_timer with back_and_forth and the side ${v.they} started on) stops tracking sides, so nothing needs calling at each change; "left" or "right" later tracks sides again, and log_feed takes both_minutes. Which side next: say maple_status's next_side (on a break mid-feed, back_on_side is the side to go back on now). The guidance behind it: "${NEXT_SIDE_NOTE}" The app takes "last time" as the side the last feed started on, or, within 30 minutes of a feed ending, the side ${v.they} finished on; after going back and forth it adds "or whichever side feels fuller". Stopping and starting again within 10 minutes counts as one feed, like a pause, and 3 or more feeds close together are a cluster (maple_status describes it). switch_side, pause_nursing and stop_timer take minutes_ago for when it really happened; fix_nursing_time moves one recorded moment of a feed (its start, a switch, a pause, going back on, the end), fixes which side a part was, or undoes the latest tap; nothing else moves. Its reply includes an undo.
 
-Feeding plan: when the family shares their care team's feeding plan (a photo of the plan sheet, or in their own words), build it with set_feeding_plan. Copy only what's written, never fill in a number that isn't there, and ask about anything unclear first (which feeds take turns, when night starts and ends). Shorthand is the family's or their consultant's (s&s, EBM, q3h): when it could mean two things (s&s: a shield and syringe, or an SNS), ask; never pick. Leave out ${planMom}'s own medicines, the supplements she takes herself and her health (everyone in the family reads the plan; ${v.name}'s milk at the breast stays in it)${v.hasMom ? `, and offer to put her medicines on her page instead (${memories === "chat" ? "in the app" : "add_mom_medicines, after its own read-back"})` : ""}. Read its read-back to them as it says (for a change, what changes) and save only on a clear yes. Once saved, the plan is the source, not a memory: if a memory holds their feeding plan, offer to turn it into the plan (then archive the memory). For "what do we do next?", "which feed?" or "when?", say the words of feeding_plan${memories === "chat" ? " or the [App] lines' Feeding plan line" : " or maple_status's feeding_plan"}, never a schedule of your own, and never suggest changing the plan: that's for their care team. A phone's Today card may show a feed picked on that phone instead: when they say which one they're doing, go by that. Starting one of its feeds: start_timer with plan. Doing another of its feeds next changes nothing in the plan: start_timer with plan when it begins (log_feed with plan once it's over), and the turns go on from it. A top-up or milk at the breast given late for an earlier feed: log_feed with top_up_of${memories === "chat" ? ", the feed's [entry #…] in the Feeding plan line when it says a step wasn't logged" : " (feeding_plan's or maple_status's top_up_of)"}.
+Feeding plan: when the family shares their care team's feeding plan (a photo of the plan sheet, or in their own words), build it with set_feeding_plan. Copy only what's written, never fill in a number that isn't there, and ask about anything unclear first (which feeds take turns, when night starts and ends). Shorthand is the family's or their consultant's (s&s, EBM, q3h): when it could mean two things (s&s: a shield and syringe, or an SNS), ask; never pick. Leave out ${planMom}'s own medicines, the supplements she takes herself and her health (everyone in the family reads the plan; ${v.name}'s milk at the breast stays in it)${v.hasMom ? `, and offer to put her medicines on her page instead (${memories === "chat" ? "in the app" : "add_mom_medicines, after its own read-back"})` : ""}. Read its read-back to them as it says (for a change, what changes) and save only on a clear yes. Once saved, the plan is the source, not a memory: if a memory holds their feeding plan, offer to turn it into the plan (then archive the memory). For "what do we do next?", "which feed?" or "when?", say the words of feeding_plan${memories === "chat" ? " or the [App] lines' Feeding plan line" : " or maple_status's feeding_plan"}, never a schedule of your own, and never suggest changing the plan: that's for their care team. A phone's Today card may show a feed picked on that phone instead: when they say which one they're doing, go by that. When they say a feed going on or just logged is another of its feeds, update_entry its nursing entry with details {plan: that feed} (and shield if they say so), so Today and every phone read it so; never answer only in words. Starting one of its feeds: start_timer with plan. Doing another of its feeds next changes nothing in the plan: start_timer with plan when it begins (log_feed with plan once it's over), and the turns go on from it. A top-up or milk at the breast given late for an earlier feed: log_feed with top_up_of${memories === "chat" ? ", the feed's [entry #…] in the Feeding plan line when it says a step wasn't logged" : " (feeding_plan's or maple_status's top_up_of)"}.
 
 Several things at once ("${v.they} nursed 15 min on the left at 2, pooped, and slept until 4:30"): use log_many.
 
@@ -1704,6 +1704,22 @@ async function bottleTwins(ctx: Ctx, start: Date, w: WriteOpts): Promise<Set<num
  * isn't called a top-up either. `at`: the moment that plan feed is named by (its first nursing: feeding-plan-mcp.ts
  * namedAt), so a feed with a re-latch reads as the one the plan and Today's card name, not the re-latch.
  */
+/**
+ * start_timer named a plan feed (or the nipple shield) for a nursing feed already going that isn't saved as that one
+ * (started from the dock, say): how to make the running feed that one, with update_entry (which takes plan and shield on
+ * a running timer), so Today and every phone read it so, not only the chat's words. Empty when it already is.
+ */
+function retagLine(e: FeedEntry, planFeed: PlanFeed | null, shield: boolean | null | undefined): string {
+  const plan = planFeed && e.data.plan !== planFeed.id ? planFeed : null;
+  const withShield = shield != null && shield !== !!e.data.shield;
+  if (!plan && !withShield) return "";
+  const details = [plan ? `plan: ${JSON.stringify(plan.name)}` : null, withShield ? `shield: ${shield}` : null].filter(Boolean).join(", ");
+  // The plan feed's nursing uses the shield and the running feed doesn't say so: only if they're using it.
+  const also = plan && shield == null && planShield(plan) && !e.data.shield ? " (and shield: true if they're using the nipple shield)" : "";
+  const what = plan ? `To make the running feed the feeding plan's ${JSON.stringify(plan.name)}` : shield ? "To record the nipple shield on the running feed" : "To take the nipple shield off the running feed";
+  return ` ${what}, update_entry ${e.id} with details {${details}}${also}.`;
+}
+
 function topUpLine(run: NursingRun, ctx: Ctx, e: Entry, part: OwedPart["part"] | null = null, at: number | null = null): string {
   const when = whenText(new Date(at ?? run.start), ctx);
   if (e.kind === "feed" && atBreast(e as FeedEntry)) return `Counted with the feed that began at ${when}: milk at the breast, part of that feed, not a feed of its own.`;
@@ -3812,7 +3828,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
           // "She started on the right 5 minutes ago" while a feed runs: the switch_side rules, at that time. Going
           // back and forth with a feed running is switch_side {to:"both"} (from now, or from the time given).
           const open = sides[sides.length - 1]?.end === null ? sides[sides.length - 1] : null;
-          const lead = `A nursing timer was already running (#${live.id}, started ${whenText(live.started_at, ctx)} by ${memberName(live.created_by, ctx.members)}), so no second timer was started.`;
+          const lead = `A nursing timer was already running (#${live.id}, started ${whenText(live.started_at, ctx)} by ${memberName(live.created_by, ctx.members)}), so no second timer was started.${retagLine(live, planFeed, a.shield)}`;
           return switchResult(live, both ? "B" : side ?? open?.side, given, ctx, {
             assumed,
             lead: [lead],
@@ -3867,9 +3883,12 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
       // What the new feed carries from the plan: its nipple shield, and which of the plan's feeds it is.
       const shieldText = entry.kind === "feed" && entry.data.shield ? " with the nipple shield" : "";
       const planText = planFeed && entry.kind === "feed" && entry.data.plan === planFeed.id ? `, for the feeding plan's ${JSON.stringify(planFeed.name)}` : "";
+      // The feed going on is another of the plan's feeds than the one it was read as (started from the dock, say): how to
+      // make it that one, so Today and every phone read it so, not only the chat's words.
+      const retag = alreadyRunning && entry.kind === "feed" ? retagLine(entry, planFeed, a.shield) : "";
       const lines = [
         alreadyRunning
-          ? `A ${label} timer was already running (#${entry.id}, started ${whenText(entry.started_at, ctx)} by ${by})${sideText ? `; now${sideText}` : ""}. No second timer was started${startWith ? ", and the running feed kept its own plan feed and shield" : ""}.`
+          ? `A ${label} timer was already running (#${entry.id}, started ${whenText(entry.started_at, ctx)} by ${by})${sideText ? `; now${sideText}` : ""}. No second timer was started${startWith ? ", and the running feed kept its own plan feed and shield" : ""}.${retag}`
           : `Saved #${entry.id}: ${label} timer started${sideText}${shieldText} at ${whenText(entry.started_at, ctx)}${planText} (logged by ${by} via ${viaLabel(entry.source)}).${suggested ? " (That's the suggested next side.)" : (fromPlan ?? "")}`,
         ...(goingBoth && !alreadyRunning ? [BOTH_NOTE] : []),
         ...(armsEnded ? [`${vo.Name}'s sleep in arms (#${armsEnded.sleep.id}, since ${formatTime(armsEnded.sleep.started_at, ctx.tz)}) ended at ${formatTime(armsEnded.sleep.ended_at!, ctx.tz)}, when the feed began (if ${vo.they} ${vo.verb("is")} still asleep in arms, reopen_timer with id ${armsEnded.sleep.id} runs it again).`] : []),

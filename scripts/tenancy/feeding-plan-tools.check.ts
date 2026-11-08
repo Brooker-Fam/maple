@@ -370,6 +370,10 @@ async function main() {
       ok(status.text.includes('Feeding plan: "Nurse + SNS" is underway since 11:50 AM. Going now: nurse 12–18 min, 20 ml of formula in the SNS (10 min so far); not logged yet: the 20 ml in the SNS. Next: pump 15 min. After it: "Nurse, top up"; next feed 2:20 PM–3:20 PM, in 2h 20m.'), status.text);
       eq((status.json.feeding_plan as { steps_left?: unknown }).steps_left, ["Nurse 12–18 min, 20 ml of formula in the SNS (going now; the 20 ml in the SNS not logged yet)", "Pump 15 min"], "maple_status's steps left");
       ok(/From the feeding plan: Nurse \+ SNS is underway; still to do: the 20 ml in the SNS, then pump 15 min\./.test((await siri(alpha.token, { action: "status" })).speak ?? ""), "Siri: what's left, the SNS milk first");
+      // "It's the top-up one": start_timer with that plan feed while this one runs says how to make it that feed.
+      const other = await tool(alpha.member, A, "start_timer", { timer: "nursing", plan: "Nurse, top up" });
+      ok(other.text.includes(`No second timer was started, and the running feed kept its own plan feed and shield. To make the running feed the feeding plan's "Nurse, top up", update_entry ${id} with details {plan: "Nurse, top up"}.`), other.text);
+      ok(!/To make the running feed/.test((await tool(alpha.member, A, "start_timer", { timer: "nursing", plan: "Nurse + SNS" })).text), "the same plan feed: nothing to change");
       // Its SNS milk logged while she's still on: milk at the breast, part of this feed, said as given, never a top-up or a feed.
       const sns = await tool(alpha.member, A, "log_feed", { method: "bottle", amount: 20, unit: "ml", via: "sns", milk: "formula", minutes_ago: 4 });
       ok(sns.text.includes("Counted with the feed that began at 11:50 AM today: milk at the breast, part of that feed, not a feed of its own.") && sns.text.includes("(with 0.68 oz (20 ml) in the SNS)"), sns.text);
