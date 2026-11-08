@@ -560,10 +560,12 @@ export function move<T>(list: readonly T[], i: number, by: -1 | 1): T[] {
 export type PlanShape = { id: string; title: string; sub: string; feeds: { name: string; kinds: StepKind[] }[] };
 
 /**
- * The kinds of step only: every minute and amount is left to copy from the plan. The plain, everyday ones first (one
- * feed each: nursing with a top-up, a bottle, then triple feeding and pumping); two feeds taking turns, then Blank, last.
+ * The kinds of step only: every minute and amount is left to copy from the plan. The plain, everyday ones first, one
+ * feed each, from the fewest steps (nursing on its own, with a top-up, a bottle, then triple feeding and pumping); two
+ * feeds taking turns, then Blank, last.
  */
 export const PLAN_SHAPES: PlanShape[] = [
+  { id: "nurse", title: "Nurse", sub: "Nursing on its own", feeds: [{ name: "Nurse", kinds: ["nurse"] }] },
   { id: "top-up", title: "Nurse, then top up", sub: "Nursing, then a bottle", feeds: [{ name: "Nurse, then top up", kinds: ["nurse", "bottle"] }] },
   { id: "bottle", title: "Bottle", sub: "Formula or breast milk by bottle", feeds: [{ name: "Bottle", kinds: ["bottle"] }] },
   { id: "triple", title: "Triple feed", sub: "Nurse, top up, then pump", feeds: [{ name: "Triple feed", kinds: ["nurse", "bottle", "pump"] }] },

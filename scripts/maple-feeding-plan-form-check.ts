@@ -662,10 +662,11 @@ check("notes take up to 1,000 characters, sent whole", () => {
   eq(refusal({ ...d, notes: `${notes}.` }), "The notes are too long (1000 characters at most)");
 });
 
-check("starting shapes: the everyday ones first (one feed each), a bottle and triple feeding among them, two feeds taking turns and Blank last", () => {
-  eq(PLAN_SHAPES.map((s) => s.id), ["top-up", "bottle", "triple", "pump-bottle", "turns", "blank"]);
+check("starting shapes: the everyday ones first (one feed each), nursing on its own, a bottle and triple feeding among them, two feeds taking turns and Blank last", () => {
+  eq(PLAN_SHAPES.map((s) => s.id), ["nurse", "top-up", "bottle", "triple", "pump-bottle", "turns", "blank"]);
   eq(PLAN_SHAPES[0].feeds.length, 1, "the first is one feed, never two taking turns");
   const feeds = (id: string) => inputOf(draftFromShape(shape(id), null, "ml")).plan.feeds;
+  eq(feeds("nurse"), [{ name: "Nurse", steps: [{ do: "nurse" }] }]);
   eq(feeds("bottle"), [{ name: "Bottle", steps: [{ do: "bottle" }] }]);
   eq(feeds("triple"), [{ name: "Triple feed", steps: [{ do: "nurse" }, { do: "bottle" }, { do: "pump" }] }]);
   // Saved as they are (no numbers yet), each but Blank is a plan; triple feeding's bottle is its top-up.

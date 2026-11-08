@@ -703,7 +703,7 @@ export function feedingPlanSheetCases({ fixture, freshState, assert }) {
         await sheet.getByRole("button", { name: "Add a plan", exact: true }).click();
         const shapes = dialog(f, "New feeding plan");
         const titles = await shapes.getByRole("button").evaluateAll((list) => list.map((b) => b.querySelector("span span")?.textContent).filter(Boolean));
-        assert.deepEqual(titles, ["Nurse, then top up", "Bottle", "Triple feed", "Pump and bottle", "Two feeds taking turns", "Blank"]);
+        assert.deepEqual(titles, ["Nurse", "Nurse, then top up", "Bottle", "Triple feed", "Pump and bottle", "Two feeds taking turns", "Blank"]);
         await shapes.getByRole("button", { name: /^Bottle Formula or breast milk by bottle/ }).click();
         const form = dialog(f, "New feeding plan");
         await box(form, "Feed 1 name").waitFor();
