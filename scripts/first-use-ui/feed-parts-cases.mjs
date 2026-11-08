@@ -456,5 +456,32 @@ export function feedPartsCases({ fixture, freshState, record, writes, assert }) 
         assert.deepEqual(f.errors, []);
       } finally { await f.close(); }
     }],
+    ["Feed parts: While you slept says a feed paused 10+ minutes and back on with its milk at the breast from after the pause", async () => {
+      const helper = { email: "helper@example.test", display_name: "Alex", role: "member", emoji: null, color: null };
+      const state = freshState();
+      // Sam last looked at 1:00 AM; Alex nursed on the Left from 8:50, paused at 9:00, went back on at 9:12 (still on),
+      // and gave 20 ml in the SNS at 9:15: one feed still going, in two parts as feeds are counted.
+      state.seen_at = "2026-10-28T05:00:00.000Z";
+      state.members.push(helper);
+      const by = { created_by: helper.email };
+      const segments = [{ side: "L", start: "2026-10-28T12:50:00.000Z", end: "2026-10-28T13:00:00.000Z" }, { side: "L", start: "2026-10-28T13:12:00.000Z", end: null }];
+      state.entries = newest([
+        { ...record(41, "feed", { method: "breast", segments, first_side: "L", last_side: "L" }, "2026-10-28T12:50:00.000Z", by), active: true },
+        record(42, "feed", { method: "bottle", amount_ml: 20, milk: "formula", via: "sns", top_up_of: 41 }, "2026-10-28T13:15:00.000Z", by),
+      ]);
+      const f = await fixture({ state, records: state.entries });
+      try {
+        await metric(f);
+        await f.page.goto("https://first-use.example.test/#today");
+        const recap = f.page.getByRole("button", { name: /^While you slept/ });
+        assert.match(await recap.innerText(), /While you slept · nursing now · by Alex/);
+        await recap.click();
+        const note = (await f.page.locator("#wys-more").innerText()).replace(/[  ]/g, " ");
+        assert.match(note, /Nursing now, since 8:50 AM, 20 ml in the SNS\./);
+        assert.doesNotMatch(note, /\d feeds?,/, "a feed still going is never counted as a feed done");
+        assert.deepEqual(writes(f), []);
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
   ];
 }
