@@ -459,10 +459,10 @@ async function main() {
       ok(cross.json.confirm_needed === true, "another family's token reads back again");
       ok(cross.text.includes("Day: every 2.5–3.5 hours, waking him if he's asleep") && cross.text.includes("Night (11 PM–5 AM): every 3 hours, waking him: Pump + bottle"), "Beta's boy is him");
       eq(feedingPlanOf(await settings(B))?.feeds.map((f) => f.name), ["Shield, then pump"], "Beta's plan unchanged");
-      // With no plan saved, a bottle after nursing is never linked by one: a syringe can be a feed by finger.
+      // With no plan saved, no plan links a bottle to the feed before it (how the log itself counts one is feed.ts's rule).
       await tool(alpha.owner, A, "log_feed", { method: "breast", left_minutes: 10, right_minutes: 10, first_side: "left", minutes_ago: 80 });
-      const own = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 20, unit: "ml", via: "syringe" });
-      ok(!/Counted with the feed|still had its/.test(own.text) && !(await sql(`SELECT data ? 'top_up_of' AS has FROM maple_entries WHERE id = $1`, [Number(own.json.id)]))[0].has, own.text);
+      const own = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 30, unit: "ml", via: "paced" });
+      ok(!/still had its/.test(own.text) && !(await sql(`SELECT data ? 'top_up_of' AS has FROM maple_entries WHERE id = $1`, [Number(own.json.id)]))[0].has, own.text);
     });
 
     await test(`${shape}: ounces as the care team wrote them, read back in ounces, and sent back without drift`, async () => {
