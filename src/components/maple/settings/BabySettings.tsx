@@ -287,14 +287,14 @@ export default function BabySettings({ section }: { section: "baby" | "doctor" |
             label={`Target per feed, from (${tu === "metric" ? "ml" : "oz"})`}
             note={`Optional: only if ${w.his} care team gave you one. Maple shows it next to bottles and in the visit summary; it never warns.`}
             inputMode="decimal"
-            placeholder={tu === "metric" ? "e.g. 45" : "e.g. 1.5"}
+            placeholder={tu === "metric" ? "e.g. 50" : "e.g. 2"}
             value={d.feedFrom}
             onChange={(e) => setDEdits((x) => ({ ...x, feedFrom: e.target.value.replace(/[^\d.,]/g, "") }))}
           />
           <InputRow
             label={`Up to (${tu === "metric" ? "ml" : "oz"})`}
             inputMode="decimal"
-            placeholder={tu === "metric" ? "e.g. 60" : "e.g. 2"}
+            placeholder={tu === "metric" ? "e.g. 70" : "e.g. 2.5"}
             value={d.feedTo}
             onChange={(e) => setDEdits((x) => ({ ...x, feedTo: e.target.value.replace(/[^\d.,]/g, "") }))}
           />

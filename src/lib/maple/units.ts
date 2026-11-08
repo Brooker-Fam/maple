@@ -185,7 +185,7 @@ export function feedTargetFrom(from: string, to: string, units: UnitSystem, exac
     const t = text.trim().replace(",", ".");
     if (!t) return null;
     const n = Number(t);
-    if (!Number.isFinite(n) || n <= 0) throw new Error(`Enter the target per feed as ${units === "metric" ? "ml, like 45 and 60" : "oz, like 1.5 and 2"}`);
+    if (!Number.isFinite(n) || n <= 0) throw new Error(`Enter the target per feed as ${units === "metric" ? "ml, like 50 and 70" : "oz, like 2 and 2.5"}`);
     const kept = exact?.(n);
     if (kept != null) return kept;
     return Math.round((units === "metric" ? n : ozToMl(n)) * 10) / 10;

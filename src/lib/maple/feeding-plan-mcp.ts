@@ -646,6 +646,11 @@ const NAME_WORDS: { word: RegExp; has: (f: PlanFeed) => boolean; what: string }[
   { word: /\bsns\b/i, has: (f) => f.steps.some((s) => s.do === "nurse" && s.supplement?.via === "sns"), what: "an SNS" },
   { word: /\btop[\s-]?ups?\b/i, has: (f) => f.steps.some((s) => s.do === "bottle"), what: "a top-up" },
   { word: /\bpump(?:s|ing)?\b/i, has: (f) => f.steps.some((s) => s.do === "pump"), what: "a pump" },
+  ...PLAN_GIVEN_BY.map((by) => ({
+    word: new RegExp(`\\b${by}s?\\b`, "i"),
+    has: (f: PlanFeed) => f.steps.some((s) => s.do === "bottle" && s.by === by),
+    what: by === "finger" ? "finger feeding" : `a ${by}`,
+  })),
 ];
 
 /** The word as the name says it, unless it says it's without it ("no shield", "without SNS"). */

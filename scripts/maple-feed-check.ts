@@ -2152,24 +2152,24 @@ check("describeEntry: back and forth reads as such", () => {
     eq(daySummaryParts(s, "metric").slice(2, 4), ["155 ml bottle (2 top-ups)", "50 ml formula"]);
   });
   check("a target per feed: only the family's own number, read, shown, typed and checked", () => {
-    eq(feedTargetOf({ feed_target_ml: { min: 45, max: 60 } }), { min: 45, max: 60 });
-    eq([feedTargetOf({}), feedTargetOf(null), feedTargetOf({ feed_target_ml: { min: 60, max: 45 } }), feedTargetOf({ feed_target_ml: "45-60" })], [null, null, null, null]);
-    eq([formatVolumeRange({ min: 45, max: 60 }, "metric"), formatVolumeRange({ min: 45, max: 60 }, "us"), formatVolumeRange({ min: 50, max: 50 }, "metric")], ["45–60 ml", "1.52–2.03 oz", "50 ml"]);
-    eq(formatVolumeRangeBoth({ min: 45, max: 60 }), "45–60 ml (1.52–2.03 oz)");
-    eq(feedTargetFrom("45", "60", "metric"), { min: 45, max: 60 });
-    eq(feedTargetFrom("60", "45", "metric"), { min: 45, max: 60 }, "either order");
+    eq(feedTargetOf({ feed_target_ml: { min: 50, max: 70 } }), { min: 50, max: 70 });
+    eq([feedTargetOf({}), feedTargetOf(null), feedTargetOf({ feed_target_ml: { min: 70, max: 50 } }), feedTargetOf({ feed_target_ml: "50-70" })], [null, null, null, null]);
+    eq([formatVolumeRange({ min: 50, max: 70 }, "metric"), formatVolumeRange({ min: 50, max: 70 }, "us"), formatVolumeRange({ min: 50, max: 50 }, "metric")], ["50–70 ml", "1.69–2.37 oz", "50 ml"]);
+    eq(formatVolumeRangeBoth({ min: 50, max: 70 }), "50–70 ml (1.69–2.37 oz)");
+    eq(feedTargetFrom("50", "70", "metric"), { min: 50, max: 70 });
+    eq(feedTargetFrom("70", "50", "metric"), { min: 50, max: 70 }, "either order");
     eq(feedTargetFrom("50", "", "metric"), { min: 50, max: 50 }, "one amount is the whole target");
-    eq(feedTargetFrom("1.5", "2", "us"), { min: 44.4, max: 59.1 });
+    eq(feedTargetFrom("2", "2.5", "us"), { min: 59.1, max: 73.9 });
     eq(feedTargetFrom(" ", "", "metric"), null);
     let threw = "";
     try { feedTargetFrom("4a", "", "metric"); } catch (e) { threw = (e as Error).message; }
-    eq(threw, "Enter the target per feed as ml, like 45 and 60");
-    const patch: Record<string, unknown> = { feed_target_ml: { min: 44.44, max: 59.15 } };
+    eq(threw, "Enter the target per feed as ml, like 50 and 70");
+    const patch: Record<string, unknown> = { feed_target_ml: { min: 49.96, max: 70.04 } };
     checkFeedTarget(patch);
-    eq(patch.feed_target_ml, { min: 44.4, max: 59.2 });
+    eq(patch.feed_target_ml, { min: 50, max: 70 });
     checkFeedTarget({ feed_target_ml: null });
     checkFeedTarget({ other: 1 });
-    for (const bad of [{ min: 60, max: 45 }, { min: 2, max: 60 }, { min: 45, max: 400 }, { min: "45", max: 60 }, [45, 60], "45-60"]) {
+    for (const bad of [{ min: 70, max: 50 }, { min: 2, max: 70 }, { min: 50, max: 400 }, { min: "50", max: 70 }, [50, 70], "50-70"]) {
       let refused = false;
       try { checkFeedTarget({ feed_target_ml: bad }); } catch { refused = true; }
       ok(refused, `refused ${JSON.stringify(bad)}`);

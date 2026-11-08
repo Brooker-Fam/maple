@@ -157,8 +157,8 @@ test("a bottle and a cluster keep their own details after the finish", () => {
   const bottled = render([...history(), bottle(1, "10:00", "10:15", 90)], "10:40");
   assert.equal(text(detailsLine(bottled.rendered)), "Finished 25m ago\u00a0· 90 ml bottle");
   // A bottle on its own is the whole feed: the care team's target, when the family typed one, sits beside it.
-  const targeted = render([...history(), bottle(1, "10:00", "10:15", 50)], "10:40", false, { settings: { feed_target_ml: { min: 45, max: 60 } } });
-  assert.equal(text(detailsLine(targeted.rendered)), "Finished 25m ago\u00a0· 50 ml bottle\u00a0· target 45–60 ml");
+  const targeted = render([...history(), bottle(1, "10:00", "10:15", 50)], "10:40", false, { settings: { feed_target_ml: { min: 50, max: 70 } } });
+  assert.equal(text(detailsLine(targeted.rendered)), "Finished 25m ago\u00a0· 50 ml bottle\u00a0· target 50–70 ml");
   const cluster = render([feed(1, [part("09:00", "09:15")]), feed(2, [part("09:30", "09:45", "R")]), feed(3, [part("10:00", "10:17")])], "10:17");
   const line = detailsLine(cluster.rendered);
   assert.equal(text(line), `Finished just now\u00a0· Cluster ${spanText(at("09:00"), at("10:17"), "UTC")}\u00a0· 3 feeds\u00a0· nursed ${minutesShort(47)}`);

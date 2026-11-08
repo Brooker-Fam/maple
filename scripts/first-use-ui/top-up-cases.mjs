@@ -70,7 +70,7 @@ export function topUpCases({ fixture, freshState, record, writes, assert }) {
     }],
     ["The visit summary keeps the care team's target, the top-ups apart from bottles, and what the bottles held", async () => {
       const state = freshState();
-      state.baby.settings = { ...state.baby.settings, feed_target_ml: { min: 45, max: 60 } };
+      state.baby.settings = { ...state.baby.settings, feed_target_ml: { min: 50, max: 70 } };
       state.entries = [
         record(45, "feed", { method: "bottle", amount_ml: 35, milk: "breastmilk", via: "paced" }, "2026-10-28T13:20:00.000Z"),
         nursing(46, "2026-10-28T12:45:00.000Z", "2026-10-28T13:00:00.000Z", "2026-10-28T13:15:00.000Z"),
@@ -85,7 +85,7 @@ export function topUpCases({ fixture, freshState, record, writes, assert }) {
         const dialog = f.page.getByRole("dialog", { name: "For the doctor", exact: true });
         await dialog.getByRole("button", { name: "Copy summary", exact: true }).click();
         const text = await dialog.getByRole("textbox", { name: "Visit summary", exact: true }).inputValue();
-        assert.match(text, /Target per feed from our care team: 1\.52–2\.03 oz \(45–60 ml\)\./);
+        assert.match(text, /Target per feed from our care team: 1\.69–2\.37 oz \(50–70 ml\)\./);
         const today = text.split("\n").find((line) => line.includes("(so far):")) ?? "";
         assert.match(today, /: 2 feeds \(/, today);
         assert.match(today, /1 bottle, 2\.03 oz \(60 ml\); 1 top-up with nursing, 1\.18 oz \(35 ml\); by bottle: formula 2\.03 oz \(60 ml\), breast milk 1\.18 oz \(35 ml\)/, today);
@@ -149,11 +149,11 @@ export function topUpCases({ fixture, freshState, record, writes, assert }) {
         await metric(f);
         await f.page.goto("https://first-use.example.test/#family/doctor");
         const from = f.page.getByRole("textbox", { name: /^Target per feed, from \(ml\)/ });
-        await from.fill("45");
-        await f.page.getByRole("textbox", { name: "Up to (ml)", exact: true }).fill("60");
+        await from.fill("50");
+        await f.page.getByRole("textbox", { name: "Up to (ml)", exact: true }).fill("70");
         await f.page.getByRole("button", { name: "Save changes", exact: true }).click();
         for (let i = 0; i < 20 && !patches.length; i++) await f.page.waitForTimeout(100);
-        assert.deepEqual(patches.at(-1)?.settings?.feed_target_ml, { min: 45, max: 60 });
+        assert.deepEqual(patches.at(-1)?.settings?.feed_target_ml, { min: 50, max: 70 });
         assert.deepEqual(f.errors, []);
       } finally { await f.close(); }
     }],
