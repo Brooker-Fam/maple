@@ -12,7 +12,7 @@ import { LABEL_NOT_WHILE_NURSING, MOM_HELP, MOM_TIER_LABEL, TIER_LABEL, VITAMIN_
 import { memberName, summarize } from "@/lib/maple/insights";
 import { lastFedSpeak } from "@/lib/maple/mcp-tools";
 import { feedingPlanOf, feedPlanNow } from "@/lib/maple/feeding-plan";
-import { owedPart, planSpeak } from "@/lib/maple/feeding-plan-mcp";
+import { owedPart, planNextSide, planSpeak } from "@/lib/maple/feeding-plan-mcp";
 import {
   activeTimers,
   createEntryOnce,
@@ -331,6 +331,11 @@ export async function POST(request: NextRequest) {
         const bits: string[] = [];
         const name = baby.nickname || baby.name;
         const nursing = s.active.find((e) => e.kind === "feed");
+        // The care team's feeding plan, for a family that saved one, read once: its next feed (or the one underway), and
+        // the side to start on when that feed nurses on one side only.
+        const plan = s.born ? feedingPlanOf(baby.settings) : null;
+        const planNow = plan ? feedPlanNow(plan, entries, now, { tz, target: feedTargetOf(baby.settings) }) : null;
+        const planSide = planNow ? planNextSide(planNow) : null;
         if (nursing) {
           const d = nursing.data as FeedData;
           const mins = Math.round((now.getTime() - Date.parse(nursing.started_at)) / 60000);
@@ -343,12 +348,12 @@ export async function POST(request: NextRequest) {
           const c = s.lastFed?.kind === "breast" && s.lastFed.run?.cluster != null ? s.cluster : null;
           if (c) bits.push(`It's feed ${c.feeds} of a cluster since ${formatTime(c.start, tz)}.`);
         } else {
-          // The cluster line after a cluster, else when she last ate and the side to start on (insights' lastFed and next).
-          bits.push(lastFedSpeak(s, name, tz, vo));
+          // The cluster line after a cluster, else when she last ate and the side to start on (insights' lastFed and next;
+          // the plan's side when its next feed nurses on one side only, as Today's dock and Last fed say it).
+          bits.push(lastFedSpeak(planSide ? { ...s, next: { side: planSide.side, rule: "alternate", fuller: false }, nextSide: planSide.side } : s, name, tz, vo));
         }
         // The care team's feeding plan, for a family that saved one: its next feed, or the one underway and what's left.
-        const plan = s.born ? feedingPlanOf(baby.settings) : null;
-        if (plan) bits.push(planSpeak(feedPlanNow(plan, entries, now, { tz, target: feedTargetOf(baby.settings) }), { now, tz, vo }));
+        if (planNow) bits.push(planSpeak(planNow, { now, tz, vo }));
         // The sleep plan's one line: a try running, else who's holding her, else this adult's check-in when it's due.
         const sleep = await sleepStatusLine({ fam, baby, me, members, vo, name, now });
         if (sleep.line) bits.push(sleep.line);

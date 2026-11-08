@@ -33,7 +33,7 @@ import { context, fail, FAMILY_ONE_COPY, ok, READ_ANN, ToolError, VIEWER_MESSAGE
 import { readBackMatches, readBackToken, READ_BACK_HOURS, rereadWhy } from "./sleep/mcp";
 import { listEntries, SettingsChanged, storedPlanRev, StoreUnavailable, updateBaby } from "./store";
 import { formatTime, formatTimeNear } from "./time";
-import type { Entry, EntryOf } from "./types";
+import type { Entry, EntryOf, Side } from "./types";
 import { feedTargetOf, ML_PER_FL_OZ, type FeedTarget } from "./units";
 import { checkFeedTarget } from "./validate";
 import type { Voice } from "./voice";
@@ -606,17 +606,32 @@ function planNow(ctx: Ctx, plan: FeedingPlan, entries: readonly Entry[]): FeedPl
   return feedPlanNow(plan, entries, ctx.now, { tz: ctx.tz, target: feedTargetOf(ctx.baby.settings) });
 }
 
+/** The plan's next feed nurses on one side only: that side, and the feed's name. */
+export type PlanSide = { side: Side; feed: string };
+
+/**
+ * The side the plan's next feed nurses on, when it's on one side only and
+ * nursing is what comes next (the feed not begun, its first step nursing), as
+ * Today's dock and Last fed offer it over the usual turns; null otherwise.
+ */
+export function planNextSide(n: FeedPlanNow): PlanSide | null {
+  if (n.focus.state !== "upcoming") return null;
+  const first = n.focus.feed.steps.find((s) => s.do !== "note");
+  return first?.do === "nurse" && first.side ? { side: first.side, feed: n.focus.feed.name } : null;
+}
+
 /**
  * The plan's line and field for maple_status and the chat's [App] lines,
- * from the log they already read (`entries`, else read here); null with no
- * plan, so a family without one reads exactly as before.
+ * from the log they already read (`entries`, else read here), and the side
+ * its next feed nurses on when that's one side only; null with no plan, so a
+ * family without one reads exactly as before.
  */
-export async function feedingPlanStatus(ctx: Ctx, entries?: readonly Entry[]): Promise<{ lines: string[]; json: Record<string, unknown> } | null> {
+export async function feedingPlanStatus(ctx: Ctx, entries?: readonly Entry[]): Promise<{ lines: string[]; json: Record<string, unknown>; side: PlanSide | null } | null> {
   const plan = feedingPlanOf(ctx.baby.settings);
   if (!plan) return null;
   const n = planNow(ctx, plan, entries ?? (await recentLog(ctx)));
   const w = wordsOf(ctx);
-  return { lines: [planNowLine(n, w)], json: { ...planNowJson(n, w), family_words: PLAN_WORDS_JSON } };
+  return { lines: [planNowLine(n, w)], json: { ...planNowJson(n, w), family_words: PLAN_WORDS_JSON }, side: planNextSide(n) };
 }
 
 /**

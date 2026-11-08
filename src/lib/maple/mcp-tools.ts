@@ -73,7 +73,7 @@ import { momSameMedicine, momStatus, momSummary, registerCareTools } from "./car
 import { registerMemoryTools, statusMemories } from "./memory/mcp";
 import { memoryRules } from "./memory/policy";
 import { registerPeopleTools } from "./people-mcp";
-import { feedingPlanStatus, owedPartLine, planFeedArg, planOwedPart, planShield, registerFeedingPlanTools, type OwedPart } from "./feeding-plan-mcp";
+import { feedingPlanStatus, owedPartLine, planFeedArg, planOwedPart, planShield, registerFeedingPlanTools, type OwedPart, type PlanSide } from "./feeding-plan-mcp";
 import { AT_BREAST_WORDS, feedingPlanOf } from "./feeding-plan";
 import { registerSleepTools, sleepStatus, tryRef, undoableGoalWrite, undoableSleep, undoAsk } from "./sleep/mcp";
 import { deleteShift, deleteTry, endArmsSleepForFeed, getTry as getSleepTry } from "./sleep/store";
@@ -1114,6 +1114,19 @@ function nextLine(s: Summary, vo: Voice): string | null {
   }
   const why = n.rule === "relatch" ? ` (${vo.they} came off the ${sideWord(other(n.side))} under 30 minutes ago, so it's the other side from that one)` : "";
   return `Next feed: offer the ${sideWord(n.side)} side first${fuller}${why}.`;
+}
+
+/**
+ * The feeding plan's next feed nursing on one side only (feeding-plan-mcp.ts planNextSide), between feeds: the summary
+ * with that side as the next side (as Today's dock and Last fed offer it), its line ("Next feed: offer the left side
+ * (the feeding plan's next feed, "Left, pump the right", nurses on the left only).") and next_side_rule. Null
+ * otherwise, so everything else reads as before.
+ */
+function planSideNext(s: Summary, side: PlanSide | null | undefined): { s: Summary; line: string; rule: string } | null {
+  if (!side || s.active.some((e) => e.kind === "feed")) return null;
+  const word = sideWord(side.side);
+  const rule = `the feeding plan's next feed, ${JSON.stringify(side.feed)}, nurses on the ${word} only`;
+  return { s: { ...s, next: { side: side.side, rule: "alternate", fuller: false }, nextSide: side.side }, line: `Next feed: offer the ${word} side (${rule}).`, rule };
 }
 
 /** next_side for JSON ("left" or null), with next_side_note after going back and forth, and back_on_side on a break. */
@@ -2298,9 +2311,11 @@ function last24Words(d: Summary["last24h"]): string {
  * The log in maple_status's own lines, cut to what the in-app chat needs on every message: running timers, her last
  * feed, the next side, diapers, the last sleep and today's counts. Nothing before she's born.
  */
-export function logStateLines(s: Summary, ctx: Ctx, parts?: DayParts): string[] {
+export function logStateLines(s: Summary, ctx: Ctx, parts?: DayParts, planSide?: PlanSide | null): string[] {
   if (!s.born) return [];
-  const lines = [...s.active.map((e) => timerLine(e, ctx, e.kind === "feed" ? parts?.live : undefined)), lastFeedLine(s, ctx), nextLine(s, voiceOf(ctx)), diaperLine(s, ctx), lastSleepLine(s, ctx), todayLine(s, parts)];
+  // The feeding plan's next feed on one side only is the next side, said with why.
+  const next = planSideNext(s, planSide)?.line ?? nextLine(s, voiceOf(ctx));
+  const lines = [...s.active.map((e) => timerLine(e, ctx, e.kind === "feed" ? parts?.live : undefined)), lastFeedLine(s, ctx), next, diaperLine(s, ctx), lastSleepLine(s, ctx), todayLine(s, parts)];
   return lines.filter((l): l is string => !!l);
 }
 
@@ -2310,8 +2325,8 @@ export function logStateLines(s: Summary, ctx: Ctx, parts?: DayParts): string[] 
  */
 export async function logState(ctx: Ctx): Promise<string[]> {
   const [{ s, entries, parts }, mom, sleep] = await Promise.all([snapshotWithLog(ctx), momStatus(ctx), sleepStatus(ctx).catch(() => null)]);
-  const lines = logStateLines(s, ctx, parts);
   const plan = s.born ? await feedingPlanStatus(ctx, entries) : null;
+  const lines = logStateLines(s, ctx, parts, plan?.side);
   if (plan) lines.push(...plan.lines);
   if (s.born && sleep) lines.push(...sleep.lines);
   if (mom) lines.push(`${mom.name}'s next medicine: ${mom.top}.`);
@@ -2516,14 +2531,16 @@ async function statusResult(ctx: Ctx, since: string | null | undefined): Promise
   json.timers = s.active.map((e) => timerJson(e, ctx));
 
   lines.push(lastFeedLine(s, ctx));
-  const next = nextLine(s, vo);
+  // The care team's feeding plan, only for a family that saved one: the next feed (or the one underway) in its words,
+  // and its side as the next side when that feed nurses on one side only.
+  const plan = s.born ? await feedingPlanStatus(ctx, entries) : null;
+  const ps = planSideNext(s, plan?.side);
+  const next = ps ? ps.line : nextLine(s, vo);
   if (next) lines.push(next);
   json.last_feed = lastFeedJson(s, ctx);
   // The family's own target per feed from their care team, only when they typed one.
   const target = feedTargetOf(ctx.baby.settings);
   if (target) json.feed_target = `${formatVolumeRangeBoth(target)}, from their care team, counting what's taken at the breast`;
-  // The care team's feeding plan, only for a family that saved one: the next feed (or the one underway) in its words.
-  const plan = s.born ? await feedingPlanStatus(ctx, entries) : null;
   if (plan) {
     lines.push(...plan.lines);
     json.feeding_plan = plan.json;
@@ -2531,9 +2548,9 @@ async function statusResult(ctx: Ctx, since: string | null | undefined): Promise
   // The cluster her last feed is in: 3+ feeds, each starting under 30 minutes after the last one ended.
   const cluster = lastCluster(s);
   json.cluster = cluster ? clusterJson(cluster, ctx) : null;
-  Object.assign(json, nextJson(s));
-  const nf = nextFeed(s);
-  if (nf) json.next_side_rule = nextRule(nf, vo);
+  Object.assign(json, nextJson(ps?.s ?? s));
+  const nf = nextFeed(ps?.s ?? s);
+  if (nf) json.next_side_rule = ps ? ps.rule : nextRule(nf, vo);
 
   const dl = diaperLine(s, ctx);
   if (dl) lines.push(dl);
@@ -2597,7 +2614,7 @@ async function statusResult(ctx: Ctx, since: string | null | undefined): Promise
   json.celebrations = s.celebrations.map((c) => `${c.emoji} ${c.title}`);
 
   // Voice reads hers after Maple's, capped at two medicines.
-  const speak = [speakLine(s, ctx), mom?.speak].filter(Boolean).join(" ");
+  const speak = [speakLine(ps?.s ?? s, ctx), mom?.speak].filter(Boolean).join(" ");
   json.speak = speak;
   // What the family asked to be remembered, for a connected app; Maple's own chat has them with its instructions.
   if (ctx.who.via !== "chat") {
@@ -3763,17 +3780,23 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
       if (both && !side && !live) {
         throw new ToolError(`back_and_forth needs side: the side ${vo.they} started on ("left" or "right"), since the next side alternates from it. Ask which side ${vo.they} started on.`);
       }
-      // No side: a new nursing timer starts on the plan feed's side when it nurses on one side only, else on the
-      // suggested side; a running one stays where it is.
-      const planSide = planFeed?.steps.find((s) => s.do === "nurse")?.side;
-      let fromPlan = false;
-      if (kind === "feed" && !side && !live && planSide) {
-        side = planSide;
-        fromPlan = true;
-      } else if (kind === "feed" && !side && !live) {
-        const s = await snapshot(ctx);
-        side = s.nextSide ?? "L";
-        suggested = !!s.nextSide;
+      // No side: a new nursing timer starts on the plan feed's side when it nurses on one side only (the one named, else
+      // the plan's next feed, as Today's dock offers it), else on the suggested side; a running one stays where it is.
+      let fromPlan: string | null = null;
+      if (kind === "feed" && !side && !live) {
+        const named = planFeed?.steps.find((s) => s.do === "nurse")?.side;
+        const next = !planFeed ? (await feedingPlanStatus(ctx))?.side : null;
+        if (named) {
+          side = named;
+          fromPlan = " (That's the side the plan's feed nurses on.)";
+        } else if (next) {
+          side = next.side;
+          fromPlan = ` (That's the side the feeding plan's next feed, ${JSON.stringify(next.feed)}, nurses on.)`;
+        } else {
+          const s = await snapshot(ctx);
+          side = s.nextSide ?? "L";
+          suggested = !!s.nextSide;
+        }
       }
       // A feed starting ends a sleep in arms then (a holding turn's), as the app's dock and Siri end a nap when nursing starts.
       const armsEnded = kind === "feed" && !live ? await endArmsSleepForFeed(ctx.fam, { babyId: ctx.baby.id, at, by: ctx.who.id }) : null;
@@ -3803,7 +3826,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
       const lines = [
         alreadyRunning
           ? `A ${label} timer was already running (#${entry.id}, started ${whenText(entry.started_at, ctx)} by ${by})${sideText ? `; now${sideText}` : ""}. No second timer was started${startWith ? ", and the running feed kept its own plan feed and shield" : ""}.`
-          : `Saved #${entry.id}: ${label} timer started${sideText}${shieldText} at ${whenText(entry.started_at, ctx)}${planText} (logged by ${by} via ${viaLabel(entry.source)}).${suggested ? " (That's the suggested next side.)" : fromPlan ? " (That's the side the plan's feed nurses on.)" : ""}`,
+          : `Saved #${entry.id}: ${label} timer started${sideText}${shieldText} at ${whenText(entry.started_at, ctx)}${planText} (logged by ${by} via ${viaLabel(entry.source)}).${suggested ? " (That's the suggested next side.)" : (fromPlan ?? "")}`,
         ...(goingBoth && !alreadyRunning ? [BOTH_NOTE] : []),
         ...(armsEnded ? [`${vo.Name}'s sleep in arms (#${armsEnded.sleep.id}, since ${formatTime(armsEnded.sleep.started_at, ctx.tz)}) ended at ${formatTime(armsEnded.sleep.ended_at!, ctx.tz)}, when the feed began (if ${vo.they} ${vo.verb("is")} still asleep in arms, reopen_timer with id ${armsEnded.sleep.id} runs it again).`] : []),
       ];

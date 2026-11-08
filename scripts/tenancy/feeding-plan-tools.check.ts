@@ -599,6 +599,27 @@ async function main() {
       eq([row.segments[0].side, row.plan], ["L", left.id]);
       eq((await tool(alpha.member, A, "stop_timer", { timer: "nursing" })).error, false, "stopped");
     });
+
+    await test(`${shape}: the plan's next feed on one side only is the next side for maple_status, the chat's lines, Siri and start_timer`, async () => {
+      // "Left, pump the right" takes every day turn; five hours after the feeds above, it's next and nothing is underway.
+      const read = await tool(alpha.owner, A, "feeding_plan");
+      const p = read.json.plan as { feeds: { name: string }[] };
+      const one = { ...(p as Record<string, unknown>), night: null, order: ["Left, pump the right"] };
+      ok((await save(alpha.owner, A, { plan: one, target: read.json.target, base_rev: read.json.rev })).json.saved === true, "saved");
+      const { atClock } = await import("./clock");
+      await atClock("2026-11-04T23:00:00Z", async () => {
+        const status = await tool(alpha.member, A, "maple_status");
+        const line = 'Next feed: offer the left side (the feeding plan\'s next feed, "Left, pump the right", nurses on the left only).';
+        ok(status.text.split("\n").includes(line), status.text);
+        eq([status.json.next_side, status.json.next_side_rule], ["left", 'the feeding plan\'s next feed, "Left, pump the right", nurses on the left only'], "maple_status's next side");
+        ok(/start on the left next/.test(String(status.json.speak)), String(status.json.speak));
+        ok((await chatLogState({ email: alpha.member }, { fam: A, care: true, now: new Date() })).includes(line), "the chat's [App] line");
+        ok(/start on the left next/.test((await siri(alpha.token, { action: "status" })).speak ?? ""), "Siri's status");
+        const started = await tool(alpha.member, A, "start_timer", { timer: "nursing" });
+        ok(!started.error && /timer started on the left at .*\(That's the side the feeding plan's next feed, "Left, pump the right", nurses on\.\)/.test(started.text), started.text);
+        eq((await tool(alpha.member, A, "stop_timer", { timer: "nursing" })).error, false, "stopped");
+      });
+    });
   }
 
   done("feeding-plan-tools");
