@@ -2034,7 +2034,7 @@ function lastFeedLine(s: Summary, ctx: Ctx): string {
     // A Mixed bottle's split when it's known: "(30 ml (1 oz) breast milk + 20 ml (0.7 oz) formula)".
     const parts = [f.data.breastmilk_ml != null ? `${formatVolumeBoth(f.data.breastmilk_ml)} breast milk` : "", f.data.formula_ml != null ? `${formatVolumeBoth(f.data.formula_ml)} formula` : ""].filter(Boolean);
     const split = f.data.milk === "mixed" && parts.length ? ` (${parts.join(" + ")})` : "";
-    const how = f.data.via === "paced" ? "paced bottle" : f.data.via === "sns" ? "SNS feed" : "bottle";
+    const how = f.data.via === "paced" ? "paced bottle" : f.data.via === "sns" ? "SNS feed" : f.data.via === "syringe" ? "syringe feed" : "bottle";
     return `${label}: ${f.data.amount_ml != null ? `${formatVolumeBoth(f.data.amount_ml)} ` : ""}${how}${milk}${split} at ${whenText(f.started_at, ctx)} (${ago}).`;
   }
   const run = fed.run;
@@ -3421,7 +3421,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
     milk: z.enum(["breastmilk", "formula", "mixed"]).nullish().describe('Bottle: what was in it, from the user\'s words ("of formula" → formula, "pumped" or "breast milk" → breastmilk). When they didn\'t say, leave it out: never guess it or copy it from an earlier bottle.'),
     breastmilk_amount: z.number().min(0).max(1000).nullish().describe("Bottle, mixed: the breast milk part, in `unit`."),
     formula_amount: z.number().min(0).max(1000).nullish().describe("Bottle, mixed: the formula part, in `unit`."),
-    via: z.enum(BOTTLE_VIAS).nullish().describe("Bottle: how it was given, only if said (sns: a supplementer at the breast). Never guess."),
+    via: z.enum(BOTTLE_VIAS).nullish().describe("Bottle: how it was given, only if said (sns: a supplementer at the breast; syringe: a syringe, at the breast or by finger). Never guess."),
     at: fields.at("When the feed STARTED"),
     minutes_ago: fields.minutesAgo("How many minutes ago the feed STARTED"),
     ended_minutes_ago: fields.endedMinutesAgo(),

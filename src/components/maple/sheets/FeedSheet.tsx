@@ -88,7 +88,7 @@ import {
 type Milk = NonNullable<FeedData["milk"]>;
 const MILK_LABEL: Record<Milk, string> = { breastmilk: "Breast milk", formula: "Formula", mixed: "Mixed" };
 /** How the milk was given (FeedData.via). */
-const VIA_LABEL: Record<BottleVia, string> = { bottle: "Bottle", paced: "Paced bottle", sns: "SNS at the breast" };
+const VIA_LABEL: Record<BottleVia, string> = { bottle: "Bottle", paced: "Paced bottle", sns: "SNS at the breast", syringe: "Syringe" };
 const MIN = 60_000;
 /** The id of a feed being logged, not saved yet (its toast is worded from it). */
 const DRAFT_ID = Number.MIN_SAFE_INTEGER;

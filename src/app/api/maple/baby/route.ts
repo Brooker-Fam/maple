@@ -2,6 +2,7 @@ import { BadRequest, familyName, Forbidden, json, readJson, withMember } from "@
 import { FAMILY_ONE } from "@/lib/maple/family";
 import { getBaby, updateBaby, type BabyPatch } from "@/lib/maple/store";
 import { isDayKey } from "@/lib/maple/time";
+import { checkFeedingPlan, PlanConflict, PlanError } from "@/lib/maple/feeding-plan";
 import { checkFeedTarget, checkLogSwitches } from "@/lib/maple/validate";
 
 export const dynamic = "force-dynamic";
@@ -74,7 +75,11 @@ export const PATCH = withMember("PATCH /api/maple/baby", async (request, me, ctx
     try {
       checkLogSwitches(incoming);
       checkFeedTarget(incoming);
+      // The feeding plan (feeding-plan.ts): parsed into a new revision; an edit begun from an older one is refused.
+      checkFeedingPlan(incoming, baby.settings, new Date());
     } catch (e) {
+      if (e instanceof PlanConflict) return json({ error: e.message, reason: "plan_changed", feeding_plan: e.current }, 409);
+      if (e instanceof PlanError) throw new BadRequest(e.message);
       throw new BadRequest(e instanceof Error ? e.message : "settings look off");
     }
     if ("admin_as" in incoming) {

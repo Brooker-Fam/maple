@@ -60,14 +60,18 @@ const photo = z.object({
 const tenth = (ml: number) => Math.round(ml * 10) / 10;
 
 /**
- * A bottle's milk split and how it was given only mean something on a
- * bottle, and the split only on a Mixed one: they're dropped anywhere else.
+ * A bottle's milk split, how it was given and the feed it was a late top-up
+ * for only mean something on a bottle, and the split only on a Mixed one; a
+ * nipple shield only on nursing: they're dropped anywhere else.
  * Both parts set the amount to their sum (a total more than 1 ml off is
  * refused, so a slip never saves); one part and the amount give the other.
  */
-function bottleParts<T extends { method: "breast" | "bottle"; amount_ml?: number; milk?: string; breastmilk_ml?: number; formula_ml?: number; via?: string }>(d: T, ctx: z.RefinementCtx): T {
+function bottleParts<T extends { method: "breast" | "bottle"; amount_ml?: number; milk?: string; breastmilk_ml?: number; formula_ml?: number; via?: string; top_up_of?: number; shield?: boolean }>(d: T, ctx: z.RefinementCtx): T {
   const out = { ...d };
-  if (out.method !== "bottle") delete out.via;
+  if (out.method !== "bottle") {
+    delete out.via;
+    delete out.top_up_of;
+  } else delete out.shield;
   if (out.method !== "bottle" || out.milk !== "mixed") {
     delete out.breastmilk_ml;
     delete out.formula_ml;
@@ -110,6 +114,10 @@ export const dataSchemas = {
       breastmilk_ml: optNum(0, 500, "Breast milk amount"),
       formula_ml: optNum(0, 500, "Formula amount"),
       via: z.enum(BOTTLE_VIAS).optional(),
+      // A late top-up's feed (a nursing entry's id), a nursing feed's nipple shield, the plan feed it was started under.
+      top_up_of: z.number().int().positive().optional(),
+      shield: z.boolean().optional(),
+      plan: z.string().trim().regex(/^[A-Za-z0-9._-]{1,24}$/, "plan must be a plan feed's id").optional(),
       // Listed so .strip() keeps it: a stopped-while-paused feed must stay one through later edits.
       paused_at_stop: z.boolean().optional(),
       stopped_at: iso.optional(),

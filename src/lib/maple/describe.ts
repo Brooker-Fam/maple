@@ -108,13 +108,14 @@ export function describeEntry(
   switch (e.kind) {
     case "feed": {
       if (e.data.method === "bottle") {
-        // "Top-up · 35 ml · breast milk · paced bottle", "SNS · 30 ml · formula", "Bottle · 50 ml · 30 ml breast milk + 20 ml formula".
+        // "Top-up · 35 ml · breast milk · paced bottle", "SNS · 30 ml · formula", "Syringe · 30 ml", "Bottle · 50 ml · 30 ml breast milk + 20 ml formula".
         const via = e.data.via;
-        title = opts.topUp ? "Top-up" : via === "sns" ? "SNS" : "Bottle";
+        title = opts.topUp ? "Top-up" : via === "sns" ? "SNS" : via === "syringe" ? "Syringe" : "Bottle";
         if (e.data.amount_ml != null) bits.push(formatVolume(e.data.amount_ml, units));
         const milk = milkWords(e.data, units);
         if (milk) bits.push(milk);
-        const how = via === "paced" ? "paced bottle" : via === "sns" && title !== "SNS" ? "SNS" : via === "bottle" && title !== "Bottle" ? "bottle" : null;
+        const how =
+          via === "paced" ? "paced bottle" : via === "sns" && title !== "SNS" ? "SNS" : via === "syringe" && title !== "Syringe" ? "syringe" : via === "bottle" && title !== "Bottle" ? "bottle" : null;
         if (how) bits.push(how);
       } else {
         title = live ? "Nursing now" : stopped ? "Nursing timer" : "Nursed";
