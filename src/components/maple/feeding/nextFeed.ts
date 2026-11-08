@@ -184,22 +184,27 @@ function bottleAction(s: BottleStep, afterNurse: boolean, c: Ctx): StepAction {
 /** A bottle step with some given, short of its amount (StepView.need). */
 const short = (v: StepView) => v.step.do === "bottle" && v.status === "todo" && v.need !== null && v.entries.length > 0;
 
-/** The rest of a bottle short of its amount: formula to finish (pumped milk first, or a formula bottle), else the rest of it. */
-function restWords(s: BottleStep, afterNurse: boolean): { formula: boolean; what: string } {
-  const formula = s.milk === "breastmilk_first" || s.milk === "formula";
-  return { formula, what: formula ? "formula to finish" : afterNurse ? "the rest of the top-up" : "the rest of the bottle" };
+/**
+ * The rest of a bottle short of its amount: its milk (formula for pumped milk first, else the plan's) and its words.
+ * Pumped milk first, then formula to finish: "formula to finish", until some formula is in; then, as for any other
+ * bottle, "the rest of the bottle" (or of the top-up), so the line never says the formula wasn't logged once it was.
+ */
+function restWords(s: BottleStep, v: StepView, afterNurse: boolean): { milk: "formula" | "breastmilk" | null; what: string } {
+  const rest = afterNurse ? "the rest of the top-up" : "the rest of the bottle";
+  if (s.milk !== "breastmilk_first") return { milk: namedMilk(s.milk) ?? null, what: rest };
+  const formulaIn = v.entries.some((e) => isBottle(e) && (e.data.milk === "formula" || e.data.milk === "mixed"));
+  return { milk: "formula", what: formulaIn ? rest : "formula to finish" };
 }
 
 /**
- * The rest of a bottle short of its amount, in the bottle form: its amount the amount to reach (need.min) less
- * what's given, formula for pumped milk first, the plan's milk otherwise. `at`: when it was given, for a feed
- * already over (the missed line).
+ * The rest of a bottle short of its amount, in the bottle form: the amount to reach (need.min) less what's given,
+ * in its milk (restWords). `at`: when it was given, for a feed already over (the missed line).
  */
 function finishAction(s: BottleStep, v: StepView, afterNurse: boolean, c: Ctx, at?: string): StepAction {
   const rest = round1((v.need?.min ?? 0) - (v.ml ?? 0));
-  const { formula, what } = restWords(s, afterNurse);
+  const { milk, what } = restWords(s, v, afterNurse);
   const label = `Log ${what}`;
-  const preset = { ...bottlePreset(s, afterNurse, c, { amount_ml: rest, milk: formula ? "formula" : namedMilk(s.milk) ?? null }), ...(at ? { started_at: at } : {}) };
+  const preset = { ...bottlePreset(s, afterNurse, c, { amount_ml: rest, milk }), ...(at ? { started_at: at } : {}) };
   return { kind: "form", sheet: "feed", label, aria: `${label}: ${amountText(ml1(rest), c.plan.unit)}, opens the bottle form`, preset };
 }
 
@@ -338,7 +343,7 @@ export function missedItems(fp: FeedPlanNow): MissedItem[] {
         // A top-up names its feed (top_up_of); a bottle-led feed's rest goes with its last bottle, so it stays that feed.
         const last = afterNurse ? undefined : v.entries.reduce<string | undefined>((a, e) => (!a || Date.parse(e.started_at) > Date.parse(a) ? e.started_at : a), undefined);
         const logged = `Gave ${amountText(ml1(v.ml ?? 0), fp.plan.unit)}`;
-        out.push({ key, what: restWords(v.step, afterNurse).what, fix: finishAction(v.step, v, afterNurse, c, last), logged });
+        out.push({ key, what: restWords(v.step, v, afterNurse).what, fix: finishAction(v.step, v, afterNurse, c, last), logged });
       } else out.push({ key, what: afterNurse ? "top-up" : "bottle", fix: bottleAction(v.step, afterNurse, c), logged: null });
     }
   }

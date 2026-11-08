@@ -280,6 +280,14 @@ check("a bottle short of what it's up to stays open: what's given, formula to fi
   // The pump still going (the other parent gave the pumped milk): the rest is still the bottle's action.
   const going = at(PLAN, [...evening(), pump("23:20-"), bottle("23:25", 40, { milk: "breastmilk", plan: NIGHT.id })], "23:30");
   eq(form(stepRows(going, going.focus, SHE)[1].action), { label: "Log formula to finish", aria: "Log formula to finish: 10 ml, opens the bottle form", preset: { method: "bottle", amount_ml: 10, milk: "formula", plan: NIGHT.id } });
+  // Some formula in and still short (she slowed down): the rest of the bottle, still formula, and still She's done;
+  // once the feed is over, the line never says the formula to finish wasn't logged.
+  const some = [...night, bottle("23:55", 5, { milk: "formula", plan: NIGHT.id })];
+  const slow = at(PLAN, some, "23:58");
+  const r = stepRows(slow, slow.focus, SHE)[1];
+  eq([r.state, r.status, r.close], ["todo", "Gave 45 ml · up to 50–70 ml", "She's done"]);
+  eq(form(r.action), { label: "Log the rest of the bottle", aria: "Log the rest of the bottle: 5 ml, opens the bottle form", preset: { method: "bottle", amount_ml: 5, milk: "formula", plan: NIGHT.id } });
+  eq(missedItems(at(PLAN, some, "+1 00:50")).map((x) => [x.what, x.logged]), [["the rest of the bottle", "Gave 45 ml"]]);
   // The formula to finish reaches the target: done, and the card moves on to the next feed.
   const finished = at(PLAN, [...night, bottle("23:55", 10, { milk: "formula", plan: NIGHT.id })], "+1 00:00");
   eq([finished.focus.state, finished.missed], ["upcoming", null]);
