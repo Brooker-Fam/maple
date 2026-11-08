@@ -1067,8 +1067,9 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const unitWord = vu === "metric" ? "ml" : "oz";
   const unitName = vu === "metric" ? "millilitres" : "ounces";
   // A feed's part opened for its feed: the feed it goes with, first (or, its time moved off any feed, what it is then);
-  // said to be a feed of its own, that it isn't that feed's (as long as the line it replaces, so nothing under it moves).
-  const partClock = partRun ? clock(partRun.start) : null;
+  // said to be a feed of its own, that it isn't that feed's (as long as the line it replaces, so nothing under it
+  // moves), the feed named as the plan's card names it (the preset's feed_at) when it says.
+  const partClock = partRun ? clock(pstr(preset, "feed_at") ?? partRun.start) : null;
   const partLine = partOpened ? (
     <p className="flex items-start gap-2 text-[15px] leading-snug text-mp-ink">
       {own ? (
