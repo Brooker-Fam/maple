@@ -93,17 +93,20 @@ export default function Privacy() {
       </p>
       <p>
         If your family adds a feeding plan from your care team, Maple keeps it as you enter it: who it&rsquo;s from and the
-        next check-in, the target per feed, how often to feed by day and at night (the night&rsquo;s hours, and whether to
-        wake the baby), each kind of feed and its steps (nursing, with a nipple shield or milk given at the breast; pumping; a
-        bottle or top-up, its amount, milk and how it&rsquo;s given; short notes), the order day feeds take turns in, and a
-        short note. A feed you log can also say it used a nipple shield and which of the plan&rsquo;s feeds it followed, and a
-        top-up can name the feed it was given for. Maple shows the plan to everyone in your family who can see the log and
-        works out what&rsquo;s next from the log. The plan changes only when an owner or member saves it: by hand, or by saying
-        yes after Maple&rsquo;s chat or a connected assistant reads it back to them. The chat and assistants are told to keep
-        mom&rsquo;s own medicines and health out of the plan; her page keeps those. On Today, Got it on a step that
-        wasn&rsquo;t logged, saying a bottle is done before its full amount, and Not needed on a step that&rsquo;s only
-        if needed are remembered only by that phone&rsquo;s browser, for a day; a pick of another feed to do next is
-        remembered there until the app or tab closes. Removing the plan deletes it. The target per feed
+        next check-in, the target per feed, how often to feed by day and at night (the night&rsquo;s hours, whether to
+        wake the baby or feed when hungry, and which feed comes at which hours of the night), how many feeds or how much milk
+        a day, each kind of feed and its steps (nursing, with a nipple shield or milk given at the breast, or the breast
+        offered only if the baby wants it; pumping; a bottle or top-up, its amount, its most or least, milk and how it&rsquo;s
+        given, a cup, spoon or finger feed included; short notes), the order day feeds take turns in, and notes. A feed you
+        log can also say it used a nipple shield and which of the plan&rsquo;s feeds it followed, and a top-up can name the
+        feed it was given for. Maple shows the plan to everyone in your family who can see the log and works out what&rsquo;s
+        next from the log. The plan changes only when an owner or member saves it: by hand, or by saying yes after
+        Maple&rsquo;s chat or a connected assistant reads it back to them. The chat and assistants are told to keep a
+        parent&rsquo;s own medicines and health out of the plan; the care page keeps those. On Today, Got it on a step that
+        wasn&rsquo;t logged, saying a bottle is done before its full amount, and Not needed or Not this time on a step
+        that&rsquo;s only if needed are remembered only by that phone&rsquo;s browser, for a day; a pick of another feed to do
+        next, and Not this time before a feed has begun, are remembered there until the app or tab closes. Removing the plan
+        deletes it. The target per feed
         stays in Settings until you clear it, and the plan&rsquo;s words already in a chat stay in that person&rsquo;s chat
         history until it&rsquo;s deleted; while they&rsquo;re among its latest messages, they still go to the AI model with
         the conversation.

@@ -25,6 +25,7 @@ import {
   PLAN_GIVEN_BY,
   PLAN_LATE_TOP_UP_MS,
   PLAN_LIMITS,
+  PLAN_ML_SLACK,
   PLAN_PUMP_BEFORE_MS,
   PlanConflict,
   planDayCounts,
@@ -170,12 +171,6 @@ function logged(s: StepView, plan: FeedingPlan, tz: string): string[] {
 const withLogged = (text: string, bits: string[]) => (bits.length ? `${text} (${bits.join(", ")})` : text);
 
 /**
- * How far under its amount a bottle can be and still have reached it, as the engine reads it: Siri's ounces stored as
- * whole ml before they kept a tenth (2 oz as 59 ml against 59.1).
- */
-const REACHED_SLACK_ML = 0.5;
-
-/**
  * A bottle step that must reach an amount (feeding-plan.ts StepView.need: up to the target per feed, pumped milk first,
  * then formula to finish, or at least an amount) with some of it given and short of that amount, so it's still to do:
  * what's in it and what's left. Null for any other step. `need` is read through a wider type, so these words hold on
@@ -183,7 +178,7 @@ const REACHED_SLACK_ML = 0.5;
  */
 function shortBottle(s: StepView): { given: number; need: Range } | null {
   const need = (s as StepView & { need?: Range | null }).need;
-  if (s.step.do !== "bottle" || s.status !== "todo" || !need || s.ml == null || s.ml >= need.min - REACHED_SLACK_ML) return null;
+  if (s.step.do !== "bottle" || s.status !== "todo" || !need || s.ml == null || s.ml >= need.min - PLAN_ML_SLACK) return null;
   return { given: s.ml, need };
 }
 
