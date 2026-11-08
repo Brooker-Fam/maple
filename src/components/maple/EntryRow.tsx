@@ -167,8 +167,9 @@ export function FeedPartsLine({
   return (
     <div className="pointer-events-none relative -mt-2.5 pb-1.5 @container/parts">
       {thread && <span aria-hidden className={cx(THREAD, "top-0 bottom-0")} />}
-      {/* In line with the row's words (past the badge), or under it on a narrow row, as EntryRow lays them out. */}
-      <div className="flex flex-wrap gap-x-1.5 pr-4 pl-4 @min-[18rem]/parts:pl-16">
+      {/* In line with the row's words (past the badge), or under it on a narrow row, as EntryRow lays them out: its
+          18rem is measured inside the row's 1rem padding on each side, so here, across the whole row, it's 20rem. */}
+      <div className="flex flex-wrap gap-x-1.5 pr-4 pl-4 @min-[20rem]/parts:pl-16">
         {parts.map((b) => {
           const words = feedPartWords(b, units);
           // Its name holds what the pill says (what a voice-control user says to tap it), then the rest of it.
