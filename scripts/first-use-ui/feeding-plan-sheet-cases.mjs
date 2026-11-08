@@ -114,6 +114,14 @@ export function feedingPlanSheetCases({ fixture, freshState, assert }) {
     return form;
   };
   const box = (form, name) => form.getByRole("textbox", { name, exact: true });
+  /**
+   * A field's value once it shows `want`: a stepper or a unit switch updates the field's text in an effect, a frame
+   * after the tap, so reading it at once can catch the frame before on a slow machine. Gives up after 2 seconds.
+   */
+  const shown = async (field, want) => {
+    for (let i = 0; i < 40 && (await field.inputValue()) !== want; i++) await field.page().waitForTimeout(50);
+    return field.inputValue();
+  };
   /** A saved feed starts folded to one line: open it to change it. */
   const unfold = (form, name) => form.getByRole("button", { name: new RegExp(`^${name.replace(/[+]/g, "\\+")}`), expanded: false }).click();
 
@@ -362,7 +370,7 @@ export function feedingPlanSheetCases({ fixture, freshState, assert }) {
         await form.getByRole("button", { name: "Half an hour more, hours between feeds by day, from", exact: true }).click();
         await box(form, "hours between feeds by day, from").fill("2.5");
         await form.getByRole("button", { name: "Half an hour more, hours between feeds by day, to", exact: true }).click();
-        assert.equal(await box(form, "hours between feeds by day, to").inputValue(), "3", "an empty To goes on from From");
+        assert.equal(await shown(box(form, "hours between feeds by day, to"), "3"), "3", "an empty To goes on from From");
         await form.getByRole("button", { name: "Save the plan", exact: true }).click();
         await waitFor(f, () => s.patches.length > 0, "the save");
         assert.deepEqual(s.patches[0], {
@@ -396,9 +404,9 @@ export function feedingPlanSheetCases({ fixture, freshState, assert }) {
         await box(form, "target per feed, in oz, from").fill("2");
         // Switching the unit shows the same amounts in ml, never different ones.
         await form.getByRole("radio", { name: "ml", exact: true }).click();
-        assert.equal(await box(form, "Pump and bottle, step 2, amount, in ml, from").inputValue(), "29.6");
+        assert.equal(await shown(box(form, "Pump and bottle, step 2, amount, in ml, from"), "29.6"), "29.6");
         await form.getByRole("radio", { name: "oz", exact: true }).click();
-        assert.equal(await box(form, "Pump and bottle, step 2, amount, in oz, from").inputValue(), "1");
+        assert.equal(await shown(box(form, "Pump and bottle, step 2, amount, in oz, from"), "1"), "1");
         await form.getByRole("button", { name: "Save the plan", exact: true }).click();
         await waitFor(f, () => s.patches.length > 0, "the save");
         assert.deepEqual(s.patches[0], {

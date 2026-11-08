@@ -3,6 +3,7 @@ export const FixtureContext = createContext(null);
 const fixture = () => useContext(FixtureContext);
 export const useMaple = () => fixture().maple;
 export const useNow = () => new Date("2026-10-28T16:00:00.000Z");
+export const useHoldTimerToasts = () => {};
 export const useNotifications = () => fixture().notifications;
 export const useAppNav = () => fixture().app;
 export const useCareNav = () => fixture().careNav;
