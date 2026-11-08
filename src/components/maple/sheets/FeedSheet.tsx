@@ -513,7 +513,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   // What a saved bottle was when it opened, for its title (kept while it's edited): milk at the breast, a top-up, or a bottle.
   const [savedTopUp] = useState(() => e?.data.method === "bottle" && !!state && topUpIds(nursingRuns(state.entries, now())).has(e.id));
   // The feed it goes with ("the 10:15 AM feed"), and the plan feed it's part of: the bottle's own, else its feed's.
-  const feedClock = topUpOf ? clock(topUpOf.start) : null;
+  const feedClock = topUpOf ? clock((!e && linkTo != null && topUpOf.entries.some((x) => x.id === linkTo) && pstr(preset, "feed_at")) || topUpOf.start) : null; // as the plan's card names it (feed_at), while it still tops up that feed
   const partPlan = planPick ?? topUpOf?.entries.find((x) => x.data.plan)?.data.plan;
   // Quick amounts: a feed's part from the plan's own amount for it (its syringe's, its top-up's range), else small
   // ones for milk at the breast and the usual bottle sizes for a bottle.

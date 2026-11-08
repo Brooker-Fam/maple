@@ -1,12 +1,12 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { tick } from "@/components/atlas/haptics";
 import { atBreastOf } from "@/lib/maple/describe";
 import { STOOL_COLOR_INFO } from "@/lib/maple/guidelines";
-import { isTracked, other, staleFeed } from "@/lib/maple/feed";
+import { bottleAmount, countedFeeds, isTracked, other, staleFeed } from "@/lib/maple/feed";
 import { formatRelative, formatTime, formatTimeNear, DEFAULT_TZ } from "@/lib/maple/time";
 import { formatVolume } from "@/lib/maple/units";
 import type { DiaperData, Entry, FeedData, Side, StoolColor, StretchSide } from "@/lib/maple/types";
@@ -151,6 +151,21 @@ export default function Dock() {
   // More is a sheet too: a timer toast answering a tap still out waits under it, like under the other sheets (SheetProvider).
   useHoldTimerToasts(moreOpen);
 
+  // The last bottle given as a bottle (milk at the breast, a syringe or an SNS, is part of its nursing feed, never
+  // "last"), and how much: a bottle feed's later bottles (the night's formula to finish) add up with its first.
+  const allEntries = state?.entries;
+  const lastBottleMl = useMemo(() => {
+    const list = allEntries ?? [];
+    const last = list.find((e) => e.kind === "feed" && e.data.method === "bottle" && e.data.amount_ml && !atBreastOf(e.data));
+    if (!last || last.kind !== "feed") return null;
+    const fed = countedFeeds(list, now()).find((c) => c.bottle && (c.bottle.id === last.id || c.more.some((b) => b.id === last.id)));
+    if (!fed?.bottle || !fed.more.length) return last.data.amount_ml ?? null;
+    let ml = 0;
+    for (const b of [fed.bottle, ...fed.more]) ml += bottleAmount(b.data) ?? 0;
+    return Math.round(ml * 10) / 10 || null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `now` is the server-corrected clock; the log decides it.
+  }, [allEntries]);
+
   // Portal to <body>: the tab content animates with a transform when tabs
   // change, and a transformed ancestor would pull a fixed dock off the bottom.
   useEffect(() => setHost(document.body), []);
@@ -183,10 +198,9 @@ export default function Dock() {
   // With a plan, the next side is outlined only while the plan's next step is that nursing (not a night feed's pump
   // first), and it's the plan's side when that nursing is on one side only.
   const next = planNow && !planNow.nurseNext ? null : (planNow?.nurseSide ?? summary.nextSide);
-  // The last bottle given as a bottle: milk at the breast (a syringe, an SNS) is part of its nursing feed, never "last".
-  const lastBottle = entries.find((e) => e.kind === "feed" && e.data.method === "bottle" && e.data.amount_ml && !atBreastOf(e.data));
-  // The plan's bottle now (its next step, a top-up or milk at the breast still owed, a feed that starts with a bottle):
-  // the Bottle tile opens the form the card's own button opens.
+  // The plan's bottle now (its next step, a top-up or milk at the breast still owed, a feed that starts with a bottle,
+  // the night's bottle before its pump, formula to finish a bottle feed left short): the Bottle tile opens the form the
+  // card's own button opens, outlined as "Next step" only when it's the card's big button, else saying whose it is.
   const planBottle = planNow?.bottle ?? null;
   // The first days (or an empty log): the tap hint while no timer runs, and "Start timer" under the side and Sleep tiles. After that the family knows which tiles start timers.
   const firstDays = !entries.length || !summary.age || summary.age.dayOfLife <= 3;
@@ -384,7 +398,7 @@ export default function Dock() {
 
   const holdFeed = (side: Side) => open({ kind: "feed", preset: { method: "breast", first_side: side, started_at: earlierAt() } });
 
-  const lastBottleLabel = lastBottle?.kind === "feed" && lastBottle.data.amount_ml ? `${formatVolume(lastBottle.data.amount_ml, units)} last` : undefined;
+  const lastBottleLabel = lastBottleMl ? `${formatVolume(lastBottleMl, units)} last` : undefined;
   const bottleSub = planBottle ? planBottle.word : lastBottleLabel;
   const bottleAria = planBottle ? `Bottle: ${planBottle.aria}` : undefined;
   const openBottle = () => open({ kind: "feed", preset: planBottle ? planBottle.preset : { method: "bottle" } });

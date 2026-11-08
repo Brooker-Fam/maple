@@ -208,6 +208,24 @@ export function feedPartsCases({ fixture, freshState, record, writes, assert }) 
         } finally { await f.close(); }
       }
     }],
+    ["Feed parts: the nursing card counts milk at the breast given after a break of 10 minutes or more, and doesn't offer it again", async () => {
+      const state = freshState();
+      // On the Left 9:00–9:08, a 12-minute break, back on from 9:20 (one timer); 15 ml in the syringe at 9:24.
+      const on = {
+        ...record(41, "feed", { method: "breast", segments: [{ side: "L", start: "2026-10-28T13:00:00.000Z", end: "2026-10-28T13:08:00.000Z" }, { side: "L", start: "2026-10-28T13:20:00.000Z", end: null }], first_side: "L", last_side: "L" }, "2026-10-28T13:00:00.000Z"),
+        active: true,
+      };
+      state.entries = newest([on, record(42, "feed", { method: "bottle", amount_ml: 15, milk: "formula", via: "syringe", top_up_of: 41 }, "2026-10-28T13:24:00.000Z")]);
+      const f = await fixture({ state, records: state.entries });
+      try {
+        await metric(f);
+        await f.page.goto("https://first-use.example.test/#today");
+        await card(f).getByRole("button", { name: "Edit: 15 ml in the syringe · formula, at 9:24 AM", exact: true }).waitFor();
+        assert.equal(await card(f).getByRole("button", { name: "Milk at the breast", exact: true }).count(), 0, "given: the chip says so, and it isn't offered again");
+        assert.deepEqual(writes(f), []);
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
     ["Feed parts: a feed logged afterwards saves its nipple shield, then its milk at the breast at its start, naming it, with one toast", async () => {
       const state = freshState();
       state.entries = [record(5, "diaper", { pee: true, poop: false }, "2026-10-28T08:30:00.000Z")];

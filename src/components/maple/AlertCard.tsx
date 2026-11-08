@@ -144,11 +144,17 @@ export function usePhones() {
 
 /**
  * The alerts in the given tiers. Nudges are dismissed per occurrence (a feed-gap
- * nudge comes back after the next feed), on this phone only.
+ * nudge comes back after the next feed), on this phone only. `compact`: tiers
+ * shown folded, all of a tier's alerts in one short row (who to call, and what
+ * about), which opens to their full cards on a tap: Today with the feeding
+ * plan's card puts call-today warnings above it this way, so the card's action
+ * stays on screen however many there are.
  */
-export default function AlertStack({ tiers, onNavigate }: { tiers: AlertTier[]; onNavigate: (t: TabId) => void }) {
+export default function AlertStack({ tiers, onNavigate, compact = [] }: { tiers: AlertTier[]; onNavigate: (t: TabId) => void; compact?: AlertTier[] }) {
   const { summary, state, now } = useMaple();
   const [handled, setHandled] = useState<Set<string>>(() => new Set());
+  // Folded alerts opened on this page, by id.
+  const [unfolded, setUnfolded] = useState<Set<string>>(() => new Set());
   const [nudges, setNudges] = useState<Record<string, number>>({});
   useEffect(() => setNudges(readNudges()), []);
   if (!summary || !state) return null;
@@ -182,17 +188,65 @@ export default function AlertStack({ tiers, onNavigate }: { tiers: AlertTier[]; 
   return (
     <div className="space-y-3">
       <AnimatePresence initial={false}>
-        {shown.map((a) => (
-          <AlertCard
-            key={a.id}
-            alert={a}
-            onHandled={() => setHandled((h) => new Set(h).add(a.id))}
-            onDismissNudge={() => dismissNudge(a)}
-            onNavigate={onNavigate}
-          />
-        ))}
+        {shown.map((a) => {
+          const folded = compact.includes(a.tier) && !unfolded.has(a.id);
+          if (!folded)
+            return (
+              <AlertCard
+                key={a.id}
+                alert={a}
+                onHandled={() => setHandled((h) => new Set(h).add(a.id))}
+                onDismissNudge={() => dismissNudge(a)}
+                onNavigate={onNavigate}
+              />
+            );
+          // A folded tier is one row, where its first alert would be; a tap opens every alert in it.
+          const same = shown.filter((b) => b.tier === a.tier && !unfolded.has(b.id));
+          if (same[0] !== a) return null;
+          return <FoldedAlerts key={`folded-${a.tier}`} alerts={same} onOpen={() => setUnfolded((u) => new Set([...u, ...same.map((b) => b.id)]))} />;
+        })}
       </AnimatePresence>
     </div>
+  );
+}
+
+/** An alert's title without a closing "…: call your pediatrician today" that its tier's label already says. */
+const reason = (title: string) => title.replace(/:\s+call\b.*$/i, "").trim() || title;
+
+/**
+ * A tier's alerts folded to one short row in the tier's look: who to call on its line ("Call your pediatrician
+ * today"), and what about under it ("Red in the diaper · 4 wet diapers in the last 24 hours", cut to the line, every
+ * word in its name); a tap opens their full cards (the numbers, We called).
+ */
+function FoldedAlerts({ alerts, onOpen }: { alerts: Alert[]; onOpen: () => void }) {
+  const tier = alerts[0].tier;
+  const st = STYLE[tier];
+  const label = TIER_LABEL[tier];
+  const about = alerts.map((a) => reason(a.title)).join(" · ");
+  return (
+    <motion.section
+      layout
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, height: 0, marginTop: 0, marginBottom: 0 }}
+      role="alert"
+      className={cx("overflow-hidden rounded-[20px] border", st.card)}
+    >
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-expanded={false}
+        aria-label={`${label}: ${alerts.map((a) => a.title).join("; ")}. Show ${alerts.length > 1 ? "them" : "it"} in full`}
+        className="flex min-h-[48px] w-full items-center gap-2.5 px-4 py-1.5 text-left transition active:bg-mp-ink/5"
+      >
+        <Icon name={st.icon} size={16} strokeWidth={2} className={cx("shrink-0", st.mark)} />
+        <span className="min-w-0 flex-1">
+          <span className={cx("block truncate text-[12px] leading-tight font-semibold", st.mark)}>{label}</span>
+          <span className={cx("block truncate text-[15px] leading-snug font-semibold", st.ink)}>{about}</span>
+        </span>
+        <Icon name="chevron-down" size={16} className={cx("shrink-0", st.mark)} />
+      </button>
+    </motion.section>
   );
 }
 
