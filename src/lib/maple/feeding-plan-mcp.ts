@@ -123,19 +123,25 @@ function stepsLeft(n: FeedPlanNow): StepView[] {
   return first < 0 ? [] : steps.slice(first).filter((s) => s.status !== "done" || s.milkMissing);
 }
 
-/** A finished feed's unlogged steps: "From the 10:40 AM feed ("Nurse, top up"), not logged: top up 25–35 ml." */
+/**
+ * A finished feed's unlogged steps: "From the 10:40 AM feed ("Nurse, top
+ * up"), not logged: top up 25–35 ml [entry #16]." The id, as the timer line
+ * carries its own, is the feed's for a late top-up or milk at the breast
+ * (log_feed top_up_of); the chat's display drops it from a reply.
+ */
 function missedWords(n: FeedPlanNow, w: Words): string | null {
   const m = n.missed;
   if (!m) return null;
   const words = stepWords(m.view.feed, n.plan, n.target);
   const at = m.view.start ?? m.view.group?.start ?? null;
   const what = m.steps.map((s) => (s.milkMissing ? breastMilkWords(s, n.plan) : lower(words[s.i])));
-  return `From the ${at != null ? `${formatTime(at, w.tz)} ` : ""}feed (${named(m.view.feed)}), not logged: ${what.join("; ")}.`;
+  const of = missedTopUpOf(n);
+  return `From the ${at != null ? `${formatTime(at, w.tz)} ` : ""}feed (${named(m.view.feed)}), not logged: ${what.join("; ")}${of != null ? ` [entry #${of}]` : ""}.`;
 }
 
-/** The nursing entry a late top-up names (log_feed top_up_of), when the missed steps have a bottle and the feed nursed. */
+/** The nursing entry a late top-up or milk at the breast names (log_feed top_up_of), when the missed steps have one and the feed nursed. */
 function missedTopUpOf(n: FeedPlanNow): number | null {
-  if (!n.missed?.steps.some((s) => s.step.do === "bottle")) return null;
+  if (!n.missed?.steps.some((s) => s.step.do === "bottle" || s.milkMissing)) return null;
   return n.missed.view.group?.run?.entries[0]?.id ?? null;
 }
 
@@ -202,7 +208,8 @@ function planNowBlock(n: FeedPlanNow, w: Words): string[] {
   if (f.state === "upcoming") {
     out.push(`Next: ${named(f.feed)} (${WHY[f.why]}).${due ? ` ${due}.` : ""}`);
     out.push(...f.steps.map((s) => `- ${words[s.i]}`));
-    if (n.others.length) out.push(`The plan's other feeds, if they'd rather do one of those: ${n.others.map(named).join(", ")}.`);
+    // Doing another of its feeds changes nothing in the plan: start it from the plan, and the turns go on from it.
+    if (n.others.length) out.push(`The plan's other feeds, if they'd rather do one of those (start_timer with plan when it begins; nothing in the plan changes): ${n.others.map(named).join(", ")}.`);
   } else {
     out.push(`Underway: ${named(f.feed)} (${WHY[f.why]}${f.start != null ? `, since ${formatTime(f.start, w.tz)}` : ""}).`);
     out.push(...f.steps.map((s) => `- ${statusWords(s, words[s.i], n.plan)}`));
@@ -211,7 +218,7 @@ function planNowBlock(n: FeedPlanNow, w: Words): string[] {
     else if (due) out.push(`${due}.`);
   }
   const missed = missedWords(n, w);
-  if (missed) out.push(`${missed}${missedTopUpOf(n) != null ? " A top-up for it given now is a bottle with top_up_of (in the JSON), so it counts as that feed's." : ""}`);
+  if (missed) out.push(`${missed}${missedTopUpOf(n) != null ? " Logged now, it's a bottle (via syringe or sns for milk at the breast) with top_up_of that entry (in the JSON too), so it counts as that feed's, never a feed of its own." : ""}`);
   return out;
 }
 
@@ -665,7 +672,7 @@ export function registerFeedingPlanTools(server: McpServer, copy: ToolCopy = FAM
     "set_feeding_plan",
     {
       title: "Save the feeding plan",
-      description: `Saves the family's feeding plan from their care team, so Today says which feed is next, its steps and when it's due; or removes it (remove: true). Build it only from what the family wrote or said, copying each value as written: never fill in a number that isn't there, and ask about anything unclear first (which feeds take turns, when night starts and ends). Everyone in the family reads it, so leave out ${vo.mom}'s own medicines and health (her page keeps those). It saves only after a read-back: call it without confirmed to check the plan, and it gives every line to read back and a read_back token; only after their clear yes, call again with the same plan (and target), confirmed: true and that read_back (good for ${READ_BACK_HOURS} hours). A change sends the whole plan (feeding_plan gives it in this shape) with base_rev, the rev it started from.`,
+      description: `Saves the family's feeding plan from their care team, so Today says which feed is next, its steps and when it's due; or removes it (remove: true). Build it only from what the family wrote or said, copying each value as written: never fill in a number that isn't there, and ask about anything unclear first (which feeds take turns, when night starts and ends). Shorthand is the family's or their consultant's (s&s, EBM, q3h): when it could mean two things (s&s: a shield and syringe, or an SNS), ask; never pick. Everyone in the family reads it, so leave out ${vo.mom}'s own medicines and health (her page keeps those). It saves only after a read-back: call it without confirmed to check the plan, and it gives every line to read back and a read_back token; only after their clear yes, call again with the same plan (and target), confirmed: true and that read_back (good for ${READ_BACK_HOURS} hours). A change sends the whole plan (feeding_plan gives it in this shape) with base_rev, the rev it started from.`,
       inputSchema: {
         plan: planShape
           .nullish()

@@ -150,7 +150,7 @@ async function main() {
       ok(!r.error, r.text);
       ok(r.text.startsWith("Feeding plan (revision 1), as the family saved it from their care team:"), r.text.slice(0, 120));
       ok(r.text.includes("Next: \"Nurse + SNS\" (its turn in the plan's order).") && r.text.includes("- Nurse 12–18 min, 20 ml of formula in the SNS") && r.text.includes("- Pump 15 min"), "the next feed, step by step");
-      ok(r.text.includes('The plan\'s other feeds, if they\'d rather do one of those: "Nurse, top up", "Pump + bottle".'), "the others");
+      ok(r.text.includes('The plan\'s other feeds, if they\'d rather do one of those (start_timer with plan when it begins; nothing in the plan changes): "Nurse, top up", "Pump + bottle".'), "the others, and how to do one");
       eq([r.json.rev, (r.json.now as { state?: string }).state], [1, "upcoming"], "rev and state");
       const plan = r.json.plan as { feeds: { id: string; steps: unknown[] }[]; order: string[]; amounts_in: string; day: unknown };
       eq([plan.amounts_in, plan.day, plan.feeds[1].steps[1], r.json.target], ["ml", { every: [150, 210] }, { do: "bottle", ml: [25, 35], milk: "either", via: "paced" }, [50, 70]], "the shape set_feeding_plan takes");
@@ -302,6 +302,9 @@ async function main() {
       eq((await sql(`SELECT data->>'plan' AS plan FROM maple_entries WHERE id = $1`, [nursingId]))[0].plan, feedingPlanOf(await settings(A))!.feeds[1].id, "tagged by its name");
       const owed = (await tool(alpha.owner, A, "feeding_plan")).json.now as { top_up_of?: number };
       eq(owed.top_up_of, nursingId, "feeding_plan names the feed a top-up given now is for");
+      // The chat's [App] line carries that feed's id with the step it says wasn't logged, as the timer line carries its own.
+      const line = (await chatLogState({ email: alpha.owner }, { fam: A, care: true, now: new Date() })).find((l) => l.startsWith("Feeding plan:")) ?? "";
+      ok(line.includes(`From the 10:00 AM feed ("Nurse, top up"), not logged: top up 35–45 ml, formula or breast milk, paced bottle [entry #${nursingId}].`), line);
       // An hour after it ended, past the 30 minutes a top-up is that feed's by its time: with top_up_of it still is.
       const late = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 30, unit: "ml", via: "paced", top_up_of: nursingId, minutes_ago: 40 });
       ok(!late.error && /Counted as a top-up to the feed that began at 10:00 AM today/.test(late.text), late.text);
