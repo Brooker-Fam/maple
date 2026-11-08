@@ -4,11 +4,13 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { tick } from "@/components/atlas/haptics";
+import { atBreastOf } from "@/lib/maple/describe";
 import { STOOL_COLOR_INFO } from "@/lib/maple/guidelines";
 import { isTracked, other, staleFeed } from "@/lib/maple/feed";
 import { formatRelative, formatTime, formatTimeNear, DEFAULT_TZ } from "@/lib/maple/time";
 import { formatVolume } from "@/lib/maple/units";
 import type { DiaperData, Entry, FeedData, Side, StoolColor, StretchSide } from "@/lib/maple/types";
+import { usePlanNow } from "./feeding/usePlanNow";
 import { SleepStrip } from "./sleep/SleepStrip";
 import { useTryAfterWake } from "./sleep/useSleep";
 import { fixPreset, useStillGoing } from "./FeedParts";
@@ -128,6 +130,8 @@ export default function Dock() {
   const { open } = useSheets();
   const actions = useTimerActions();
   const tryAfterWake = useTryAfterWake();
+  // The care team's feeding plan, as the Next feed card reads it: one start for both, and its bottle on the Bottle tile.
+  const planNow = usePlanNow();
   const clock = useNow(1000);
   const night = useNightActive();
   const [moreOpen, setMoreOpen] = useState(false);
@@ -176,8 +180,13 @@ export default function Dock() {
   // A timer the server hasn't confirmed yet has a temporary id: hold its controls until it has a real one.
   const feedPending = !!feed && feed.id < 0;
   const sleepPending = !!sleep && sleep.id < 0;
-  const next = summary.nextSide;
-  const lastBottle = entries.find((e) => e.kind === "feed" && e.data.method === "bottle" && e.data.amount_ml);
+  // With a plan, the next side is outlined only while the plan's next step is that nursing (not a night feed's pump first).
+  const next = planNow && !planNow.nurseNext ? null : summary.nextSide;
+  // The last bottle given as a bottle: milk at the breast (a syringe, an SNS) is part of its nursing feed, never "last".
+  const lastBottle = entries.find((e) => e.kind === "feed" && e.data.method === "bottle" && e.data.amount_ml && !atBreastOf(e.data));
+  // The plan's bottle now (its next step, a top-up or milk at the breast still owed, a feed that starts with a bottle):
+  // the Bottle tile opens the form the card's own button opens.
+  const planBottle = planNow?.bottle ?? null;
   // The first days (or an empty log): the tap hint while no timer runs, and "Start timer" under the side and Sleep tiles. After that the family knows which tiles start timers.
   const firstDays = !entries.length || !summary.age || summary.age.dayOfLife <= 3;
   const showHint = firstDays && !summary.active.length;
@@ -366,7 +375,8 @@ export default function Dock() {
       side === "L" ? "col1" : "col2",
       () => {
         toTop();
-        void actions.startFeed(side);
+        // With a pick on this phone, the same start as the card's (the picked feed, its nipple shield); else the log decides.
+        void actions.startFeed(side, planNow?.startWith ?? undefined);
       },
       { long: true, wide: !bottles }
     );
@@ -374,6 +384,9 @@ export default function Dock() {
   const holdFeed = (side: Side) => open({ kind: "feed", preset: { method: "breast", first_side: side, started_at: earlierAt() } });
 
   const lastBottleLabel = lastBottle?.kind === "feed" && lastBottle.data.amount_ml ? `${formatVolume(lastBottle.data.amount_ml, units)} last` : undefined;
+  const bottleSub = planBottle ? planBottle.word : lastBottleLabel;
+  const bottleAria = planBottle ? `Bottle: ${planBottle.aria}` : undefined;
+  const openBottle = () => open({ kind: "feed", preset: planBottle ? planBottle.preset : { method: "bottle" } });
 
   return createPortal(
     <>
@@ -532,7 +545,18 @@ export default function Dock() {
               <>
                 {/* An untimed feed (logged by voice without sides): just its Done. */}
                 {bottles ? (
-                  <Tile id="bottle" label="Bottle" sub={lastBottleLabel} inline={!!lastBottleLabel} icon="bottle" color={TILE.bottle} onTap={tap(() => open({ kind: "feed", preset: { method: "bottle" } }))} />
+                  <Tile
+                    id="bottle"
+                    label="Bottle"
+                    sub={bottleSub}
+                    aria={bottleAria}
+                    inline={!!bottleSub}
+                    icon="bottle"
+                    color={TILE.bottle}
+                    next={!!planBottle?.primary}
+                    nextWord="next step"
+                    onTap={tap(openBottle)}
+                  />
                 ) : (
                   <div aria-hidden className="col-span-2" />
                 )}
@@ -563,11 +587,14 @@ export default function Dock() {
                     id="bottle"
                     span={nursingOn ? 2 : 6}
                     label="Bottle"
-                    sub={lastBottleLabel}
-                    inline={!!lastBottleLabel}
+                    sub={bottleSub}
+                    aria={bottleAria}
+                    inline={!!bottleSub}
                     icon="bottle"
                     color={TILE.bottle}
-                    onTap={tap(() => open({ kind: "feed", preset: { method: "bottle" } }))}
+                    next={!!planBottle?.primary}
+                    nextWord="next step"
+                    onTap={tap(openBottle)}
                     onHold={hold(() => open({ kind: "feed", preset: { method: "bottle", started_at: earlierAt() } }))}
                   />
                 )}
@@ -662,6 +689,7 @@ function Tile({
   onTap,
   onHold,
   next,
+  nextWord = "next side",
   done,
   letter,
   icon,
@@ -684,7 +712,10 @@ function Tile({
   color?: string;
   onTap: () => void;
   onHold?: () => void;
+  /** Outlined: the one most likely next (the next side, the feeding plan's next step). */
   next?: boolean;
+  /** What the outline means, for screen readers ("next side"). */
+  nextWord?: string;
   done?: boolean;
   /** A side letter on its color; "B" (going back and forth) is the two side colors with "LR". */
   letter?: StretchSide;
@@ -725,7 +756,7 @@ function Tile({
       type="button"
       data-tile={id}
       disabled={disabled}
-      aria-label={`${aria ?? label}${next ? " (next side)" : ""}${onHold ? ". Hold to log an earlier one" : ""}`}
+      aria-label={`${aria ?? label}${next ? ` (${nextWord})` : ""}${onHold ? ". Hold to log an earlier one" : ""}`}
       {...press}
       className={cx(
         "relative flex min-h-[64px] flex-col items-center justify-center rounded-2xl border px-1 text-center transition select-none active:scale-[0.96] disabled:opacity-50 disabled:active:scale-100",

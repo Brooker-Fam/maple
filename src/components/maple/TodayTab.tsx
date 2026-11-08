@@ -74,7 +74,8 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
         <Waiting />
       )}
       {readOnly && <LatestMoment />}
-      <AlertStack tiers={["emergency", "now"]} onNavigate={onNavigate} />
+      {/* With the feeding plan's card in Right now, a call-today warning stays up here with the urgent ones, above it. */}
+      <AlertStack tiers={feedPlan ? ["emergency", "now", "today"] : ["emergency", "now"]} onNavigate={onNavigate} />
 
       {(!nothingYet || timing || sleepNow || feedPlan) && (
         <section aria-labelledby="right-now">
@@ -92,7 +93,7 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
             <SleepNow />
             {/*
               What to do at the next feed by the care team's plan (feeding/NextFeedCard). Before Last fed, so its one big
-              action (Start Left, Log bottle) clears the dock at 375x667 without scrolling; Last fed and the next side follow.
+              action (Start Left, Log bottle) clears the dock at 375x667 without scrolling, with the top of Last fed under it.
             */}
             <NextFeedCard />
             <StatusCard />
@@ -115,7 +116,7 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
       <UpNext />
       {nothingYet && born && <FreshPage readOnly={readOnly} />}
 
-      <AlertStack tiers={["today", "mention", "nudge"]} onNavigate={onNavigate} />
+      <AlertStack tiers={feedPlan ? ["mention", "nudge"] : ["today", "mention", "nudge"]} onNavigate={onNavigate} />
 
       {/* Recently logged, and today's totals as its footnote: one group, not two cards. The totals show even with no finished row. */}
       {!nothingYet && (
