@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { minutesShort } from "@/lib/maple/feed";
-import { checkInText, dueStatus, type FeedingPlan, type PlanDue, type PlanFeed, type Range } from "@/lib/maple/feeding-plan";
+import { checkInText, dueFromText, dueStatus, type FeedingPlan, type PlanDue, type PlanFeed, type Range } from "@/lib/maple/feeding-plan";
 import { dayKey, formatDuration, formatTime } from "@/lib/maple/time";
 import type { Entry, EntryOf, Side } from "@/lib/maple/types";
 import { useBabyWords } from "../familyWords";
@@ -17,7 +17,7 @@ import { Button, cx, tone } from "../ui";
 import { ApiError, useMaple } from "../useMaple";
 import { useTimerActions } from "../useTimerActions";
 import { useFeedingPlanNav } from "./FeedingPlanNav";
-import { cardDueWords, keepTogether, listWords, namedAt, nursedOnly, nursedWords, type StepAction } from "./nextFeed";
+import { cardDue, cardDueWords, clockTurnText, keepTogether, listWords, namedAt, nursedOnly, nursedWords, whenHungry, type StepAction } from "./nextFeed";
 import { usePlanLog, usePlanNow, withFeedAt, type PlanRow } from "./usePlanNow";
 
 /**
@@ -49,6 +49,15 @@ import { usePlanLog, usePlanNow, withFeedAt, type PlanRow } from "./usePlanNow";
  * the night feed's place), the card says what happened ("She nursed 20m at
  * 12:30 AM") and the plan's words, with nothing to do and nothing owed.
  *
+ * A night when she's hungry has no time: "When she's hungry" in the due
+ * line's place, never "Due since", until the day's due comes back at the
+ * night's end. A night by the clock says the turn's hours beside its name
+ * ("Partner's bottle  until 2 AM"). The breast offered only if she wants to
+ * has small Left and Right with a quiet "Not this time" above the bottle's big
+ * button. With the plan's feeds and milk in 24 hours, one quiet line says
+ * what was logged beside them ("7 feeds in the last 24 hours · plan: at least
+ * 8"): context, never a warning.
+ *
  * Every amount, minute and time is the plan's or the log's, in the plan's
  * unit, each number kept on one line with its unit. A feed is named by one
  * moment everywhere, its first nursing or first bottle (never a pump begun
@@ -76,16 +85,17 @@ function hoursText(r: Range): string {
 /**
  * What a due window counts from: "2.5–3.5 h after the 8:00 AM feed" (the plan's interval from the last feed's start;
  * on demand, "at most 3 h after the 8:00 AM feed"), or "after the 3:40 AM feed" when the window moved (a day feed
- * waiting for the night to end). `of`: what the base is, "feed" (a feed's start), "pump" (the night's pump, its
- * bottle not given yet: "3 h after the 11:15 PM pump") or "time" (when the feed underway was due, its pump begun
- * before then: "3 h after 11:20 PM, when this one was due").
+ * waiting for the night to end). A feed is named in the plan's own words for what the due counts from (dueFromText,
+ * which every surface shares: the feed, and the moment it counts from when that isn't the feed's own). `of`: what the
+ * base is, "feed" (a feed), "pump" (the night's pump, its bottle not given yet: "3 h after the 11:15 PM pump") or
+ * "time" (when the feed underway was due, its pump begun before then: "3 h after 11:20 PM, when this one was due").
  */
 export function dueFromWords(d: PlanDue, plan: FeedingPlan, tz: string, of: "feed" | "pump" | "time" = "feed"): string {
   const every = d.night ? (plan.night?.every ?? plan.day.every) : plan.day.every;
   const at = formatTime(d.base, tz);
-  const base = of === "time" ? `${at}, when this one was due` : `the ${at} ${of}`;
+  const after = of === "feed" ? dueFromText(d, tz) : of === "time" ? `after ${at}, when this one was due` : `after the ${at} pump`;
   const plain = !!every && d.from === d.base + every.min * MIN && d.to === d.base + every.max * MIN;
-  return plain && every ? `${d.onDemand ? "at most " : ""}${hoursText(every)} after ${base}` : `after ${base}`;
+  return plain && every ? `${d.onDemand ? "at most " : ""}${hoursText(every)} ${after}` : after;
 }
 
 /**
@@ -179,9 +189,17 @@ export default function NextFeedCard() {
   // plan's words with nothing to do.
   const quiet = nursedOnly(focus);
   const eyebrow = quiet ? (focus.night ? "Night feed" : "Plan feed") : underway ? "Now" : focus.night ? "Night feed" : "Next feed";
-  const due = fp.due;
+  // When it's due: never a time for a feed in a night when she's hungry (cardDue).
+  const due = cardDue(fp);
   const dueHere = due && due.for === "focus" ? due : null;
   const dueAfter = due && due.for === "after" ? due : null;
+  // No time to show, since the plan feeds her when she's hungry then (a night when hungry; no time between feeds).
+  const hungryHere = !underway && !dueHere && whenHungry(plan, focus.night);
+  const hungryAfter = underway && !!fp.after && !dueAfter && whenHungry(plan, fp.after.night);
+  const hungry = `When ${w.hes} hungry`;
+  // The night's turn by the clock ("Partner's bottle", until 2 AM): its hours beside its name.
+  const turnHere = !underway && focus.night ? clockTurnText(plan, focus.feed.id, now, tz) : null;
+  const turnAfter = underway && fp.after?.night ? clockTurnText(plan, fp.after.feed.id, now, tz) : null;
   // The side the dock and Last fed suggest (nextSideFor), else Left for a first feed.
   const first: Side = summary.next?.side ?? "L";
   const run = focus.group?.run ?? null;
@@ -276,6 +294,29 @@ export default function NextFeedCard() {
   const actionView = (a: StepAction, big: boolean, at: number | null = focusAt): ReactNode => {
     if (a.kind === "nurse") {
       const shield = a.shield ? ", with the nipple shield" : "";
+      if (!big) {
+        // Beside a row (the breast offered only if she wants to, the bottle's the big button): each side small, Left then
+        // Right as the dock has them, or the plan's one side.
+        const sides: Side[] = a.side ? [a.side] : ["L", "R"];
+        return (
+          <div className="flex flex-wrap items-center gap-2">
+            {sides.map((side) => (
+              <Button
+                key={side}
+                variant="soft"
+                size="sm"
+                disabled={busy}
+                onClick={() => startNursing(side, a.shield)}
+                aria-label={`${SIDE_NAME[side]}: offer the ${SIDE_NAME[side].toLowerCase()} breast${shield}`}
+                className="whitespace-nowrap"
+              >
+                <SideDot side={side} />
+                {SIDE_NAME[side]}
+              </Button>
+            ))}
+          </div>
+        );
+      }
       if (a.side) {
         // The plan nurses on one side only ("left only, pump the right"): that side's Start alone, never the other.
         const only = a.side;
@@ -413,20 +454,34 @@ export default function NextFeedCard() {
   const canOther = !readOnly && !underway && (chosen || others.length > 0);
 
   // Before a feed (or, when she only nursed, the plan's words for it): its first step and the action, the rest on one
-  // line. The first step is the one with the action.
+  // line. The first step is the first with an action: the big one, or a quiet one beside it (the breast offered only if
+  // she wants to, before the bottle's big button).
   const asWords = !underway || quiet;
-  const lead = !asWords ? -1 : Math.max(0, rows.findIndex((r) => (primary ? r === primary.row : r.state !== "note")));
+  const lead = !asWords ? -1 : Math.max(0, rows.findIndex((r) => (primary ? r === primary.row || !!r.secondary : r.state !== "note")));
   const later = !asWords ? [] : rows.slice(lead + 1);
   const laterSteps = later.filter((r) => r.state !== "note").map((r) => lowerFirst(r.text));
   // "Then pump 15 min; then top up 25–35 ml, …", then the plan's notes ("Burp halfway").
   const laterWords = [laterSteps.length ? `Then ${laterSteps.join("; then ")}` : null, ...later.filter((r) => r.state === "note").map((r) => r.text)].filter(Boolean).join(" · ");
-  // Before a feed that pumps first: its bottle as a quiet second action under Start pumping, for whoever gives it.
-  const besides = !underway ? (rows.find((r) => r.secondary)?.secondary ?? null) : null;
+  // Before a feed, a step's quiet action beside the big one, in the steps' order: the night's bottle under Start pumping
+  // (for whoever gives it), the breast offered only if she wants to above the bottle's button, with its Not this time.
+  const besideRow = !underway ? (rows.find((r) => r.secondary) ?? null) : null;
+  const besideFirst = !!besideRow && !!primary && rows.indexOf(besideRow) < rows.indexOf(primary.row);
+  const beside =
+    besideRow?.secondary && !readOnly ? (
+      <div className={cx("flex flex-wrap items-center gap-x-3", besideFirst ? (short ? "mt-1.5" : "mt-2") : "-mb-1.5 mt-0.5")}>
+        {actionView(besideRow.secondary, false)}
+        {besideRow.close && (
+          <Button variant="ghost" size="sm" disabled={busy} onClick={() => act(() => p.closeRow(besideRow.key))} className="-ml-3 font-medium text-mp-ink-2!">
+            {besideRow.close}
+          </Button>
+        )}
+      </div>
+    ) : null;
   // What happened, when she only nursed: "She nursed 20m at 12:30 AM" (while she's on, "She's nursing now · 12m").
   const happened = nursedWords(focus, w, tz);
 
   return (
-    <section data-next-feed aria-label={`${eyebrow}: ${focus.feed.name}`} {...guard.props} className={cx(tone.card, "px-4 pt-2.5", canOther || canWas ? "pb-1" : "pb-3.5")}>
+    <section data-next-feed aria-label={`${eyebrow}: ${focus.feed.name}${turnHere ? `, ${turnHere}` : ""}`} {...guard.props} className={cx(tone.card, "px-4 pt-2.5", canOther || canWas ? "pb-1" : "pb-3.5")}>
       <div className={cx("flex items-center justify-between gap-2", short ? "min-h-[26px]" : "min-h-[32px]")}>
         <p className="text-[13px] font-semibold tracking-[0.01em] text-mp-ink-2">{eyebrow}</p>
         <button
@@ -442,10 +497,15 @@ export default function NextFeedCard() {
           <Icon name="chevron-right" size={15} />
         </button>
       </div>
-      <h3 id="next-feed-title" className="text-[21px] leading-[1.2] font-semibold tracking-[-0.01em] text-mp-ink [overflow-wrap:anywhere]">
-        {focus.feed.name}
-      </h3>
+      <div className={turnHere ? "flex flex-wrap items-baseline gap-x-2" : undefined}>
+        <h3 id="next-feed-title" className="text-[21px] leading-[1.2] font-semibold tracking-[-0.01em] text-mp-ink [overflow-wrap:anywhere]">
+          {focus.feed.name}
+        </h3>
+        {/* Its turn's hours by the clock, quieter: "until 2 AM" (from 2 AM before its turn). */}
+        {turnHere && <p className="text-[15px] leading-snug font-medium text-mp-ink-2">{turnHere}</p>}
+      </div>
       {dueHere && <DueLine due={dueHere} now={now} tz={tz} her={w.him} from={dueFromWords(dueHere, plan, tz)} />}
+      {hungryHere && <HungryLine night={focus.night} text={hungry} />}
       {happened && <p className="mt-1 text-[15px] leading-snug font-medium text-mp-ink">{happened}</p>}
       {focus.extraNursing && run && !quiet && (
         <p className="mt-1 text-[13px] leading-snug text-mp-ink-2">
@@ -494,8 +554,9 @@ export default function NextFeedCard() {
               </span>
             )}
           </p>
-          {primary && !readOnly && <div className={short ? "mt-2" : "mt-2.5"}>{actionView(primary.action, true)}</div>}
-          {besides && !readOnly && <div className="-mb-1.5 mt-0.5 flex flex-wrap items-center">{actionView(besides, false)}</div>}
+          {besideFirst && beside}
+          {primary && !readOnly && <div className={besideFirst ? "mt-1" : short ? "mt-2" : "mt-2.5"}>{actionView(primary.action, true)}</div>}
+          {!besideFirst && beside}
           {laterWords && short && primary && !readOnly && (
             <p className="mt-1.5 text-[14px] leading-snug text-mp-ink-2 [overflow-wrap:anywhere]">
               <Units text={laterWords} />
@@ -543,6 +604,7 @@ export default function NextFeedCard() {
         <div className="mt-3 border-t border-mp-line pt-2.5 text-[13px] leading-snug text-mp-ink-2">
           <p className="font-semibold text-mp-ink [overflow-wrap:anywhere]">
             Then{fp.after.night ? " the night feed" : ""}: {fp.after.feed.name}
+            {turnAfter && <span className="font-medium text-mp-ink-2"> · {turnAfter}</span>}
           </p>
           {dueAfter && (
             <p>
@@ -555,7 +617,15 @@ export default function NextFeedCard() {
               )}
             </p>
           )}
+          {hungryAfter && <p>{hungry}</p>}
         </div>
+      )}
+
+      {/* The plan's feeds and milk in 24 hours beside what was logged: context, quiet, never a warning. */}
+      {p.perDay && (
+        <p data-plan-day className={cx("text-[13px] leading-snug text-mp-ink-2 [overflow-wrap:anywhere]", underway && fp.after ? "mt-2" : "mt-2.5")}>
+          <Units text={p.perDay} />
+        </p>
       )}
 
       {/* The card's last line: the plan's other feeds (before one) or which one it was (during one), and the faint line. */}
@@ -644,6 +714,19 @@ function DueLine({ due, now, tz, her, from }: { due: PlanDue; now: Date; tz: str
           </span>
         )}
       </span>
+    </p>
+  );
+}
+
+/**
+ * In the due line's place when the plan feeds her when she's hungry then (a night when hungry, a plan with no time
+ * between feeds): no time, never "Due since". A moon at night.
+ */
+function HungryLine({ night, text }: { night: boolean; text: string }) {
+  return (
+    <p data-plan-hungry className="mt-1 flex items-start gap-1.5 text-[14px] leading-snug text-mp-ink-2">
+      <Icon name={night ? "moon" : DUE_ICON} size={15} strokeWidth={2} className="mt-[2px] shrink-0" />
+      <span className="min-w-0">{text}</span>
     </p>
   );
 }

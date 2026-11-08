@@ -7,7 +7,7 @@ import type { Side, StartWith } from "@/lib/maple/types";
 import { feedTargetOf, type FeedTarget } from "@/lib/maple/units";
 import { useBabyWords } from "../familyWords";
 import { useMaple, useNow } from "../useMaple";
-import { missedItems, namedAt, nursedOnly, nursingOf, stepRows, type MissedItem, type OneTapLog, type RowWords, type StepAction, type StepRow } from "./nextFeed";
+import { missedItems, namedAt, nursedOnly, nursingOf, perDayLine, stepRows, type MissedItem, type OneTapLog, type RowWords, type StepAction, type StepRow } from "./nextFeed";
 
 /**
  * The feeding plan as Today reads it, now, for every part of Today that acts on
@@ -20,14 +20,16 @@ import { missedItems, namedAt, nursedOnly, nursingOf, stepRows, type MissedItem,
  *   drops it;
  * - a finished feed's unlogged steps set aside (Got it), by that feed's start;
  * - a step said to be finished as it is (a row's `close`, "She's done", "Not
- *   needed"), by the feed's start and the step: from then on it reads as done
- *   on this phone, and the next step's turn comes.
+ *   needed", "Not this time"), by the feed's start and the step: from then on
+ *   it reads as done on this phone, and the next step's turn comes. Before a
+ *   feed has begun (the breast offered only if she wants to, "Not this time"),
+ *   by the plan's turn, as the pick is: a feed logged drops it.
  *
- * The pick is sessionStorage (this tab); what's set aside is localStorage, so
- * a Home Screen app closed overnight and opened again still has it, and it's
- * cleared a day after the feed it's for. Either falls back to this page's
- * memory when storage is blocked, and every reader updates at once when it
- * changes.
+ * The pick (and what's set aside before a feed) is sessionStorage (this tab);
+ * what's set aside in a feed is localStorage, so a Home Screen app closed
+ * overnight and opened again still has it, and it's cleared a day after the
+ * feed it's for. Either falls back to this page's memory when storage is
+ * blocked, and every reader updates at once when it changes.
  *
  * What the dock takes from it: whether the next step is nursing (only then does
  * it outline the next side, the plan's own when that nursing is on one side
@@ -130,6 +132,19 @@ function readPick(family: number): Pick | null {
 const missedKey = (family: number, start: number) => `maple-plan-missed:${family}:${start}`;
 /** A step closed as it is ("She's done"), by the feed's start and the step. */
 const closeKey = (family: number, start: number, step: string) => `maple-plan-close:${family}:${start}:${step}`;
+/** Steps set aside before a feed has begun ("Not this time"), for the plan's turn they were set aside in (`turn`). */
+type Passed = { turn: string; steps: string[] };
+const passKey = (family: number) => `maple-plan-pass:${family}`;
+function readPassed(family: number): Passed | null {
+  const raw = memoryRead("tab", passKey(family));
+  if (!raw) return null;
+  try {
+    const p = JSON.parse(raw) as Partial<Passed> | null;
+    return typeof p?.turn === "string" && Array.isArray(p.steps) && p.steps.every((s) => typeof s === "string") ? { turn: p.turn, steps: p.steps } : null;
+  } catch {
+    return null;
+  }
+}
 
 // ── What the plan says now ─────────────────────────────────────────────────
 
@@ -183,6 +198,11 @@ export type PlanNow = PlanReading & {
   chosen: string | null;
   /** The finished feed the missed line is for: its start (what this phone's memory of it goes by). */
   missedStart: number | null;
+  /**
+   * The plan's feeds and milk in 24 hours beside what was logged ("7 feeds in the last 24 hours · plan: at least 8"):
+   * context for the card, never a warning; null when the plan doesn't give them (per_day).
+   */
+  perDay: string | null;
   /** Show another plan feed instead (null: back to the plan's turn), on this phone. */
   pick: (id: string | null) => void;
   /** Set a finished feed's unlogged steps aside on this phone. */
@@ -351,11 +371,17 @@ export function usePlanNow(): PlanNow | null {
   const focusStart = fp?.focus.start ?? null;
   const closeRow = useCallback(
     (key: string) => {
-      if (focusStart === null) return;
+      if (focusStart === null) {
+        // Before the feed has begun (the breast offered, "Not this time"): for this turn, on this tab, as the pick is.
+        const was = readPassed(family);
+        const steps = was && was.turn === turn ? [...new Set([...was.steps, key])] : [key];
+        memoryWrite("tab", passKey(family), JSON.stringify({ turn, steps } satisfies Passed));
+        return;
+      }
       pruneSetAside(nowMs);
       memoryWrite("phone", closeKey(family, focusStart, key), "1");
     },
-    [family, focusStart, nowMs]
+    [family, focusStart, nowMs, turn]
   );
 
   // The rows, the missed line and what the dock takes, read again when the plan's reading or this phone's memory changes.
@@ -363,18 +389,25 @@ export function usePlanNow(): PlanNow | null {
     void seen;
     void volumeBoth; // the rows' words say amounts, both ways with this phone's switch on
     if (!fp) return null;
+    const passed = readPassed(family);
     return planReading(fp, {
       now,
       tz,
       words: { Hes: words.Hes },
-      closed: (start, key) => start !== null && memoryRead("phone", closeKey(family, start, key)) === "1",
+      closed: (start, key) =>
+        start !== null ? memoryRead("phone", closeKey(family, start, key)) === "1" : !!passed && passed.turn === turn && passed.steps.includes(key),
       missedAside: missedAt !== null && memoryRead("phone", missedKey(family, missedAt)) === "1",
       choose,
     });
-  }, [fp, family, missedAt, now, tz, seen, words.Hes, choose, volumeBoth]);
+  }, [fp, family, missedAt, now, tz, seen, words.Hes, choose, volumeBoth, turn]);
+  // The plan's feeds and milk in 24 hours, beside what was logged (only when the plan gives them).
+  const perDay = useMemo(() => {
+    void volumeBoth; // its amounts, both ways with this phone's switch on
+    return plan?.per_day && entries ? perDayLine(plan, entries, now) : null;
+  }, [plan, entries, now, volumeBoth]);
 
   if (!plan || !fp || !base || !derived) return null;
-  return { plan, target, tz, family, now, base, fp, chosen: choose, ...derived, missedStart: missedAt, pick, setMissedAside, closeRow };
+  return { plan, target, tz, family, now, base, fp, chosen: choose, ...derived, missedStart: missedAt, perDay, pick, setMissedAside, closeRow };
 }
 
 /** Log a bottle in one tap from the plan (milk at the breast, a top-up), with its toast ("20 ml of formula in the SNS · 9:42 AM"). */
