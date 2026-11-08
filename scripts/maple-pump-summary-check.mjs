@@ -9,13 +9,16 @@ const ts = require("typescript");
 const { build } = require("esbuild");
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const source = ts.createSourceFile("mcp-tools.ts", await readFile(path.join(root, "src/lib/maple/mcp-tools.ts"), "utf8"), ts.ScriptTarget.Latest, true);
-const names = ["targetsJson", "talliesJson", "todayLine", "tallyLines", "dailySummaryResult", "gapStats"];
+// The functions under test, and the helpers they call for a feed's parts (milk at the breast apart from top-ups).
+const names = ["targetsJson", "talliesJson", "todayLine", "tallyLines", "dailySummaryResult", "gapStats", "atBreastWords", "byBottleToday", "partsWith"];
 const declarations = names.map((name) => source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name).getText(source));
+const constants = ["atBreast"].map((name) => source.statements.find((node) => ts.isVariableStatement(node) && node.declarationList.declarations.some((d) => d.name.getText(source) === name)).getText(source));
 const pumpImports = source.statements.filter((node) => ts.isImportDeclaration(node) && node.moduleSpecifier.text === "./pump-summary").map((node) => node.getText(source));
 const compiled = await build({
   stdin: { loader: "ts", resolveDir: path.join(root, "src/lib/maple"), contents: `
-    import { statsFor, dailyStats, isVitaminD, soloBottleMl } from "./insights";
-    import { countedFeeds, nursingRuns } from "./feed";
+    import { byBottle, statsFor, dailyStats, isVitaminD, soloBottleMl } from "./insights";
+    import { countedFeeds, milkSplit, nursingRuns, topUpMl } from "./feed";
+    import { AT_BREAST_WORDS } from "./feeding-plan";
     import { addDays, babyAge, dayBounds, dayKey, startOfDay, formatDayLabel, formatDuration } from "./time";
     import { feedTargetOf, formatVolumeBoth, formatVolumeRangeBoth } from "./units";
     import { voiceFor } from "./voice";
@@ -33,6 +36,7 @@ const compiled = await build({
     const ok = (text, json) => ({ text, json });
     let records = [];
     const listEntries = async (_family, options) => options.kinds ? [] : records;
+    ${constants.join("\n")}
     ${declarations.join("\n")}
     module.exports = { talliesJson, todayLine, tallyLines, dailySummaryResult, statsFor, setRecords: (value) => { records = value; } };
   ` },
