@@ -3697,7 +3697,9 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
         `Use this when something is starting now (or started a few minutes ago and is still going): nursing (with side), sleep, tummy time or pumping. Timers show on every family phone. Nursing with back_and_forth: true is for a feed where ${vo.they}${vo.verb("'s")} going back and forth between sides and nobody will track which: side is still required (the side ${vo.they} started on, which the next side alternates from), and nothing needs calling at each change. If one of that kind is already running it returns that one instead (nursing: switches to the side you name, and with a time acts as switch_side with that time; a nursing timer nobody has tapped for an hour, or on a break with a start time over 30 minutes after ${vo.they} came off, has to be stopped first). To fix when a running feed started ("${vo.they} actually started at 4"), use fix_nursing_time {part:"feed_start", at:"4:00"}. A nursing timer with no side starts on the suggested next side. E.g. "start a feed on the right", "${vo.they} fell asleep 10 minutes ago", "starting tummy time".`,
       inputSchema: {
         timer: z.enum(TIMER_NAMES).describe("Which timer."),
-        side: sideEnum().nullish().describe(`Nursing: which side ${vo.they}${vo.verb("'s")} on (with back_and_forth: the side ${vo.they} started on). Leave out to use the suggested next side.`),
+        side: sideEnum()
+          .nullish()
+          .describe(`Nursing: which side ${vo.they}${vo.verb("'s")} on (with back_and_forth: the side ${vo.they} started on). Leave out to use the suggested next side (with plan, its side if it nurses on one).`),
         back_and_forth: z
           .boolean()
           .nullish()
@@ -3761,9 +3763,14 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
       if (both && !side && !live) {
         throw new ToolError(`back_and_forth needs side: the side ${vo.they} started on ("left" or "right"), since the next side alternates from it. Ask which side ${vo.they} started on.`);
       }
-      // No side: a new nursing timer starts on the suggested side, but a
-      // running one stays where it is.
-      if (kind === "feed" && !side && !live) {
+      // No side: a new nursing timer starts on the plan feed's side when it nurses on one side only, else on the
+      // suggested side; a running one stays where it is.
+      const planSide = planFeed?.steps.find((s) => s.do === "nurse")?.side;
+      let fromPlan = false;
+      if (kind === "feed" && !side && !live && planSide) {
+        side = planSide;
+        fromPlan = true;
+      } else if (kind === "feed" && !side && !live) {
         const s = await snapshot(ctx);
         side = s.nextSide ?? "L";
         suggested = !!s.nextSide;
@@ -3796,7 +3803,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
       const lines = [
         alreadyRunning
           ? `A ${label} timer was already running (#${entry.id}, started ${whenText(entry.started_at, ctx)} by ${by})${sideText ? `; now${sideText}` : ""}. No second timer was started${startWith ? ", and the running feed kept its own plan feed and shield" : ""}.`
-          : `Saved #${entry.id}: ${label} timer started${sideText}${shieldText} at ${whenText(entry.started_at, ctx)}${planText} (logged by ${by} via ${viaLabel(entry.source)}).${suggested ? " (That's the suggested next side.)" : ""}`,
+          : `Saved #${entry.id}: ${label} timer started${sideText}${shieldText} at ${whenText(entry.started_at, ctx)}${planText} (logged by ${by} via ${viaLabel(entry.source)}).${suggested ? " (That's the suggested next side.)" : fromPlan ? " (That's the side the plan's feed nurses on.)" : ""}`,
         ...(goingBoth && !alreadyRunning ? [BOTH_NOTE] : []),
         ...(armsEnded ? [`${vo.Name}'s sleep in arms (#${armsEnded.sleep.id}, since ${formatTime(armsEnded.sleep.started_at, ctx.tz)}) ended at ${formatTime(armsEnded.sleep.ended_at!, ctx.tz)}, when the feed began (if ${vo.they} ${vo.verb("is")} still asleep in arms, reopen_timer with id ${armsEnded.sleep.id} runs it again).`] : []),
       ];

@@ -14,6 +14,7 @@ import {
   feedingPlanOf,
   feedPlanNow,
   feedText,
+  nightTurns,
   PLAN_LATE_TOP_UP_MS,
   PlanConflict,
   PlanError,
@@ -371,10 +372,15 @@ export function planCautions(plan: FeedingPlan): string[] {
       out.push(`Ask with it: night would run ${Number.isInteger(hours) ? hours : hours.toFixed(1)} hours (${clockWords(n.from)} to ${clockWords(n.to)}). Check that's what their plan says.`);
     }
   }
+  const atNight = nightTurns(plan);
   for (const f of plan.feeds) {
-    if (plan.order.includes(f.id) || f.id === n?.feed) continue;
-    const fix = n ? "If it's the night's feed, set night.feed to it; if it takes a turn by day, add it to order." : "If it takes a turn, add it to order.";
-    out.push(`Ask with it: ${named(f)} isn't in the day's turns${n ? " or the night's feed" : ""}, so Today only offers it as another choice. ${fix}`);
+    if (plan.order.includes(f.id) || atNight.includes(f.id)) continue;
+    const fix = !n
+      ? "If it takes a turn, add it to order."
+      : atNight.length > 1
+        ? "If it's one of the night's feeds, add it to night.order; if it takes a turn by day, add it to order."
+        : "If it's the night's feed, set night.feed to it; if it takes a turn by day, add it to order.";
+    out.push(`Ask with it: ${named(f)} isn't in the day's turns${n ? ` or the night's ${atNight.length > 1 ? "turns" : "feed"}` : ""}, so Today only offers it as another choice. ${fix}`);
   }
   return out;
 }
@@ -398,40 +404,55 @@ function amountsOf(plan: FeedingPlan): number[] {
 
 /**
  * The saved plan in set_feeding_plan's own shape, so an edit sends it back
- * changed: feeds with their ids, the order and night's feed by id, ranges as a
- * number or [min, max], amounts in the plan's unit when they save back
- * exactly (else in ml), with the target per feed in the same unit.
+ * changed: feeds with their ids, the order, the night's feed and the night's
+ * turns by id, ranges as a number or [min, max] (on demand, every as {max}),
+ * amounts in the plan's unit when they save back exactly (else in ml), with
+ * the target per feed in the same unit.
  */
 export function planInput(plan: FeedingPlan, target: FeedTarget | null): { plan: Record<string, unknown>; target: number | number[] | null } {
   const inOz = plan.unit === "oz" && [...amountsOf(plan), ...(target ? [target.min, target.max] : [])].every(exactInOz);
   const unit = inOz ? "oz" : "ml";
   const r = (x: Range) => (x.min === x.max ? x.min : [x.min, x.max]);
   const amount = (x: Range) => r(inOz ? { min: toOz(x.min), max: toOz(x.max) } : x);
+  // On demand, at least every so often: its most as {max}, which set_feeding_plan reads back as on demand.
+  const every = (x: Range | undefined, onDemand: boolean | undefined) => (x ? { every: onDemand ? { max: x.max } : r(x) } : {});
   const step = (s: PlanStep): Record<string, unknown> => {
     if (s.do === "nurse") {
       return {
         do: "nurse",
         ...(s.minutes ? { minutes: r(s.minutes) } : {}),
         ...(s.each_side ? { each_side: true } : {}),
+        ...(s.side ? { side: s.side === "L" ? "left" : "right" } : {}),
         ...(s.shield ? { shield: true } : {}),
         ...(s.supplement ? { supplement: { via: s.supplement.via, ml: amount(s.supplement.ml), ...(s.supplement.milk ? { milk: s.supplement.milk } : {}) } } : {}),
       };
     }
-    if (s.do === "pump") return { do: "pump", ...(s.minutes ? { minutes: r(s.minutes) } : {}) };
+    if (s.do === "pump") return { do: "pump", ...(s.minutes ? { minutes: r(s.minutes) } : {}), ...(s.if_needed ? { if_needed: true } : {}) };
     if (s.do === "bottle") {
-      return { do: "bottle", ...(s.ml ? { ml: amount(s.ml) } : {}), ...(s.to_target ? { to_target: true } : {}), ...(s.milk ? { milk: s.milk } : {}), ...(s.via ? { via: s.via } : {}) };
+      return {
+        do: "bottle",
+        ...(s.ml ? { ml: amount(s.ml) } : {}),
+        ...(s.to_target ? { to_target: true } : {}),
+        ...(s.milk ? { milk: s.milk } : {}),
+        ...(s.via ? { via: s.via } : {}),
+        ...(s.if_needed ? { if_needed: true } : {}),
+      };
     }
     return { do: "note", text: s.text };
   };
   const n = plan.night;
+  // The night's feeds taking turns go as night.order (its first is its feed); one night feed as night.feed.
+  const turns = nightTurns(plan);
   return {
     plan: {
       ...(plan.from ? { from: plan.from } : {}),
       ...(plan.check_in ? { check_in: plan.check_in } : {}),
       unit: plan.unit,
       amounts_in: unit,
-      day: { ...(plan.day.every ? { every: r(plan.day.every) } : {}), ...(plan.day.wake ? { wake: true } : {}) },
-      ...(n ? { night: { from: n.from, to: n.to, ...(n.every ? { every: r(n.every) } : {}), ...(n.wake ? { wake: true } : {}), ...(n.feed ? { feed: n.feed } : {}) } } : {}),
+      day: { ...every(plan.day.every, plan.day.on_demand), ...(plan.day.wake ? { wake: true } : {}) },
+      ...(n
+        ? { night: { from: n.from, to: n.to, ...every(n.every, n.on_demand), ...(n.wake ? { wake: true } : {}), ...(turns.length > 1 ? { order: turns } : n.feed ? { feed: n.feed } : {}) } }
+        : {}),
       feeds: plan.feeds.map((f) => ({ id: f.id, name: f.name, steps: f.steps.map(step) })),
       order: plan.order,
       ...(plan.notes ? { notes: plan.notes } : {}),
@@ -444,22 +465,22 @@ export function planInput(plan: FeedingPlan, target: FeedTarget | null): { plan:
 
 /** What each step takes (parseFeedingPlan reads only these, so anything else would be dropped without a word). */
 const STEP_KEYS: Record<PlanStep["do"], readonly string[]> = {
-  nurse: ["minutes", "each_side", "shield", "supplement"],
-  pump: ["minutes"],
-  bottle: ["ml", "to_target", "milk", "via"],
+  nurse: ["minutes", "each_side", "side", "shield", "supplement"],
+  pump: ["minutes", "if_needed"],
+  bottle: ["ml", "to_target", "milk", "via", "if_needed"],
   note: ["text"],
 };
 const STEP_HINT: Record<PlanStep["do"], string> = {
-  nurse: 'a nurse step takes minutes, each_side, shield and supplement (milk given at the breast while nursing: {via: "syringe" or "sns", ml, milk})',
-  pump: "a pump step takes minutes",
-  bottle: "a bottle step takes ml (or to_target), milk and via",
+  nurse: 'a nurse step takes minutes, each_side or side (one side only: "left" or "right"), shield and supplement (milk given at the breast while nursing: {via: "syringe" or "sns", ml, milk})',
+  pump: "a pump step takes minutes and if_needed",
+  bottle: "a bottle step takes ml (or to_target), milk, via and if_needed",
   note: "a note step takes text",
 };
 
 const PLAN_KEYS = ["from", "check_in", "unit", "amounts_in", "day", "night", "feeds", "order", "notes"];
 const FEED_KEYS = ["id", "name", "steps"];
 const DAY_KEYS = ["every", "wake"];
-const NIGHT_KEYS = ["from", "to", "every", "wake", "feed"];
+const NIGHT_KEYS = ["from", "to", "every", "wake", "feed", "order"];
 
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 /** The keys given (not null) that aren't in `allowed`. */
@@ -703,6 +724,8 @@ function dueSpeak(d: PlanDue, w: Words): string {
   const at = (ms: number) => formatTime(ms, w.tz);
   const status = dueStatus(d, w.now);
   if (status === "early") {
+    // On demand, at least every so often: when she's hungry, by its most ("waking her by 12:00 PM if she's still asleep").
+    if (d.onDemand) return d.wake ? `waking ${w.vo.them} by ${at(d.to)} if ${w.vo.they}${w.vo.verb("'s")} still asleep` : `on demand, by ${at(d.to)}`;
     if (d.from === d.to) return `${d.wake ? `wake ${w.vo.them} for it` : "due"} at ${at(d.from)}`;
     return `due between ${formatTimeNear(d.from, d.to, w.tz)} and ${at(d.to)}${d.wake ? `, waking ${w.vo.them} by then` : ""}`;
   }
@@ -755,6 +778,8 @@ export function registerFeedingPlanTools(server: McpServer, copy: ToolCopy = FAM
 
   // The plan's own fields: lenient as parseFeedingPlan is (its messages say what to fix), and short for the chat's step.
   const range = () => z.union([z.number(), z.array(z.number()).min(1).max(2)]);
+  // The time between feeds: a range, or on demand with its most ({max}; a min kept, so {min, max} stays a range).
+  const every = () => z.union([z.number(), z.array(z.number()).min(1).max(2), z.object({ min: opt(z.number()), max: z.number() })]);
   const milk = () => z.enum(["breastmilk", "formula", "either", "breastmilk_first"]);
   const text = (max: number) => z.string().max(max);
   const step = z
@@ -762,12 +787,14 @@ export function registerFeedingPlanTools(server: McpServer, copy: ToolCopy = FAM
       do: z.enum(["nurse", "pump", "bottle", "note"]),
       minutes: opt(range()),
       each_side: opt(z.boolean()),
+      side: opt(z.enum(["left", "right"])),
       shield: opt(z.boolean()),
       supplement: opt(z.object({ via: z.enum(["syringe", "sns"]), ml: range(), milk: opt(milk()) }).passthrough()),
       ml: opt(range()),
       to_target: opt(z.boolean()),
       milk: opt(milk()),
       via: opt(z.enum(["bottle", "paced"])),
+      if_needed: opt(z.boolean()),
       text: opt(text(400)),
     })
     .passthrough();
@@ -778,8 +805,8 @@ export function registerFeedingPlanTools(server: McpServer, copy: ToolCopy = FAM
       check_in: opt(text(20)),
       unit: opt(z.enum(["ml", "oz"])),
       amounts_in: opt(z.enum(["ml", "oz"])),
-      day: opt(z.object({ every: opt(range()), wake: opt(z.boolean()) }).passthrough()),
-      night: opt(z.object({ from: text(20), to: text(20), every: opt(range()), wake: opt(z.boolean()), feed: opt(text(200)) }).passthrough()),
+      day: opt(z.object({ every: opt(every()), wake: opt(z.boolean()) }).passthrough()),
+      night: opt(z.object({ from: text(20), to: text(20), every: opt(every()), wake: opt(z.boolean()), feed: opt(text(200)), order: opt(z.array(text(200)).max(8)) }).passthrough()),
       feeds: z.array(z.object({ id: opt(text(40)), name: text(200), steps: z.array(step).max(12) }).passthrough()).max(8),
       order: opt(z.array(text(200)).max(8)),
       notes: opt(text(1000)),
@@ -796,7 +823,7 @@ export function registerFeedingPlanTools(server: McpServer, copy: ToolCopy = FAM
         plan: planShape
           .nullish()
           .describe(
-            `The whole plan. feeds: 1 to 6, each {name, steps: 1 to 8, id when changing one}. Steps: {do:"nurse", minutes, each_side, shield (nipple shield), supplement: milk given at the breast while nursing {via:"syringe"|"sns", ml, milk}}; {do:"pump", minutes}; {do:"bottle", ml or to_target (up to the target per feed), milk, via:"bottle"|"paced"} (after nursing it's the top-up); {do:"note", text}. minutes, ml and every: a number or [min, max]; every is minutes start to start. milk: breastmilk, formula, either, breastmilk_first (pumped milk, then formula to finish). day: {every, wake (wake ${vo.them} to feed)}. night: {from, to (24-hour like "23:00", or with AM or PM like "11 PM"), every, wake, feed: the night's feed by name; leave feed out when the day's turns go on at night}. order: the day feeds' names in turn. amounts_in: the unit the numbers here are in (oz converts); unit: how they show (default amounts_in). from: who it's from; check_in: the next visit, YYYY-MM-DD; notes.`
+            `The whole plan. feeds: 1 to 6, each {name, steps: 1 to 8, id when changing one}. Steps: {do:"nurse", minutes, each_side, side ("left"|"right": that side only; not with each_side), shield (nipple shield), supplement: milk given at the breast while nursing {via:"syringe"|"sns", ml, milk}}; {do:"pump", minutes, if_needed}; {do:"bottle", ml or to_target (up to the target per feed), milk, via:"bottle"|"paced", if_needed} (after nursing it's the top-up); {do:"note", text}. if_needed: true only when the plan says so ("if still hungry", "pump if still full"). minutes, ml and every: a number or [min, max]; every is minutes start to start, and on demand at most that apart ("at least every 3 hours") is {max: 180} or [0, 180]. milk: breastmilk, formula, either, breastmilk_first (pumped milk, then formula to finish). day: {every, wake (wake ${vo.them} to feed)}. night: {from, to (24-hour like "23:00", or with AM or PM like "11 PM"), every, wake, feed: the night's feed by name, or order: the night's feeds taking turns, by name; leave both out when the day's turns go on at night}. order: the day feeds' names in turn. amounts_in: the unit the numbers here are in (oz converts); unit: how they show (default amounts_in). from: who it's from; check_in: the next visit, YYYY-MM-DD; notes.`
           ),
         target: range()
           .nullish()

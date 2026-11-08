@@ -119,6 +119,59 @@ async function main() {
     ok(missed.includes('From the 1:30 AM feed ("Pump + bottle"), bottle up to 50–70 ml, pumped milk first, then formula to finish (40 ml so far); not logged: formula to finish, 10–30 ml more.'), missed);
   });
 
+  await test("on demand, a step only if needed and one side in the plan's line and Siri's: when to feed by, what's left, never a miss", async () => {
+    type Entry = import("../../src/lib/maple/types").Entry;
+    const { feedPlanNow } = await import("../../src/lib/maple/feeding-plan");
+    const { planNowLine, planSpeak } = await import("../../src/lib/maple/feeding-plan-mcp");
+    const { makeVoice } = await import("../../src/lib/maple/voice");
+    const { zonedTimeToUtc } = await import("../../src/lib/maple/time");
+    const tz = "America/Chicago";
+    const T = (h: number, m: number) => zonedTimeToUtc(2026, 11, 4, h, m, tz).toISOString();
+    const SHE = makeVoice({ name: "River", pronoun: "she" });
+    // On demand, at least every 3 hours; "Nurse, top up if hungry" (the top-up only if she's still hungry); "Left, pump the right".
+    const plan = parseFeedingPlan(
+      {
+        day: { every: { max: 180 } },
+        feeds: [
+          { name: "Nurse, top up if hungry", steps: [{ do: "nurse", minutes: [8, 12], each_side: true }, { do: "bottle", ml: [25, 35], via: "paced", if_needed: true }] },
+          { name: "Left, pump the right", steps: [{ do: "nurse", minutes: [15, 20], side: "left" }, { do: "pump", minutes: 15 }] },
+        ],
+      },
+      null,
+      new Date(T(8, 0))
+    );
+    const fed = {
+      id: 1,
+      kind: "feed",
+      started_at: T(9, 0),
+      ended_at: T(9, 20),
+      active: false,
+      note: null,
+      created_by: null,
+      updated_by: null,
+      source: "web",
+      created_at: T(9, 0),
+      updated_at: T(9, 20),
+      data: { method: "breast", segments: [{ side: "L", start: T(9, 0), end: T(9, 10) }, { side: "R", start: T(9, 10), end: T(9, 20) }], plan: plan.feeds[0].id },
+    } as unknown as Entry;
+    const w = (h: number, m: number) => ({ now: new Date(T(h, m)), tz, vo: SHE });
+    // Just after: the top-up is still to do, if she's still hungry; the next feed by noon.
+    const after = feedPlanNow(plan, [fed], new Date(T(9, 25)), { tz, target: null });
+    const line = planNowLine(after, w(9, 25));
+    ok(line.includes("Next: top up 25–35 ml if still hungry, paced bottle.") && line.includes('After it: "Left, pump the right"; by 12:00 PM (on demand).'), line);
+    eq(planSpeak(after, w(9, 25)), "From the feeding plan: Nurse, top up if hungry is underway; still to do: top up 25 to 35 ml if still hungry, paced bottle.", "Siri, underway");
+    // Nobody gave it: the next feed, on its one side, and never a miss.
+    const later = feedPlanNow(plan, [fed], new Date(T(10, 30)), { tz, target: null });
+    const next = planNowLine(later, w(10, 30));
+    eq(next, 'Feeding plan: next is "Left, pump the right": nurse 15–20 min on the left; then pump 15 min. By 12:00 PM (on demand).');
+    eq(planSpeak(later, w(10, 30)), "Next from the feeding plan: Left, pump the right, on demand, by 12:00 PM.", "Siri, next");
+    // Waking her by its most.
+    const woken = parseFeedingPlan({ day: { every: [0, 180], wake: true }, feeds: plan.feeds.map(({ name, steps }) => ({ name, steps })) }, null, new Date(T(8, 0)));
+    const wake = feedPlanNow(woken, [{ ...fed, data: { ...(fed as { data: object }).data, plan: woken.feeds[0].id } } as unknown as Entry], new Date(T(10, 30)), { tz, target: null });
+    ok(planNowLine(wake, w(10, 30)).endsWith("Wake her by 12:00 PM if still asleep."), planNowLine(wake, w(10, 30)));
+    eq(planSpeak(wake, w(10, 30)), "Next from the feeding plan: Left, pump the right, waking her by 12:00 PM if she's still asleep.");
+  });
+
   for (const shape of ["production", "final"] as Shape[]) {
     await freshDb({ shape });
     const s: Seed = await seedFamilies();
@@ -477,6 +530,74 @@ async function main() {
       eq([p.amounts_in, p.feeds[0].steps[0], read.json.target], ["oz", { do: "bottle", ml: [1, 1.5], milk: "formula" }, [2, 2.5]], "in ounces");
       const same = await tool(alpha.owner, A, "set_feeding_plan", { plan: p, target: read.json.target, base_rev: read.json.rev });
       ok(same.json.unchanged === true, "sent back as read: nothing to change, nothing drifted");
+    });
+
+    await test(`${shape}: only if needed, on demand, one side and the night's turns: read back in the plan's words, saved, sent back as read; start_timer takes the plan's side`, async () => {
+      // Invented: on demand by day, at least every 3 hours, waking her; at night (11 PM to 5 AM) on demand at least every
+      // 3.5 hours, the night's feeds taking turns.
+      const WAVE = {
+        from: "Feeding clinic",
+        day: { every: { max: 180 }, wake: true },
+        night: { from: "11 PM", to: "5:00", every: [0, 210], order: ["Pump + bottle", "Left, pump the right"] },
+        feeds: [
+          { name: "Left, pump the right", steps: [{ do: "nurse", minutes: [15, 20], side: "left" }, { do: "pump", minutes: 15 }] },
+          { name: "Nurse, top up if hungry", steps: [{ do: "nurse", minutes: [8, 12], each_side: true }, { do: "bottle", ml: [25, 35], via: "paced", if_needed: true }, { do: "pump", minutes: 10, if_needed: true }] },
+          { name: "Pump + bottle", steps: [{ do: "pump", minutes: 20 }, { do: "bottle", milk: "breastmilk_first", to_target: true }] },
+        ],
+        order: ["Nurse, top up if hungry", "Left, pump the right"],
+      };
+      const base_rev = feedingPlanOf(await settings(A))!.rev;
+      const rb = await tool(alpha.owner, A, "set_feeding_plan", { plan: WAVE, target: [50, 70], base_rev });
+      ok(!rb.error && rb.json.confirm_needed === true, rb.text);
+      for (const line of [
+        "Day: on demand, at least every 3 hours, waking her if she's asleep, taking turns: Nurse, top up if hungry, then Left, pump the right",
+        "Left, pump the right: Nurse 15–20 min on the left; then pump 15 min",
+        "Nurse, top up if hungry: Nurse 8–12 min each side; then top up 25–35 ml if still hungry, paced bottle; then pump 10 min if needed",
+        "Night (11 PM–5 AM): on demand, at least every 3.5 hours, taking turns: Pump + bottle, then Left, pump the right",
+      ]) {
+        ok(rb.text.includes(line), `reads back "${line}": ${rb.text}`);
+      }
+      const saved = await tool(alpha.owner, A, "set_feeding_plan", { plan: WAVE, target: [50, 70], base_rev, confirmed: true, read_back: rb.json.read_back });
+      ok(saved.json.saved === true, saved.text);
+      const stored = feedingPlanOf(await settings(A))!;
+      const [left, hungry, night] = stored.feeds;
+      eq(
+        [stored.day, stored.night, left.steps[0], hungry.steps[1], hungry.steps[2]],
+        [
+          { every: { min: 180, max: 180 }, on_demand: true, wake: true },
+          { from: "23:00", to: "05:00", every: { min: 210, max: 210 }, on_demand: true, feed: night.id, order: [night.id, left.id] },
+          { do: "nurse", minutes: { min: 15, max: 20 }, side: "L" },
+          { do: "bottle", ml: { min: 25, max: 35 }, via: "paced", if_needed: true },
+          { do: "pump", minutes: { min: 10, max: 10 }, if_needed: true },
+        ],
+        "stored as the plan's own keys, the night's feed its first turn"
+      );
+      // In set_feeding_plan's shape: on demand as {max}, the side by name, the night's turns by id; sent back, nothing changes.
+      const read = await tool(alpha.owner, A, "feeding_plan");
+      const p = read.json.plan as { day: unknown; night: unknown; feeds: { steps: unknown[] }[] };
+      eq(
+        [p.day, p.night, p.feeds[0].steps[0], p.feeds[1].steps[1]],
+        [
+          { every: { max: 180 }, wake: true },
+          { from: "23:00", to: "05:00", every: { max: 210 }, order: [night.id, left.id] },
+          { do: "nurse", minutes: [15, 20], side: "left" },
+          { do: "bottle", ml: [25, 35], via: "paced", if_needed: true },
+        ],
+        "the plan as set_feeding_plan takes it"
+      );
+      const same = await tool(alpha.owner, A, "set_feeding_plan", { plan: p, target: read.json.target, base_rev: read.json.rev });
+      ok(same.json.unchanged === true, `sent back as read: ${same.text}`);
+      // A field in the wrong place is refused, never dropped; each side and one side aren't both.
+      const stray = await tool(alpha.owner, A, "set_feeding_plan", { plan: { feeds: [{ name: "A", steps: [{ do: "nurse", if_needed: true }] }] }, base_rev: read.json.rev });
+      ok(stray.error && /"A" step 1: if_needed isn't a nurse step's \(a nurse step takes minutes, each_side or side/.test(stray.text), stray.text);
+      const both = await tool(alpha.owner, A, "set_feeding_plan", { plan: { feeds: [{ name: "A", steps: [{ do: "nurse", each_side: true, side: "left" }] }] }, base_rev: read.json.rev });
+      ok(both.error && both.text.startsWith('"A" step 1: each side or one side, not both. Nothing was saved'), both.text);
+      // start_timer with a plan feed on one side and no side: that side.
+      const started = await tool(alpha.member, A, "start_timer", { timer: "nursing", plan: "Left, pump the right" });
+      ok(!started.error && /timer started on the left at .*, for the feeding plan's "Left, pump the right" .*\(That's the side the plan's feed nurses on\.\)/.test(started.text), started.text);
+      const row = (await sql(`SELECT data FROM maple_entries WHERE id = $1`, [Number(started.json.id)]))[0].data as { segments: { side: string }[]; plan: string };
+      eq([row.segments[0].side, row.plan], ["L", left.id]);
+      eq((await tool(alpha.member, A, "stop_timer", { timer: "nursing" })).error, false, "stopped");
     });
   }
 
