@@ -86,12 +86,11 @@ const intervalShown = (r: RangeDraft, onDemand: boolean): Range | undefined => {
   return most == null ? undefined : { min: most, max: most };
 };
 
-/** A nursing step's sides: either (the usual turns), one side only, or each side. */
-const SIDES: { value: "either" | Side | "each"; label: string }[] = [
+/** A nursing step's side: either (the usual turns), or one side only ("left only, pump the right"). */
+const SIDES: { value: "either" | Side; label: string }[] = [
   { value: "either", label: "Either" },
   { value: "L", label: "Left" },
   { value: "R", label: "Right" },
-  { value: "each", label: "Each side" },
 ];
 
 /** A compact number box (a range's end): 44px tall, 16px type so iOS doesn't zoom. */
@@ -390,23 +389,24 @@ function StepEditor({ step, index, count, feedName, afterNurse, unit, hasTarget,
 
 function NurseFields({ step, name, unit, watch, onChange }: { step: NurseDraft; name: string; unit: PlanDraft["unit"]; watch: Watch; onChange: (s: NurseDraft) => void }) {
   const via = step.atBreast;
-  // Either side, one side only, or each side: one choice, so each side and a single side are never both set.
-  const sides = step.each_side ? "each" : (step.side ?? "either");
-  const setSides = (v: (typeof SIDES)[number]["value"]) => onChange({ ...step, each_side: v === "each", side: v === "L" || v === "R" ? v : null });
   return (
     <>
       <NumberRange label={step.each_side ? "Minutes on each side" : "Minutes"} word="min" aria={`${name}, nursing minutes`} value={step.minutes} max={MAX_MINUTES} onChange={(minutes) => onChange({ ...step, minutes })} watch={watch} wkey={`${step.key}:min`} />
       <div>
         <Label>Side</Label>
+        {/* Either side (the usual turns), or one side only; one side turns Each side off, and Each side turns it back to Either. */}
         <div role="group" aria-label={`${name}: side`} className="flex flex-wrap gap-2">
           {SIDES.map((o) => (
-            <Chip key={o.value} raised selected={sides === o.value} onClick={() => setSides(o.value)}>
+            <Chip key={o.value} raised selected={(step.side ?? "either") === o.value} onClick={() => onChange({ ...step, side: o.value === "either" ? null : o.value, ...(o.value !== "either" ? { each_side: false } : {}) })}>
               {o.label}
             </Chip>
           ))}
         </div>
       </div>
       <div role="group" aria-label={`${name}: how`} className="flex flex-wrap gap-2">
+        <Chip raised selected={step.each_side} onClick={() => onChange({ ...step, each_side: !step.each_side, ...(!step.each_side ? { side: null } : {}) })}>
+          Each side
+        </Chip>
         <Chip raised selected={step.shield} onClick={() => onChange({ ...step, shield: !step.shield })}>
           Nipple shield
         </Chip>
@@ -592,29 +592,36 @@ function NightEditor({ draft, change, watch }: { draft: PlanDraft; change: Chang
               checked={n.wake}
               onChange={(wake) => setNight({ wake })}
             />
-            {draft.feeds.length > 1 && <NightTurns draft={draft} change={change} />}
           </>
         )}
       </div>
+      {n.on && draft.feeds.length > 1 && <NightTurns draft={draft} change={change} />}
     </FormSection>
   );
 }
 
 /**
- * The night's own feeds, taking turns in this order like the day's (none: the same turns as by day; one: every night
- * feed is that one). Each leaves the day's turns, unless it's the only one there.
+ * The night's own feeds, taking turns in this order, laid out like Taking turns by day (none: the same turns as by
+ * day; one: every night feed is that one). Each leaves the day's turns, unless it's the only one there.
  */
 function NightTurns({ draft, change }: { draft: PlanDraft; change: Change }) {
   const turns = draft.night.order;
   const set = (keys: string[]) => change((d) => setNightTurns(d, keys));
   const addable = draft.feeds.filter((f) => !turns.includes(f.key));
+  const hint =
+    turns.length > 1
+      ? "At night they take turns in this order, then start again. They don't take a turn by day."
+      : turns.length
+        ? "Every feed at night is this one. It doesn't take a turn by day."
+        : "Same turns as by day.";
   return (
-    <div className="space-y-2.5 px-4 py-4">
-      <Label>The night&apos;s feeds</Label>
-      {turns.length === 0 ? (
-        <p className="text-[15px] leading-snug text-mp-ink">Same turns as by day</p>
-      ) : (
-        <ol aria-label="The night's feeds" className={cx(tone.inset, tone.divide, "overflow-hidden")}>
+    <div className="space-y-2.5">
+      <div className="px-1">
+        <p className={tone.label}>The night&apos;s feeds</p>
+        <p className={cx(tone.muted, "mt-0.5 text-[13px] leading-snug")}>{hint}</p>
+      </div>
+      {turns.length > 0 && (
+        <ol aria-label="The night's feeds" className={cx(tone.card, tone.divide, "overflow-hidden")}>
           {turns.map((k, i) => (
             <li key={k} className="flex min-h-[52px] items-center gap-1 py-1 pr-1.5 pl-4">
               <span className="w-5 shrink-0 text-[15px] font-semibold text-mp-ink-2 tabular-nums">{i + 1}</span>
@@ -632,7 +639,7 @@ function NightTurns({ draft, change }: { draft: PlanDraft; change: Change }) {
       )}
       {addable.length > 0 && (
         <div>
-          <p className={cx(tone.label, "mb-1.5")}>{turns.length ? "Add to the night's turns" : "A feed of its own at night"}</p>
+          <p className={cx(tone.label, "mb-1.5 px-1")}>{turns.length ? "Add to the night's turns" : "A feed of its own at night"}</p>
           <div className="flex flex-wrap gap-2">
             {addable.map((f) => (
               <Chip
@@ -645,11 +652,6 @@ function NightTurns({ draft, change }: { draft: PlanDraft; change: Change }) {
             ))}
           </div>
         </div>
-      )}
-      {turns.length > 0 && (
-        <p className={cx(tone.muted, "text-[13px] leading-snug")}>
-          {turns.length > 1 ? "At night they take turns in this order, then start again. They don't take a turn by day." : "Every feed at night is this one. It doesn't take a turn by day."}
-        </p>
       )}
     </div>
   );

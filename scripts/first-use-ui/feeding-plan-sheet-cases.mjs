@@ -490,6 +490,62 @@ export function feedingPlanSheetCases({ fixture, freshState, assert }) {
         assert.deepEqual(f.errors, []);
       } finally { await f.close(); }
     }],
+    ["Feeding plan sheet: on demand, one side, only if needed and the night's turns read as the plan says them", async () => {
+      // On demand by day, at least every 3 hours, waking; the top-up only if she's still hungry; a fourth feed on the
+      // left only; at night the feeds take turns.
+      const plan = structuredClone(PLAN);
+      plan.day = { every: { min: 180, max: 180 }, on_demand: true, wake: true };
+      plan.feeds[1].steps[1].if_needed = true;
+      plan.feeds.push({ id: "p1f4", name: "Left, pump the right", steps: [{ do: "nurse", minutes: { min: 15, max: 20 }, side: "L" }, { do: "pump", minutes: { min: 15, max: 15 } }] });
+      plan.night = { ...plan.night, order: ["p1f3", "p1f4"] };
+      const f = await fixture({ state: planned({ plan }), apiResponse: server().apiResponse });
+      try {
+        await metric(f);
+        const sheet = await fromMore(f);
+        const text = (await sheet.innerText()).replace(/\s+/g, " ");
+        assert.match(text, /By day On demand, at least every 3 hours Wake River if River's still asleep at 3 hours from the start of the last feed/);
+        assert.match(text, /At night 11 PM to 5 AM · taking turns 1 Pump \+ bottle 2 Left, pump the right Every 3 hours · wake River if River's still asleep at 3 hours/);
+        const steps = async (name) => (await sheet.getByRole("article", { name, exact: true }).getByRole("listitem").allTextContents()).map((s) => s.replace(/\s+/g, " ").trim());
+        assert.deepEqual(await steps("Nurse, top up"), ["1Step 1: Nurse 8–12 min each side", "2Step 2: Top up 25–35 ml if still hungry, formula or breast milk, paced bottle"]);
+        assert.deepEqual(await steps("Left, pump the right"), ["1Step 1: Nurse 15–20 min on the left", "2Step 2: Pump 15 min"]);
+        assert.match(await sheet.getByRole("article", { name: "Pump + bottle", exact: true }).textContent(), /Night turn 1/);
+        assert.match(await sheet.getByRole("article", { name: "Left, pump the right", exact: true }).textContent(), /Night turn 2/);
+        assert.equal(await f.page.evaluate(() => document.documentElement.scrollWidth), 390, "nothing scrolls sideways");
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["Feeding plan sheet: the form takes on demand, one side, only if needed and the night's turns, and sends them as the plan's own keys", async () => {
+      const s = server();
+      const f = await fixture({ state: planned(), apiResponse: s.apiResponse });
+      try {
+        await metric(f);
+        const sheet = await fromMore(f);
+        const form = await edit(f, sheet);
+        // By day: on demand, up to 3 hours (it starts from the range's longer end, 3.5).
+        const day = form.getByRole("group", { name: "hours between feeds by day: how", exact: true });
+        await day.getByRole("button", { name: "On demand, up to", exact: true }).click();
+        assert.equal(await box(form, "hours between feeds by day, up to").inputValue(), "3.5");
+        assert.match((await form.innerText()).replace(/\s+/g, " "), /When River's hungry, and at least this often\./);
+        await box(form, "hours between feeds by day, up to").fill("3");
+        // "Nurse, top up": on the left only (each side goes off), its top-up only if she's still hungry.
+        await unfold(form, "Nurse, top up");
+        await form.getByRole("group", { name: "Nurse, top up, step 1: side", exact: true }).getByRole("button", { name: "Left", exact: true }).click();
+        assert.equal(await form.getByRole("group", { name: "Nurse, top up, step 1: how", exact: true }).getByRole("button", { name: "Each side", exact: true }).getAttribute("aria-pressed"), "false");
+        await form.getByRole("switch", { name: "Nurse, top up, step 2: only if needed", exact: true }).click();
+        // The night's feeds: Pump + bottle, then Nurse + SNS (which leaves the day's turns).
+        await form.getByRole("button", { name: "Add Nurse + SNS to the night's turns", exact: true }).click();
+        assert.deepEqual(await form.getByRole("list", { name: "The night's feeds", exact: true }).getByRole("listitem").allTextContents(), ["1Pump + bottle", "2Nurse + SNS"]);
+        await form.getByRole("button", { name: "Save the plan", exact: true }).click();
+        await waitFor(f, () => s.patches.length > 0, "the save");
+        const sent = structuredClone(SENT);
+        sent.day = { every: { min: 180, max: 180 }, on_demand: true };
+        sent.feeds[1].steps = [{ do: "nurse", minutes: { min: 8, max: 12 }, side: "L" }, { do: "bottle", ml: { min: 25, max: 35 }, milk: "either", via: "paced", if_needed: true }];
+        sent.order = [2];
+        sent.night = { from: "23:00", to: "05:00", every: { min: 180, max: 180 }, wake: true, order: [3, 1] };
+        assert.deepEqual(s.patches[0], { settings: { feeding_plan: { ...sent, base_rev: 3 } } });
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
     ["Feeding plan sheet: a viewer reads the plan from Baby details, with nothing to change", async () => {
       const f = await fixture({ state: planned({ role: "viewer" }), apiResponse: server().apiResponse });
       try {

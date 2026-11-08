@@ -246,12 +246,14 @@ function sidesSoFar(run: NursingRun): string | null {
  * do (not logged, or a bottle short of its amount); none when nothing is. A step only if needed is next only when no
  * step that isn't is left: it never takes the big button from one.
  */
-function nextStep(view: PlanFeedView): number | null {
+function nextStep(view: PlanFeedView, closed: (v: StepView) => boolean): number | null {
   if (view.group?.run?.live) return null;
   const pumping = view.steps.some((v) => v.step.do === "pump" && v.status === "running");
-  const todo = view.steps.filter((v) => v.status === "todo" && (!pumping || v.step.do === "bottle"));
+  const todo = view.steps.filter((v) => v.status === "todo" && !closed(v) && (!pumping || v.step.do === "bottle"));
   return (todo.find((v) => !ifNeeded(v.step)) ?? todo[0])?.i ?? null;
 }
+
+const NONE: ReadonlySet<string> = new Set();
 
 /**
  * The feed in focus, step by step. Upcoming: the plan's words, numbered, the
@@ -262,9 +264,11 @@ function nextStep(view: PlanFeedView): number | null {
  * next physical step carries the action. A step only if needed keeps its
  * action once its turn has come, as the big button only when no step that
  * isn't is waiting (else beside its row), with a quiet "Not needed". `words`:
- * the baby's (BabyWords), for "She's done".
+ * the baby's (BabyWords), for "She's done". `closed`: the steps this phone
+ * set aside (She's done, Not needed), by row key: each reads as done, and
+ * the next step moves on past it.
  */
-export function stepRows(fp: FeedPlanNow, view: PlanFeedView = fp.focus, words: RowWords = THE_BABY): StepRow[] {
+export function stepRows(fp: FeedPlanNow, view: PlanFeedView = fp.focus, words: RowWords = THE_BABY, closed: ReadonlySet<string> = NONE): StepRow[] {
   const nursing = nursingOf(view);
   const c: Ctx = { plan: fp.plan, target: fp.target, feedId: view.feed.id, nursingId: nursing.id, nursingEnd: nursing.end };
   const unit = fp.plan.unit;
@@ -272,18 +276,26 @@ export function stepRows(fp: FeedPlanNow, view: PlanFeedView = fp.focus, words: 
   const lastEntry = live ? live.entries[live.entries.length - 1] : null;
   // Paused: a timed feed still running with no side open (an untimed one, logged by voice without sides, has none at all).
   const onBreak = !!lastEntry?.active && !!lastEntry.data.segments?.length && !openSegment(lastEntry.data.segments);
-  const next = nextStep(view);
+  const isClosed = (v: StepView) => v.status === "todo" && closed.has(`${view.feed.id}:${v.i}`);
+  const next = nextStep(view, isClosed);
   // The big button: the next step; but one only if needed never takes it from her milk at the breast still to log.
   const milkOwed = view.steps.some((v) => v.status === "done" && milkLeft(v));
   const primary = next !== null && !(ifNeeded(view.steps[next].step) && milkOwed) ? next : null;
   /** A row's action: the big button, beside it (a step only if needed whose turn has come, in a feed begun), or none. */
   const role = (v: StepView): "action" | "secondary" | null => {
     if (v.i === primary) return "action";
-    return ifNeeded(v.step) && v.status === "todo" && view.start !== null && next !== null && v.i <= next ? "secondary" : null;
+    return ifNeeded(v.step) && v.status === "todo" && !isClosed(v) && view.start !== null && next !== null && v.i <= next ? "secondary" : null;
   };
   let nursed = false;
   let count = 0;
   return view.steps.map((v): StepRow => {
+    const r = rowOf(v);
+    // Set aside on this phone: done, nothing to do or close; one only if needed with nothing given wasn't needed.
+    if (!isClosed(v)) return r;
+    return { ...r, state: "done", action: null, secondary: null, close: null, ...(r.optional && v.entries.length === 0 ? { status: NOT_NEEDED } : {}) };
+  });
+
+  function rowOf(v: StepView): StepRow {
     const afterNurse = nursed;
     if (v.step.do === "nurse") nursed = true;
     const key = `${view.feed.id}:${v.i}`;
@@ -331,7 +343,7 @@ export function stepRows(fp: FeedPlanNow, view: PlanFeedView = fp.focus, words: 
       return row({ state: "todo", status, ...acts(finishAction(v.step, v, afterNurse, c)), close: `${words.Hes} done` });
     }
     return row({ state: "todo", ...acts(bottleAction(v.step, afterNurse, c)) });
-  });
+  }
 }
 
 /**

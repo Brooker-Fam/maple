@@ -7,7 +7,7 @@ import type { Side, StartWith } from "@/lib/maple/types";
 import { feedTargetOf, type FeedTarget } from "@/lib/maple/units";
 import { useBabyWords } from "../familyWords";
 import { useMaple, useNow } from "../useMaple";
-import { missedItems, NOT_NEEDED, nursingOf, stepRows, type MissedItem, type OneTapLog, type StepAction, type StepRow } from "./nextFeed";
+import { missedItems, nursingOf, stepRows, type MissedItem, type OneTapLog, type StepAction, type StepRow } from "./nextFeed";
 
 /**
  * The feeding plan as Today reads it, now, for every part of Today that acts on
@@ -43,8 +43,8 @@ export type PlanRow = StepRow & {
   close?: string | null;
 };
 
-/** stepRows, with the baby's words for "She's done" where the view model takes them. */
-const rowsOf = stepRows as (fp: FeedPlanNow, view?: FeedPlanNow["focus"], words?: { Hes: string }) => PlanRow[];
+/** stepRows, with the baby's words for "She's done" and the steps this phone set aside, where the view model takes them. */
+const rowsOf = stepRows as (fp: FeedPlanNow, view?: FeedPlanNow["focus"], words?: { Hes: string }, closed?: ReadonlySet<string>) => PlanRow[];
 
 // ── This phone's memory ────────────────────────────────────────────────────
 
@@ -254,13 +254,10 @@ export function usePlanNow(): PlanNow | null {
     void seen;
     if (!fp) return null;
     const closed = (start: number | null, key: string) => start !== null && sessionRead(closeKey(family, start, key)) === "1";
-    // A closed step reads as done: no action, no second action, no way to close it again. One only if needed, with
-    // nothing given, says it wasn't needed.
-    const rows = rowsOf(fp, fp.focus, { Hes: words.Hes }).map((r): PlanRow =>
-      r.state !== "note" && r.state !== "done" && closed(focusStart, r.key)
-        ? { ...r, state: "done", action: null, secondary: null, close: null, ...(r.optional && r.close === NOT_NEEDED ? { status: NOT_NEEDED } : {}) }
-        : r
-    );
+    // A closed step reads as done (no action, no second action, no way to close it again; one only if needed, with
+    // nothing given, says it wasn't needed), and the next step moves on past it.
+    const keys = fp.focus.steps.map((s) => `${fp.focus.feed.id}:${s.i}`);
+    const rows = rowsOf(fp, fp.focus, { Hes: words.Hes }, new Set(keys.filter((k) => closed(focusStart, k))));
     const primaryRow = rows.find((r) => r.action) ?? null;
     const primary = primaryRow?.action ? { row: primaryRow, action: primaryRow.action } : null;
     const missedAside = missedAt !== null && sessionRead(missedKey(family, missedAt)) === "1";

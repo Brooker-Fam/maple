@@ -620,5 +620,118 @@ export function feedingPlanCases({ fixture, freshState, record, writes, assert }
         await g.close();
       }
     }],
+
+    ["Feeding plan: a top-up only if she's still hungry keeps its action after nursing with a quiet Not needed, set aside on this phone, and is never not logged", async () => {
+      // The plan's second feed: nurse 8–12 min each side, then a 25–35 ml paced top-up only if she's still hungry.
+      const plan = structuredClone(PLAN);
+      plan.feeds[1] = { id: "p1f2", name: "Nurse, top up if hungry", steps: [{ do: "nurse", minutes: { min: 8, max: 12 }, each_side: true }, { do: "bottle", ml: { min: 25, max: 35 }, via: "paced", if_needed: true }] };
+      // 9:00–9:20 AM from the plan, no top-up. It's 9:30.
+      const fed = () => nursing(95, 28, [["L", "09:00", "09:10"], ["R", "09:10", "09:20"]], { plan: "p1f2" });
+      const f = await fixture({ state: planned({ plan, entries: [fed()] }) });
+      try {
+        await metric(f);
+        const c = await today(f);
+        const text = (await c.textContent()).replace(/[  ]/g, " ");
+        assert.match(text, /^Now/);
+        assert.match(text, /Top up 25–35 ml if still hungry, paced bottle/);
+        // Nothing else to do: the top-up is the big button, with Not needed beside its row.
+        assert(await c.locator("[data-plan-primary]").getByRole("button", { name: /^Log top-up/ }).isVisible(), "the top-up is the card's big button");
+        await c.getByRole("button", { name: "Not needed", exact: true }).click();
+        await c.getByRole("button", { name: /^Log top-up/ }).waitFor({ state: "hidden" });
+        assert.equal(await c.getByRole("button", { name: "Not needed", exact: true }).count(), 0);
+        assert.match(await c.textContent(), /Not needed/, "the row says it wasn't needed");
+        assert.equal(writes(f).length, 0, "nothing is logged");
+        assert.deepEqual(f.errors, []);
+      } finally {
+        await f.close();
+      }
+      // An hour on, nobody gave it: the next feed, and no line saying it wasn't logged.
+      const g = await fixture({ state: planned({ plan, now: at(28, "10:30"), entries: [fed()] }) });
+      try {
+        await metric(g);
+        const c = await today(g);
+        assert.equal(await c.getByRole("heading").textContent(), "Nurse + SNS");
+        assert.equal(await c.getByRole("group", { name: "Not logged", exact: true }).count(), 0);
+        assert.doesNotMatch(await c.textContent(), /not logged/);
+        assert.deepEqual(g.errors, []);
+      } finally {
+        await g.close();
+      }
+    }],
+
+    ["Feeding plan: a feed on one side offers only that side's Start, with the plan's feed, and the dock and Last fed say that side", async () => {
+      // After the 8:00 AM feed (on the Left), the plan's turn nurses on the left only: taking turns alone would say Right.
+      const plan = structuredClone(PLAN);
+      plan.feeds[1] = { id: "p1f2", name: "Left, pump the right", steps: [{ do: "nurse", minutes: { min: 15, max: 20 }, side: "L" }, { do: "pump", minutes: { min: 15, max: 15 } }] };
+      const s = server();
+      const f = await fixture({ state: planned({ plan, entries: morning() }), apiResponse: s.apiResponse });
+      try {
+        await metric(f);
+        const c = await today(f);
+        assert.equal(await c.getByRole("heading").textContent(), "Left, pump the right");
+        assert.match(await c.textContent(), /Nurse 15–20 min on the left\. Then pump 15 min/);
+        assert.equal(await c.locator("[data-plan-primary]").getByRole("button").count(), 1, "one Start, never the other side");
+        const dock = f.page.getByRole("region", { name: "Log something", exact: true });
+        const sides = await dock.getByRole("button", { name: /^Start nursing timer on/ }).evaluateAll((list) => list.map((b) => b.getAttribute("aria-label")));
+        assert(sides.some((n) => n.startsWith("Start nursing timer on Left (next side)")) && !sides.some((n) => n.includes("Right (next side)")), `the dock outlines the left: ${sides.join(" | ")}`);
+        assert.equal(await f.page.getByText("next side", { exact: true }).locator("..").textContent(), "Leftnext side", "Last fed's next side");
+        await c.getByRole("button", { name: "Start Left: Left, pump the right", exact: true }).click();
+        await waitFor(f, () => s.timer.length > 0, "the timer start");
+        assert.deepEqual({ side: s.timer[0].side, with: s.timer[0].with }, { side: "L", with: { plan: "p1f2" } });
+        assert.deepEqual(f.errors, []);
+      } finally {
+        await f.close();
+      }
+    }],
+
+    ["Feeding plan: on demand, the card says by when, never Due now before then; waking, when to wake if still asleep", async () => {
+      // On demand, at least every 3 hours; after the 8:00 AM feed it's 9:30.
+      const plan = structuredClone(PLAN);
+      plan.day = { every: { min: 180, max: 180 }, on_demand: true };
+      const f = await fixture({ state: planned({ plan, entries: morning() }) });
+      try {
+        await metric(f);
+        const c = await today(f);
+        const text = (await c.textContent()).replace(/[  ]/g, " ");
+        assert.match(text, /By 11:00 AM \(on demand\) · at most 3 h after the 8:00 AM feed/);
+        assert.doesNotMatch(text, /Due now/);
+        assert.deepEqual(f.errors, []);
+      } finally {
+        await f.close();
+      }
+      const wake = structuredClone(plan);
+      wake.day.wake = true;
+      const g = await fixture({ state: planned({ plan: wake, entries: morning() }) });
+      try {
+        await metric(g);
+        const c = await today(g);
+        // No sex set: the baby's name stands in for the pronoun.
+        assert.match((await c.textContent()).replace(/[  ]/g, " "), /Wake River by 11:00 AM if still asleep · at most 3 h after the 8:00 AM feed/);
+        assert.deepEqual(g.errors, []);
+      } finally {
+        await g.close();
+      }
+    }],
+
+    ["Feeding plan: at night the night's feeds take turns: after the night's first, its second is next", async () => {
+      // The night's turns: Pump + bottle, then Nurse, pump (10–15 min each side, then pump 15).
+      const plan = structuredClone(PLAN);
+      plan.feeds.push({ id: "p1f4", name: "Nurse, pump", steps: [{ do: "nurse", minutes: { min: 10, max: 15 }, each_side: true }, { do: "pump", minutes: { min: 15, max: 15 } }] });
+      plan.night = { ...plan.night, feed: "p1f3", order: ["p1f3", "p1f4"] };
+      const evening = [nursing(71, 28, [["L", "20:30", "20:45"]], { plan: "p1f1" }), bottle(72, 28, "20:44", 20, { via: "sns", milk: "formula" }), pump(73, 28, "20:50", "21:05")];
+      const first = [...evening, pump(74, 28, "23:20", "23:40"), bottle(75, 28, "23:45", 55, { milk: "breastmilk", plan: "p1f3" })];
+      const f = await fixture({ state: planned({ plan, now: at(28, "23:50"), entries: first }) });
+      try {
+        await metric(f);
+        const c = await today(f);
+        assert.equal(await c.getByRole("heading").textContent(), "Nurse, pump");
+        const text = (await c.textContent()).replace(/[  ]/g, " ");
+        assert.match(text, /^Night feed/);
+        assert.match(text, /Wake River for it at 2:45 AM, in 2h 55m/);
+        assert.deepEqual(f.errors, []);
+      } finally {
+        await f.close();
+      }
+    }],
   ];
 }

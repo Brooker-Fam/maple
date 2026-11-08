@@ -476,6 +476,25 @@ check("only if needed after a pump: nothing while the pump waits its turn; while
   eq([shape(rows)[2], carry(rows)[2]], [["todo", "Top up 60 ml if still hungry, breast milk", null], ["form", null, "Not needed"]]);
 });
 
+check("set aside on this phone, a step reads done and the next one's turn comes: Not needed, then the pump only if needed; She's done too", () => {
+  const p = parseFeedingPlan(
+    { feeds: [{ name: "Nurse, top up, pump if needed", steps: [{ do: "nurse", minutes: [8, 12], each_side: true }, { do: "bottle", ml: [25, 35], via: "paced", if_needed: true }, { do: "pump", minutes: 10, if_needed: true }] }], day: { every: 180 } },
+    null,
+    NOW0
+  );
+  const id = p.feeds[0].id;
+  const fed = nurse("L 09:00-09:10, R 09:10-09:20", { plan: id });
+  const fp = at(p, [fed], "09:25");
+  eq(carry(stepRows(fp, fp.focus, SHE)), [[null, null, null], ["form", null, "Not needed"], [null, null, null]], "the top-up's turn first");
+  const set = stepRows(fp, fp.focus, SHE, new Set([`${id}:1`]));
+  eq([set[1].state, set[1].status, carry(set)], ["done", "Not needed", [[null, null, null], [null, null, null], ["pump", null, "Not needed"]]]);
+  // She's done on a bottle short of its amount: done as it is, what was given still said, and the step after it is next.
+  const night = [...evening(), pump("23:20-23:40"), bottle("23:45", 40, { milk: "breastmilk", plan: NIGHT.id })];
+  const n = at(PLAN, night, "23:50");
+  const done = stepRows(n, n.focus, SHE, new Set([`${NIGHT.id}:1`]));
+  eq([done[1].state, done[1].status, carry(done)], ["done", "Gave 40 ml · up to 50–70 ml", [[null, null, null], [null, null, null], [null, null, null]]]);
+});
+
 // ── nursing on one side ──────────────────────────────────────────────────
 
 check("one side: the start offers only the plan's side, with its shield and feed", () => {
