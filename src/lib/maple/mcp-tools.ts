@@ -21,6 +21,7 @@ import {
   feedParts,
   feedTotals,
   isTracked,
+  milkSplit,
   minutesShort,
   minutesText,
   nursingRuns,
@@ -1067,7 +1068,8 @@ function talliesJson(s: Summary, parts?: DayParts) {
           : {}),
       // What the bottles held (feed.ts milkSplit), when it was said.
       ...(t.formulaMl ? { formula_total: formatVolumeBoth(t.formulaMl) } : {}),
-      ...(t.breastMilkMl ? { breast_milk_by_bottle_total: formatVolumeBoth(t.breastMilkMl) } : {}),
+      // By bottle: never the breast milk given at the breast (`parts`), which went in with the nursing.
+      ...(byBottleToday(t, parts).breastMilkMl ? { breast_milk_by_bottle_total: formatVolumeBoth(byBottleToday(t, parts).breastMilkMl) } : {}),
       wet: t.wet,
       dirty: t.dirty,
       sleep: durText(t.sleepSec),
@@ -2123,6 +2125,23 @@ function todayParts(entries: readonly Entry[], ctx: Ctx): DayParts {
   return { breast: given.filter(atBreast), bottles: given.filter((b) => !atBreast(b)), live: runs.find((r) => r.live)?.topUps ?? [] };
 }
 
+/**
+ * Today's formula and breast milk that went by bottle: the day's own (DayStats, every bottle entry's milk) less what
+ * was given at the breast (`parts`), which went in with the nursing. The day's own without parts.
+ */
+function byBottleToday(tb: Pick<Summary["today"], "formulaMl" | "breastMilkMl">, parts?: DayParts): { formulaMl: number; breastMilkMl: number } {
+  if (!parts) return { formulaMl: tb.formulaMl, breastMilkMl: tb.breastMilkMl };
+  let formula = 0;
+  let breastmilk = 0;
+  for (const b of parts.breast) {
+    const m = milkSplit(b.data);
+    formula += m.formula;
+    breastmilk += m.breastmilk;
+  }
+  const less = (a: number, b: number) => Math.max(0, Math.round((a - b) * 10) / 10);
+  return { formulaMl: less(tb.formulaMl, formula), breastMilkMl: less(tb.breastMilkMl, breastmilk) };
+}
+
 /** A day's parts in the tally's words: "with 0.68 oz (20 ml) in the syringe and 1 top-up"; never "top-up" for milk at the breast. */
 function partsWith(p: DayParts): string {
   const bits = [p.breast.length ? atBreastWords(p.breast) : "", p.bottles.length ? plural(p.bottles.length, "top-up") : ""].filter(Boolean);
@@ -2256,7 +2275,8 @@ function todayLine(s: Summary, parts?: DayParts): string {
     tb.clusterFeeds ? `${tb.clusterFeeds} in a cluster` : "",
     tb.bottleFeeds ? `${plural(tb.bottleFeeds, "bottle")}${bottleMl ? `, ${formatVolumeBoth(bottleMl)}` : ""}` : "",
     ...(parts ? [parts.breast.length ? atBreastWords(parts.breast) : "", topUps(parts.bottles.length, topUpMl({ topUps: parts.bottles }))] : [topUps(tb.topUps, tb.topUpMl)]),
-    tb.formulaMl ? `${formatVolumeBoth(tb.formulaMl)} of formula by bottle` : "",
+    // Formula given at the breast (in the SNS, say) went in with the nursing, never "by bottle".
+    byBottleToday(tb, parts).formulaMl ? `${formatVolumeBoth(byBottleToday(tb, parts).formulaMl)} of formula by bottle` : "",
   ].filter(Boolean);
   const counts =
     !tb.feeds && !tb.wet && !tb.dirty && tb.sleepSec < 60

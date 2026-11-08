@@ -309,9 +309,11 @@ async function main() {
       ok(status.text.includes('Feeding plan: "Nurse + SNS" is underway since 11:50 AM. Going now: nurse 12–18 min, 20 ml of formula in the SNS (10 min so far). Next: pump 15 min. After it: "Nurse, top up"; next feed 2:20 PM–3:20 PM, in 2h 20m.'), status.text);
       ok(/From the feeding plan: Nurse \+ SNS is underway; still to do: pump 15 min\./.test((await siri(alpha.token, { action: "status" })).speak ?? ""), "Siri: what's left");
       // Its SNS milk logged while she's still on: milk at the breast, part of this feed, said as given, never a top-up or a feed.
-      const sns = await tool(alpha.member, A, "log_feed", { method: "bottle", amount: 20, unit: "ml", via: "sns", minutes_ago: 4 });
+      const sns = await tool(alpha.member, A, "log_feed", { method: "bottle", amount: 20, unit: "ml", via: "sns", milk: "formula", minutes_ago: 4 });
       ok(sns.text.includes("Counted with the feed that began at 11:50 AM today: milk at the breast, part of that feed, not a feed of its own.") && sns.text.includes("(with 0.68 oz (20 ml) in the SNS)"), sns.text);
       const lines = await chatLogState({ email: alpha.member }, { fam: A, care: true, now: new Date() });
+      // The day's line says it as milk at the breast, and its formula never "by bottle".
+      ok(lines.some((l) => l.startsWith("Today so far: 1 feed (0.68 oz (20 ml) in the SNS)")) && !lines.some((l) => /formula by bottle/.test(l)), lines.join(" | "));
       ok(lines.some((l) => l.startsWith("Nursing on the left since 11:50 AM") && l.endsWith("Given with it so far: 0.68 oz (20 ml) in the SNS at 11:56 AM.")), lines.join(" | "));
       ok(lines.some((l) => l.includes("Going now: nurse 12–18 min, 20 ml of formula in the SNS (10 min so far, 20 ml in the SNS at 11:56 AM).")), lines.join(" | "));
       ok((await tool(alpha.member, A, "feeding_plan")).text.includes("- Nurse 12–18 min, 20 ml of formula in the SNS (going now, 10 min so far, 20 ml in the SNS at 11:56 AM)"), "feeding_plan says it was given");
