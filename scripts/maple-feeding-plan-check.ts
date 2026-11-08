@@ -318,7 +318,8 @@ check("taking turns: a feed started from the plan names itself; the next is the 
   eq([clock(n.due!.from), clock(n.due!.to), n.due!.status, n.due!.for, n.due!.night, n.due!.wake], ["10:30", "11:30", "early", "focus", false, false]);
   eq(dueText(n.due!, D("09:30"), TZ), "Next feed 10:30 AM–11:30 AM, in 1h 00m");
   eq(dueText(n.due!, D("11:00"), TZ), "Due now, by 11:30 AM");
-  eq(dueText(n.due!, D("12:10"), TZ), "Due since 11:30 AM: 4h 10m since the last feed");
+  // Past its window it names what it counts from, never "the last feed" (Last fed may be a part joined to it).
+  eq(dueText(n.due!, D("12:10"), TZ), "Due since 11:30 AM: 4h 10m since the 8:00 AM feed");
 });
 
 check("underway: nursing on, then the rest of the steps, then done and on to the next", () => {
@@ -603,7 +604,8 @@ check("the night's second bottle: with the same plan feed it's that feed, counte
   const at = D("+1 00:10");
   // The log: with the same plan feed and no nursing between, the formula to finish is more of that feed.
   eq([countedFeeds([first, finish], at).length, [...sameFeedBottleIds([first, finish], at)], clock(lastFedAnchor([first, finish], at)!.at)], [1, [finish.id], "23:45"]);
-  eq(countedFeeds([first, bottle("+1 00:15", 10, { milk: "formula", plan: NIGHT.id }), bottle("+1 00:50", 10, { milk: "formula", plan: NIGHT.id })], D("+1 01:00")).length, 1, "each within 45 minutes of the one before");
+  // Counted from the feed's first bottle, never on from a later one: 65 minutes after the first is a feed of its own.
+  eq(countedFeeds([first, bottle("+1 00:15", 10, { milk: "formula", plan: NIGHT.id }), bottle("+1 00:50", 10, { milk: "formula", plan: NIGHT.id })], D("+1 01:00")).length, 2, "the join closes");
   // Without a plan feed on them, each bottle is a feed, as always.
   const a = bottle("23:45", 40, { milk: "breastmilk" });
   const b = bottle("+1 00:05", 15, { milk: "formula" });
@@ -686,7 +688,7 @@ check("a feed due at one time reads Due now for 15 minutes, then late; a window 
   const log = [nurse("L 20:30-20:45", { plan: SNS.id }), bottle("20:44", 20, { via: "sns" }), pump("20:50-21:05")];
   const n = now(PLAN, log, "21:30");
   eq([dueStatus(n.due!, D("23:30")), dueStatus(n.due!, D("23:45")), dueStatus(n.due!, D("23:46")), now(PLAN, log, "23:40").due!.status], ["due", "due", "late", "due"]);
-  eq([dueText(n.due!, D("23:44"), TZ), dueText(n.due!, D("23:46"), TZ)], ["Due now (11:30 PM)", "Due since 11:30 PM: 3h 16m since the last feed"]);
+  eq([dueText(n.due!, D("23:44"), TZ), dueText(n.due!, D("23:46"), TZ)], ["Due now (11:30 PM)", "Due since 11:30 PM: 3h 16m since the 8:30 PM feed"]);
   const day = now(PLAN, [nurse("L 08:00-08:15", { plan: SNS.id }), bottle("08:15", 20, { via: "sns" }), pump("08:20-08:35")], "09:30");
   eq([dueStatus(day.due!, D("11:30")), dueStatus(day.due!, D("11:31"))], ["due", "late"]);
 });
@@ -792,9 +794,12 @@ check("only if needed: never keeps a feed from being done and is never missed, b
   // Given after all: the step's done, and the feed's done at once.
   n = feedPlanNow(IF_NEEDED, [fed, bottle("09:25", 30, { via: "paced", milk: "formula", plan: HUNGRY.id, top_up_of: fed.id })], D("09:30"), { tz: TZ, target: TARGET });
   eq([n.focus.state, n.focus.feed.id, n.missed], ["upcoming", FULL.id, null]);
-  // Given later from the dock, before the next is due: still that feed's top-up, not a feed of its own.
-  n = feedPlanNow(IF_NEEDED, [fed, bottle("10:05", 30, { via: "paced", milk: "formula" })], D("10:10"), { tz: TZ, target: TARGET });
+  // Given later from the dock, while the card still offers it: still that feed's top-up, not a feed of its own.
+  n = feedPlanNow(IF_NEEDED, [fed, bottle("10:00", 30, { via: "paced", milk: "formula" })], D("10:10"), { tz: TZ, target: TARGET });
   eq([n.focus.state, n.focus.feed.id, clock(n.due!.base), n.missed], ["upcoming", FULL.id, "09:00", null]);
+  // Once the card has moved on (45 minutes after she came off), nothing waits for it: a bottle then is a feed of its own.
+  n = feedPlanNow(IF_NEEDED, [fed, bottle("10:05", 30, { via: "paced", milk: "formula" })], D("10:10"), { tz: TZ, target: TARGET });
+  eq([n.focus.state, n.focus.feed.id, clock(n.due!.base), n.missed], ["upcoming", FULL.id, "10:05", null]);
   // A pump only if needed: the same.
   const full = nurse("L 12:00-12:15", { plan: FULL.id });
   n = feedPlanNow(IF_NEEDED, [fed, full], D("12:20"), { tz: TZ, target: TARGET });
@@ -856,7 +861,7 @@ check("on demand: due by its most, never Due now before it; Due now for 15 minut
   eq([n.focus.state, n.due!.for, clock(n.due!.from), clock(n.due!.to), n.due!.onDemand, n.due!.status], ["upcoming", "focus", "12:00", "12:00", true, "early"]);
   eq([dueText(n.due!, D("09:45"), TZ), dueText(n.due!, D("11:59"), TZ)], ["By 12:00 PM (on demand)", "By 12:00 PM (on demand)"]);
   eq([dueStatus(n.due!, D("11:59")), dueStatus(n.due!, D("12:00")), dueStatus(n.due!, D("12:15")), dueStatus(n.due!, D("12:16"))], ["early", "due", "due", "late"]);
-  eq([dueText(n.due!, D("12:05"), TZ), dueText(n.due!, D("12:16"), TZ)], ["Due now (12:00 PM)", "Due since 12:00 PM: 3h 16m since the last feed"]);
+  eq([dueText(n.due!, D("12:05"), TZ), dueText(n.due!, D("12:16"), TZ)], ["Due now (12:00 PM)", "Due since 12:00 PM: 3h 16m since the 9:00 AM feed"]);
   // Waking her by its most: said as when to wake her if she's still asleep.
   const w = parseFeedingPlan({ day: { every: { max: 180 }, wake: true }, feeds: [INPUT.feeds[1]] }, null, NOW0);
   const m = feedPlanNow(w, fed, D("09:45"), { tz: TZ, target: TARGET });
@@ -1131,7 +1136,7 @@ check("a morning window the night's end squeezes under 15 minutes is one time, t
   eq([n.focus.feed.id, n.due!.night, clock(n.due!.from), clock(n.due!.to)], [SNS.id, false, "05:00", "05:00"]);
   eq(
     [dueText(n.due!, D("+1 02:30"), TZ), dueText(n.due!, D("+1 05:05"), TZ), dueText(n.due!, D("+1 05:14"), TZ), dueText(n.due!, D("+1 05:16"), TZ)],
-    ["Next feed at 5:00 AM, in 2h 30m", "Due now (5:00 AM)", "Due now (5:00 AM)", "Due since 5:00 AM: 3h 11m since the last feed"]
+    ["Next feed at 5:00 AM, in 2h 30m", "Due now (5:00 AM)", "Due now (5:00 AM)", "Due since 5:00 AM: 3h 11m since the 2:05 AM feed"]
   );
   // 20 minutes left is a window of its own.
   n = feedPlanNow(p, last("02:20"), D("+1 02:30"), { tz: TZ, target: TARGET });

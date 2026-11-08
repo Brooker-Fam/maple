@@ -606,8 +606,9 @@ check("she only nursed in a plan feed with no nursing: the plan's words, nothing
   // Later, nothing of it is "not logged".
   const later = at(PLAN, log, "+1 01:45");
   eq([missedItems(later), reading(later, "+1 01:45").missed, reading(later, "+1 01:45").bottle], [[], [], null]);
-  // The engine's word decides once it says (PlanFeedView.nursedOnly beside .named).
-  const said = { ...fp, focus: { ...fp.focus, named: Date.parse(T("+1 00:30")), nursedOnly: false } };
+  // The engine's word decides once it says (PlanFeedView.nursedOnly beside .named; told otherwise, its steps are to do).
+  const toDo = fp.focus.steps.map((s) => (s.step.do === "note" ? s : { ...s, status: "todo" as const }));
+  const said = { ...fp, focus: { ...fp.focus, named: Date.parse(T("+1 00:30")), nursedOnly: false, steps: toDo } };
   eq([nursedOnly(said.focus), carry(stepRows(said, said.focus, SHE))[0][0]], [false, "pump"]);
   const told = { ...fp.focus, named: Date.parse(T("+1 00:30")), nursedOnly: true };
   eq(nursedOnly(told), true);

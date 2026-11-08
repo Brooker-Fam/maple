@@ -170,12 +170,14 @@ export const TOP_UP_LINK_MS = 3 * HOUR;
 export const TOP_UP_BEFORE_MS = SAME_FEED_MS;
 /**
  * A bottle that carries a feeding plan's feed (data.plan) given less than
- * this after the last part of a feed that began with a bottle of the same
- * plan feed (its last bottle, or its pump that went on later: one parent
- * pumping while the other gives the bottle), with no nursing between, is
- * more of that feed (the plan's pumped milk, then formula to finish): not a
- * feed of its own, and "Last fed" stays at its first bottle. Bottles without
- * a plan feed are each a feed, as they always were.
+ * this after the first bottle of a feed that began with a bottle of the same
+ * plan feed (or after its pump's end, when that pump ran past the first
+ * bottle: one parent pumping while the other gives it), with no nursing
+ * between, is more of that feed (the plan's pumped milk, then formula to
+ * finish): not a feed of its own, and "Last fed" stays at its first bottle.
+ * Never counted on from a later bottle, so the join closes and an evening of
+ * bottles is still feeds. Bottles without a plan feed are each a feed, as
+ * they always were.
  */
 export const SAME_BOTTLE_FEED_MS = 45 * MIN;
 
@@ -1720,29 +1722,28 @@ type BottleFeed = { start: number; bottle: EntryOf<"feed">; more: EntryOf<"feed"
 type PumpSpan = { start: number; end: number };
 
 /**
- * When the last part of a bottle feed was logged, as the bottle at `before`
- * reads it: its last bottle, or a pump that went on later (one parent pumping
- * while the other gives the bottle, or pumping between its bottles), to its
- * end (its start while it runs, as the feeding plan reads a feed's parts). A
- * pump counts when it began before that bottle, no more than
- * SAME_BOTTLE_FEED_MS before the feed, and while the feed was still going
- * (under SAME_BOTTLE_FEED_MS after its last part so far).
+ * What a bottle feed's later bottle at `before` is counted from (SAME_BOTTLE_FEED_MS): its first bottle, or the end of
+ * a pump that ran past it (one parent pumping while the other gives the bottle, the night's formula to finish after a
+ * long pump), its start while it runs, as the feeding plan reads a feed's parts. A pump counts when it began before
+ * that bottle, no more than SAME_BOTTLE_FEED_MS before the feed, and while the feed was still going (under
+ * SAME_BOTTLE_FEED_MS after what it counts from so far). Never a later bottle: the join closes.
  */
-function bottleFeedLastPart(f: BottleFeed, before: number, pumps: readonly PumpSpan[]): number {
-  let last = f.more.length ? Date.parse(f.more[f.more.length - 1].started_at) : f.start;
+function bottleFeedJoinFrom(f: BottleFeed, before: number, pumps: readonly PumpSpan[]): number {
+  let from = f.start;
   for (const p of pumps) {
     if (p.start >= before) break;
-    if (p.start > f.start - SAME_BOTTLE_FEED_MS && p.start < last + SAME_BOTTLE_FEED_MS && p.end > last) last = p.end;
+    if (p.start > f.start - SAME_BOTTLE_FEED_MS && p.start < from + SAME_BOTTLE_FEED_MS && p.end > from) from = p.end;
   }
-  return last;
+  return from;
 }
 
 /**
  * Bottles given on their own (not top-ups), oldest first, as feeds: each is
  * a feed, except a bottle carrying a feeding plan's feed (data.plan) given
- * under SAME_BOTTLE_FEED_MS after the last part of a feed that began with a
- * bottle of that plan feed (its last bottle, or its pump that went on later:
- * bottleFeedLastPart), with no nursing since it began: that's more of it.
+ * under SAME_BOTTLE_FEED_MS after the first bottle of a feed that began with
+ * a bottle of that plan feed (or after its pump's end, when the pump ran past
+ * that bottle: bottleFeedJoinFrom), with no nursing since it began: that's
+ * more of it.
  */
 function bottleFeeds(entries: readonly Entry[], runs: readonly NursingRun[]): BottleFeed[] {
   const topUp = topUpIds(runs);
@@ -1766,7 +1767,7 @@ function bottleFeeds(entries: readonly Entry[], runs: readonly NursingRun[]): Bo
     const prev = out[out.length - 1];
     if (prev && e.data.plan && prev.bottle.data.plan === e.data.plan) {
       const nursed = runs.some((r) => r.start >= prev.start && r.start <= at);
-      if (!nursed && at - bottleFeedLastPart(prev, at, pumps) < SAME_BOTTLE_FEED_MS) {
+      if (!nursed && at - bottleFeedJoinFrom(prev, at, pumps) < SAME_BOTTLE_FEED_MS) {
         prev.more.push(e);
         continue;
       }
