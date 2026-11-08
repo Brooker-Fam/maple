@@ -99,7 +99,13 @@ export default function Privacy() {
         short note. A feed you log can also say it used a nipple shield and which of the plan&rsquo;s feeds it followed, and a
         top-up can name the feed it was given for. Maple shows the plan to everyone in your family who can see the log and
         works out what&rsquo;s next from the log. The plan changes only when an owner or member saves it: by hand, or by saying
-        yes after Maple&rsquo;s chat or a connected assistant reads it back to them. Removing the plan deletes it.
+        yes after Maple&rsquo;s chat or a connected assistant reads it back to them. The chat and assistants are told to keep
+        mom&rsquo;s own medicines and health out of the plan; her page keeps those. On Today, a pick of another feed to do
+        next, Got it on a step that wasn&rsquo;t logged, and saying a bottle is done before its full amount are remembered
+        only by that phone&rsquo;s browser, until the app or tab closes. Removing the plan deletes it. The target per feed
+        stays in Settings until you clear it, and the plan&rsquo;s words already in a chat stay in that person&rsquo;s chat
+        history until it&rsquo;s deleted; while they&rsquo;re among its latest messages, they still go to the AI model with
+        the conversation.
       </p>
       <p>
         If your family sets sleep goals, Maple keeps each goal: its title and why it matters, a target date, what it measures,
@@ -346,9 +352,9 @@ export default function Privacy() {
       <p>
         An owner chooses each person&rsquo;s access, in Maple&rsquo;s settings, its chat or a connected assistant. Photos-only
         guests see shared moments, photos and captions, along with the baby&rsquo;s display name and age. They cannot read the
-        daily baby log, recovery page or chat. View-only guests can read the baby&rsquo;s log and moments, and the family&rsquo;s
-        sleep goals but never the adults&rsquo; sleep check-ins; members can also add and edit them, and see everyone&rsquo;s
-        check-ins. Separately, the owner chooses what each person sees of the recovery page when it is set up: members see
+        daily baby log, recovery page or chat. View-only guests can read the baby&rsquo;s log and moments, the family&rsquo;s
+        feeding plan, and its sleep goals but never the adults&rsquo; sleep check-ins; members can also add and edit them,
+        and see everyone&rsquo;s check-ins. Separately, the owner chooses what each person sees of the recovery page when it is set up: members see
         and add to it unless the owner limits them to reading it or hides it, and view-only guests don&rsquo;t see it unless the
         owner lets them read it. Reading it never includes mom&rsquo;s check-ins. Mom always has her own page. New invitations
         default to photos-only access. Owners see and change everything, the recovery page included, and an owner can make

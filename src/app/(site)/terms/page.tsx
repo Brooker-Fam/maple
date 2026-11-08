@@ -37,6 +37,13 @@ export default function Terms() {
         checked in; they aren&rsquo;t medical guidance, and any change to how your baby is fed is one to talk over with your
         pediatrician or lactation consultant first.
       </p>
+      <p>
+        A feeding plan is your care team&rsquo;s, as your family entered it; Maple doesn&rsquo;t check it. Which feed Today
+        says is next, when it&rsquo;s due or when to wake the baby, and which steps weren&rsquo;t logged come from
+        Maple&rsquo;s own simple rules about what your family logged, so a feed or top-up that wasn&rsquo;t logged can throw
+        them off. Questions about the plan, and any change to it, are for your care team, and nothing in it is a reason to
+        wait before calling them.
+      </p>
       <div className="site-callout">
         <p className="mt-0">
           <strong>If you think your baby or you need help now, call one of these numbers instead of using Maple.</strong>
