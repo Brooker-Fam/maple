@@ -92,6 +92,15 @@ export default function Privacy() {
         that sleep is counted once.
       </p>
       <p>
+        If your family adds a feeding plan from your care team, Maple keeps it as you enter it: who it&rsquo;s from and the
+        next check-in, the target per feed, how often to feed by day and at night (the night&rsquo;s hours, and whether to
+        wake the baby), each kind of feed and its steps (nursing, with a nipple shield or milk given at the breast; pumping; a
+        bottle or top-up, its amount, milk and how it&rsquo;s given; short notes), the order day feeds take turns in, and a
+        short note. A feed you log can also say it used a nipple shield and which of the plan&rsquo;s feeds it followed, and a
+        top-up can name the feed it was given for. Maple shows the plan to everyone in your family who can see the log and
+        works out what&rsquo;s next from the log; it doesn&rsquo;t change the plan itself. Removing the plan deletes it.
+      </p>
+      <p>
         If your family sets sleep goals, Maple keeps each goal: its title and why it matters, a target date, what it measures,
         its weekly steps and who marked each one done, a night roster of protected sleep windows for the adults (and, if you
         say, how the baby&rsquo;s feeds are covered during each: nursing, a bottle of expressed milk, or none planned), and the
