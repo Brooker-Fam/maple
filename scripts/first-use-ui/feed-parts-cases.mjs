@@ -6,9 +6,8 @@
  * feed, and the feed form saves a shield and milk at the breast with a feed logged afterwards, and lists a saved
  * feed's. A part's form says what it is ("Milk at the breast", "SNS at the breast", "Top-up"), a bottle's "last bottle"
  * is never milk at the breast, a plan feed's milk at the breast is the plan's (in its unit), a feed's form says which
- * of the plan's feeds it was, and While you slept counts a feed still going once. The running card counts what was
- * given with the whole feed, across a break of 10 minutes or more. Made-up feeds and amounts on the fixture's clock
- * (9:30 AM in the family's zone), in ml; the plan is the invented one in feeding-plan-cases.mjs.
+ * of the plan's feeds it was, and While you slept counts a feed still going once. Made-up feeds and amounts on the
+ * fixture's clock (9:30 AM in the family's zone), in ml; the plan is the invented one in feeding-plan-cases.mjs.
  */
 export function feedPartsCases({ fixture, freshState, record, writes, assert }) {
   const metric = (f) => f.page.addInitScript(() => localStorage.setItem("maple-units", "metric"));
