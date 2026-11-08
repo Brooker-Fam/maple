@@ -239,22 +239,39 @@ export function removeFeed(d: PlanDraft, key: string): PlanDraft {
 }
 
 /**
- * A feed taken out (removeFeed), and Put it back: the feed in its place, the
- * turns as they were (a turn handed to another feed only because the turns
- * would otherwise be empty goes back; one given since stays), the night's
- * feed again if it was. Anything else changed meanwhile stays changed.
+ * `key` back among `now` where it was in `was`, among the ones still there:
+ * right after the nearest one it came after, else right before the nearest one
+ * it came before, else at its old place.
+ */
+function placeBack(now: readonly string[], was: readonly string[], key: string): string[] {
+  const j = was.indexOf(key);
+  const at = (i: number) => [...now.slice(0, i), key, ...now.slice(i)];
+  for (let k = j - 1; k >= 0; k--) if (now.includes(was[k])) return at(now.indexOf(was[k]) + 1);
+  for (let k = j + 1; k < was.length; k++) if (now.includes(was[k])) return at(now.indexOf(was[k]));
+  return at(Math.min(Math.max(j, 0), now.length));
+}
+
+/**
+ * A feed taken out (removeFeed), and Put it back, on the draft as it is by
+ * then: the feed back in its place, its turn back where it was among the turns
+ * still there (after the turn it followed), and the night's feed again if it
+ * was and no other has been picked since. A turn handed to another feed only
+ * because the turns would otherwise be empty is taken back. Anything else
+ * changed meanwhile stays changed: turns moved, added or taken out, and a feed
+ * made the night's (it stays out of the day's turns).
  */
 export function takeOutFeed(before: PlanDraft, key: string): { next: PlanDraft; putBack: (d: PlanDraft) => PlanDraft } {
-  const i = before.feeds.findIndex((f) => f.key === key);
-  const feed = before.feeds[i];
+  const feed = before.feeds.find((f) => f.key === key);
   const next = removeFeed(before, key);
   const filled = next.order.filter((k) => !before.order.includes(k));
   const putBack = (d: PlanDraft): PlanDraft => {
     if (!feed || d.feeds.some((f) => f.key === key)) return d;
-    const feeds = [...d.feeds.slice(0, i), feed, ...d.feeds.slice(i)];
-    const kept = new Set(feeds.map((f) => f.key));
-    const order = [...before.order.filter((k) => kept.has(k)), ...d.order.filter((k) => !before.order.includes(k) && !filled.includes(k))];
-    return { ...d, feeds, order, night: before.night.feed === key ? { ...d.night, feed: key } : d.night };
+    const byKey = new Map([...d.feeds, feed].map((f) => [f.key, f]));
+    const feeds = placeBack(d.feeds.map((f) => f.key), before.feeds.map((f) => f.key), key).map((k) => byKey.get(k)!);
+    const turns = d.order.filter((k) => !filled.includes(k));
+    const order = before.order.includes(key) ? placeBack(turns, before.order, key) : turns;
+    const night = before.night.feed === key && !d.night.feed ? { ...d.night, feed: key } : d.night;
+    return { ...d, feeds, order, night };
   };
   return { next, putBack };
 }

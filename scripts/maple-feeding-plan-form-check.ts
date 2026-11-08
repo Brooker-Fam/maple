@@ -14,6 +14,7 @@ import {
   draftFromShape,
   draftOf,
   inputOf,
+  move,
   newFeed,
   PLAN_SHAPES,
   planShortLine,
@@ -180,7 +181,7 @@ check("Put it back: a feed taken out comes back exactly, with its turn and the n
   const out = takeOutFeed(d, topUp);
   eq(inputOf(out.putBack(out.next)), inputOf(d));
   // The only turn taken out hands it to the night's feed for now; Put it back hands it back.
-  const oneTurn = draftOf(parseFeedingPlan({ feeds: [{ name: "Day", steps: [{ do: "nurse" }] }, { name: "Night", steps: [{ do: "pump" }] }], order: ["Day"], night: { from: "23:00", to: "05:00", feed: "Night" } }, null, NOW), null, "ml");
+  const oneTurn = draftOf(parseFeedingPlan({ feeds: [{ name: "Day", steps: [{ do: "nurse" }] }, { name: "Night", steps: [{ do: "pump" }, { do: "bottle" }] }], order: ["Day"], night: { from: "23:00", to: "05:00", feed: "Night" } }, null, NOW), null, "ml");
   const [day, night] = oneTurn.feeds.map((f) => f.key);
   const gone = takeOutFeed(oneTurn, day);
   eq(gone.next.order, [night]);
@@ -190,6 +191,42 @@ check("Put it back: a feed taken out comes back exactly, with its turn and the n
   const added = addFeed(n.next, newFeed("Paced bottle", ["bottle"]));
   const back = n.putBack(added);
   eq([back.night.feed, inputOf(back).plan.order], [d.feeds[2].key, [1, 2, 4]]);
+});
+
+check("Put it back: on the form as it is now, so turns moved, taken out or given to the night meanwhile stay that way", () => {
+  // PLAN's three feeds, all taking turns by day.
+  const turns = draftOf(parseFeedingPlan({ unit: "ml", feeds: PLAN.feeds.map(({ name, steps }) => ({ name, steps })), order: [1, 2, 3] }, null, NOW), null, "ml");
+  const [sns, topUp, pump] = turns.feeds.map((f) => f.key);
+  const out = takeOutFeed(turns, topUp);
+  eq(out.next.order, [sns, pump]);
+  // "Pump + bottle" moved first meanwhile: "Nurse, top up" goes back after the turn it followed, and the move stays.
+  const moved = { ...out.next, order: move(out.next.order, 1, -1) };
+  eq(moved.order, [pump, sns]);
+  const back = out.putBack(moved);
+  eq([back.feeds.map((f) => f.name), back.order], [["Nurse + SNS", "Nurse, top up", "Pump + bottle"], [pump, sns, topUp]]);
+  // "Pump + bottle" made the night's feed meanwhile: it left the turns, and Put it back doesn't bring it back to them.
+  const nightOn = setNightFeed({ ...out.next, night: { ...out.next.night, on: true, from: "23:00", to: "05:00" } }, pump);
+  eq(nightOn.order, [sns]);
+  const atNight = out.putBack(nightOn);
+  eq([atNight.order, atNight.night.feed], [[sns, topUp], pump]);
+  eq(inputOf(atNight).plan.night, { from: "23:00", to: "05:00", feed: 3 });
+  // A turn taken out meanwhile stays out.
+  const dropped = out.putBack({ ...out.next, order: [sns] });
+  eq(dropped.order, [sns, topUp]);
+  // The first turn taken out goes back before the turn it came before.
+  const first = takeOutFeed(turns, sns);
+  eq(first.putBack(first.next).order, [sns, topUp, pump]);
+  eq(first.putBack({ ...first.next, order: move(first.next.order, 1, -1) }).order, [pump, sns, topUp]);
+  // Two taken out, put back newest first: exactly as it was.
+  const second = takeOutFeed(out.next, sns);
+  eq(second.next.order, [pump]);
+  eq(inputOf(out.putBack(second.putBack(second.next))), inputOf(turns));
+  // The night's feed taken out while another is picked for the night: the newer pick stays, and the feed comes back.
+  const d = draftOf(PLAN, null, "ml");
+  const n = takeOutFeed(d, d.feeds[2].key);
+  const picked = setNightFeed(n.next, d.feeds[1].key);
+  const kept = n.putBack(picked);
+  eq([kept.feeds.length, kept.night.feed, kept.order], [3, d.feeds[1].key, [d.feeds[0].key]]);
 });
 
 check("a refusal's words point at its feed and step", () => {
