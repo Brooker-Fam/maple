@@ -1164,8 +1164,12 @@ async function main() {
       const rev = feedingPlanOf(await settings(A))!.rev;
       const ask = async (args: Record<string, unknown>) => (await tool(alpha.owner, A, "set_feeding_plan", { base_rev: rev, ...args })).text.split("\n{")[0];
       // Invented: a US sheet's "2 to 3 oz" sent without amounts_in.
-      const tiny = await ask({ plan: { day: { every: [180, 240] }, feeds: [{ name: "Formula bottle", steps: [{ do: "bottle", ml: [2, 3], milk: "formula" }] }] }, target: [6, 8] });
-      ok(tiny.includes("• Formula bottle: Bottle 2–3 ml, formula") && tiny.includes('Ask with it: a bottle of 2–3 ml and a target of 6–8 ml a feed are very small. If the plan says ounces, send amounts_in: "oz" with the same numbers.'), tiny);
+      const tiny = await ask({ plan: { day: { every: [180, 240] }, feeds: [{ name: "Formula bottle", steps: [{ do: "bottle", ml: [2, 3], milk: "formula" }] }], per_day: { ml: [16, 24] } }, target: [6, 8] });
+      ok(
+        tiny.includes("• Formula bottle: Bottle 2–3 ml, formula") &&
+          tiny.includes('Ask with it: a bottle of 2–3 ml, a target of 6–8 ml a feed and 16–24 ml in 24 hours are very small. If the plan says ounces, send amounts_in: "oz" with the same numbers.'),
+        tiny
+      );
       // In ounces, or milk at the breast (often a few ml), or a spoon's few ml: nothing to ask.
       const oz = await ask({ plan: { amounts_in: "oz", day: { every: [180, 240] }, feeds: [{ name: "Formula bottle", steps: [{ do: "bottle", ml: [2, 3], milk: "formula" }] }] } });
       ok(!/very small/.test(oz), oz);

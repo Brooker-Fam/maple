@@ -570,6 +570,8 @@ const hhmmOf = (min: number) => `${String(Math.floor(min / 60)).padStart(2, "0")
 
 /** A bottle or target this small in ml was likely ounces sent as ml ("2–3" for "2–3 oz"). */
 const TINY_ML = 10;
+/** The same for a day's milk (per_day.ml): "16–24" for "16–24 oz a day". */
+const TINY_DAY_ML = 100;
 
 /** A feed whose first step (notes aside) is a pump: the night's "pump, then bottle". */
 const pumpsFirst = (f: PlanFeed) => f.steps.find((s) => s.do !== "note")?.do === "pump";
@@ -585,8 +587,8 @@ const PUMP_BEFORE_WORDS = PLAN_PUMP_BEFORE_MS === 60 * 60_000 ? "an hour" : `${M
  * is fine, a night feed left out of night.feed isn't); a feed that pumps
  * first (Today takes a pump as that feed's only up to an hour before its
  * bottle, so a pump on its own clock goes in the notes); and, with amounts
- * sent in ml (`amountsIn`), a bottle or target under 10 ml, likely ounces.
- * `target`: the target per feed it would save.
+ * sent in ml (`amountsIn`), a bottle or target under 10 ml, or a day's milk
+ * under 100 ml, likely ounces. `target`: the target per feed it would save.
  */
 export function planCautions(plan: FeedingPlan, opts: { target?: FeedTarget | null; amountsIn?: "ml" | "oz" } = {}): string[] {
   const out: string[] = [];
@@ -626,6 +628,9 @@ export function planCautions(plan: FeedingPlan, opts: { target?: FeedTarget | nu
     for (const f of plan.feeds)
       for (const s of f.steps) if (s.do === "bottle" && s.ml && s.ml.max < TINY_ML && s.by !== "spoon" && s.by !== "finger") tiny.add(`a bottle of ${amountText(s.ml, "ml", false)}`);
     if (opts.target && opts.target.max < TINY_ML) tiny.add(`a target of ${amountText(opts.target, "ml", false)} a feed`);
+    // The day's milk as its read-back line says it ("16–24 ml in 24 hours", "at least 16 ml in 24 hours").
+    const day = plan.per_day?.ml;
+    if (day && (day.max ?? day.min ?? 0) < TINY_DAY_ML) tiny.add(lower(perDayLines({ unit: "ml", per_day: { ml: day } }, false)[0]));
     if (tiny.size) {
       const list = [...tiny];
       const said = list.length > 1 ? `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}` : list[0];
