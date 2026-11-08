@@ -501,7 +501,10 @@ check("nursing again soon after a feed is more of it: comfort nursing after the 
 check("nursing again 20 minutes after a feed by day is more of it: the turns don't move, and its top-up is owed once", () => {
   const first = nurse("L 13:00-13:10, R 13:10-13:20", { plan: TOPUP.id });
   const again = nurse("R 13:40-13:50");
+  // Until 30 minutes after the feed, a start is more of it (so the dock and Siri start it with no plan feed on it).
+  eq([now(PLAN, [first], "13:30").relatch?.feed.id, clock(now(PLAN, [first], "13:30").relatch!.until), now(PLAN, [first], "13:51").relatch], [TOPUP.id, "13:50", null]);
   let n = now(PLAN, [first, again], "13:51");
+  eq([n.relatch?.feed.id, clock(n.relatch!.until)], [TOPUP.id, "14:20"]);
   eq([n.focus.state, n.focus.feed.id, n.focus.why, states(n.focus), n.focus.steps[0].minutes, n.after?.feed.id, clock(n.due!.base)], ["underway", TOPUP.id, "tagged", ["done", "todo"], 30, SNS.id, "13:00"]);
   // The top-up after it is that feed's, and the next turn is the SNS feed's.
   n = now(PLAN, [first, again, bottle("13:55", 30, { via: "paced", milk: "formula" })], "14:00");

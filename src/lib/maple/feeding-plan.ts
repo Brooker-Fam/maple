@@ -962,6 +962,14 @@ export type FeedPlanNow = {
   missed: { view: PlanFeedView; steps: StepView[] } | null;
   /** The plan's other feeds, to do instead of an upcoming focus. */
   others: PlanFeed[];
+  /**
+   * Nursing started before `until` (epoch ms, PLAN_RELATCH_MS after anything
+   * of the last plan feed was logged) is more of that feed (`feed`), not the
+   * next one, unless a shield or milk at the breast logged with it points to
+   * another. A start then from the dock or Siri should carry no plan feed, so
+   * it reads that way; the card's own Start for the next feed still names it.
+   */
+  relatch: { feed: PlanFeed; until: number } | null;
 };
 
 /** A pump started up to this long before a feed began goes with that feed or the ones after it, not the one before. */
@@ -1191,7 +1199,8 @@ export function feedPlanNow(
     }
   }
   const others = focus.state === "upcoming" ? plan.feeds.filter((f) => f.id !== focus.feed.id && feeds(f)) : [];
-  return { plan, target, focus, due, after, missed, others };
+  const relatch = last && !last.offPlan && last.lastAt !== null && nowMs < last.lastAt + PLAN_RELATCH_MS ? { feed: last.feed, until: last.lastAt + PLAN_RELATCH_MS } : null;
+  return { plan, target, focus, due, after, missed, others, relatch };
 }
 
 // ── When, in words ─────────────────────────────────────────────────────────
