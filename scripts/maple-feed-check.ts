@@ -14,7 +14,9 @@
 import {
   addPart,
   CLUSTER_GAP_MS,
+  bottleAmount,
   clusterLine,
+  countedFeeds,
   describeChange,
   edgeBounds,
   feedClusters,
@@ -27,6 +29,7 @@ import {
   gapBucket,
   gapSummary,
   lastFedAnchor,
+  milkSplit,
   minutesShort,
   minutesText,
   momentQuestion,
@@ -54,6 +57,11 @@ import {
   suggestNextSide,
   summarize,
   switchTo,
+  TOP_UP_AFTER_MS,
+  TOP_UP_BEFORE_MS,
+  topUpIds,
+  topUpMl,
+  topUpRunFor,
   typicalFeedGapMin,
   undoableTap,
   undoLastTap,
@@ -68,6 +76,7 @@ import { timerNumbers } from "../src/components/maple/FeedParts";
 import { previewParts, rowIndex } from "../src/components/maple/sheets/FeedSheet";
 import { backOnPresets, earlierPresets, finishPresets, fitPresets, PRESET_LIMIT, usualBreakMin, usualSideMin } from "../src/lib/maple/presets";
 import { sidesLabel } from "../src/components/maple/StatusCard";
+import { daySummaryParts } from "../src/components/maple/LogTab";
 import { describeEntry } from "../src/lib/maple/describe";
 import { dailyStats, memberLabel, statsFor, summarize as summarizeWith } from "../src/lib/maple/insights";
 import { makeVoice } from "../src/lib/maple/voice";
@@ -76,7 +85,8 @@ import { makeVoice } from "../src/lib/maple/voice";
 const TEST_VOICE = makeVoice({ name: "Juniper", pronoun: "she" });
 const summarizeDay = (o: Omit<Parameters<typeof summarizeWith>[0], "vo">) => summarizeWith({ ...o, vo: TEST_VOICE });
 import { CLUSTER_CALL, clusterCall, clusterCallOnToday } from "../src/lib/maple/guidelines";
-import { cleanData } from "../src/lib/maple/validate";
+import { checkFeedTarget, cleanData } from "../src/lib/maple/validate";
+import { feedTargetFrom, feedTargetOf, formatVolumeRange, formatVolumeRangeBoth } from "../src/lib/maple/units";
 import { formatClock, formatMinutes, formatRange, formatTimeNear, localParts, zonedTimeToUtc } from "../src/lib/maple/time";
 import type { Baby, EntryOf, FeedData, Member, Segment, Side, StretchSide } from "../src/lib/maple/types";
 
@@ -1694,11 +1704,12 @@ check("describeEntry: back and forth reads as such", () => {
     const runs = nursingRuns(three, D("12:00"));
     eq([runs.length, feedClusters(runs).map((c) => c.feeds)], [3, [3]]);
   });
-  check("statsFor: each feed in a cluster counts, bottles too; the day line's cluster count", () => {
-    const s = statsFor([...dones, bottle("21:00")], D("00:00"), D("23:59"), "day", D("23:59"));
+  check("statsFor: each feed in a cluster counts, a bottle on its own too; the day line's cluster count", () => {
+    // 21:15 is 35 minutes after the evening's last feed ended: a feed of its own, not a top-up.
+    const s = statsFor([...dones, bottle("21:15")], D("00:00"), D("23:59"), "day", D("23:59"));
     eq(
-      [s.feeds, s.breastFeeds, s.bottleFeeds, s.clusterFeeds, s.clusters, s.leftSec / 60, s.rightSec / 60, s.bothSec / 60, s.nursingSec / 60],
-      [5, 4, 1, 4, 1, 37, 41, 30, 108]
+      [s.feeds, s.breastFeeds, s.bottleFeeds, s.topUps, s.clusterFeeds, s.clusters, s.leftSec / 60, s.rightSec / 60, s.bothSec / 60, s.nursingSec / 60],
+      [5, 4, 1, 0, 4, 1, 37, 41, 30, 108]
     );
     eq(statsFor(paused, D("00:00"), D("23:59"), "day", D("23:59")).feeds, 4, "one entry, four feeds");
     eq(statsFor([fe("L 10:00-10:20, R 10:35-10:50")], D("00:00"), D("23:59"), "day", D("23:59")).feeds, 2, "a 15-minute pause is two feeds");
@@ -1723,12 +1734,14 @@ check("describeEntry: back and forth reads as such", () => {
     eq(clock(lastFedAnchor([fe("L 18:00-18:35, R 18:35-19:10")], at845)!.at), "18:00");
     eq(clock(lastFedAnchor([fe("L 18:00-18:05, B 18:05-18:40")], at845)!.at), "18:00");
   });
-  check("Last fed: a later bottle wins; one before the anchor doesn't", () => {
+  check("Last fed: a later bottle on its own wins; a top-up, or one before the anchor, doesn't", () => {
     const long = fe("L 18:00-18:05, B 18:05-20:40");
-    const b = lastFedAnchor([long, bottle("20:44")], at845)!;
-    eq([b.kind, clock(b.at)], ["bottle", "20:44"]);
+    const b = lastFedAnchor([long, bottle("21:11")], D("21:20"))!;
+    eq([b.kind, clock(b.at)], ["bottle", "21:11"], "31 minutes after the feed ended: a feed of its own");
+    const t = lastFedAnchor([long, bottle("20:44")], at845)!;
+    eq([t.kind, clock(t.at), t.entry.id, t.run?.topUps.length], ["breast", "20:00", long.id, 1], "4 minutes after: its top-up");
     const c = lastFedAnchor([long, bottle("19:00")], at845)!;
-    eq([c.kind, clock(c.at), c.entry.id], ["breast", "20:00", long.id]);
+    eq([c.kind, clock(c.at), c.entry.id], ["breast", "20:00", long.id], "during the feed: its top-up");
   });
 
   check("next side: within 30 minutes, the other side from the one she was last on; after, the opposite of her start", () => {
@@ -1892,16 +1905,29 @@ check("describeEntry: back and forth reads as such", () => {
     // Ten minutes or more off is another feed as counted too: its gap shows, with no "back on after".
     eq(feedGaps([fe("L 10:00-10:10"), fe("R 10:20-10:30")], D("11:00")).map(row), [["10:00", "breast", 10, null, null], ["10:20", "breast", 10, 20, null]]);
   });
-  check("feedGaps: whole clock minutes; over 12 hours is a gap in the log; the same moment has no gap; a bottle never joins nursing", () => {
+  check("feedGaps: whole clock minutes; over 12 hours is a gap in the log; the same moment has no gap", () => {
     eq(feedGaps([fe("L 02:27:50-02:40"), fe("R 05:12:10-05:20")], D("09:00"))[1].gapMin, 165, "2:27 to 5:12 is 2h 45m, as the times read");
     eq(feedGaps([fe("L 01:00-01:20"), fe("L 13:00-13:20")], D("23:55"))[1].gapMin, 720, "12 hours exactly still counts");
     const over = feedGaps([fe("L 01:00-01:20"), fe("L 13:01-13:20")], D("23:55"))[1];
     eq([over.sinceMs! / 60_000, over.gapMin], [721, null]);
-    eq(feedGaps([fe("L 16:00-16:10"), bottle("16:00"), fe("R 18:30-18:40")], D("19:00")).map((s) => [s.feed.kind, s.sinceMs === null ? null : s.sinceMs / 60_000, s.backOnMin]), [
-      ["breast", null, null],
+    eq(feedGaps([bottle("16:00"), bottle("16:00"), fe("R 18:30-18:40")], D("19:00")).map((s) => [s.feed.kind, s.sinceMs === null ? null : s.sinceMs / 60_000, s.backOnMin]), [
+      ["bottle", null, null],
       ["bottle", null, null],
       ["breast", 150, null],
     ]);
+  });
+  check("feedGaps: a top-up rides on the time on the breast it was given with, never a row or a gap of its own", () => {
+    const steps = feedGaps([
+      fe("L 16:00-16:10"),
+      fe("R 16:14-16:25"),
+      bottle("16:20"), // while she was on: that time on the breast's
+      bottle("16:40"), // 15 minutes after the feed: its last time on the breast
+      bottle("17:55"), // 5 minutes before the next feed (an SNS readied): its first
+      fe("L 18:00-18:15"),
+      bottle("21:00"), // on its own: a row
+    ], D("22:00"));
+    eq(steps.map(row), [["16:00", "breast", 10, null, null], ["16:14", "breast", 11, 14, 4], ["18:00", "breast", 15, 106, null], ["21:00", "bottle", null, 180, null]]);
+    eq(steps.map((s) => (s.feed.kind === "breast" ? s.feed.latch.topUps.map((b) => clock(b.started_at)) : null)), [[], ["16:20", "16:40"], ["17:55"], null]);
   });
   check("gapSummary: how many gaps in each range and the longest; a cluster's rows carry it, the day's first gap reaching back", () => {
     const entries = [
@@ -1923,6 +1949,152 @@ check("describeEntry: back and forth reads as such", () => {
     eq([today.length, today[0].gapMin, gapSummary(today).buckets], [7, 240, [4, 0, 0, 0, 3]], "2 AM's gap is from 10 PM the day before");
     eq(gapSummary([]), { gaps: 0, longestMin: null, longest: null, buckets: [0, 0, 0, 0, 0] });
     eq([59, 60, 119, 120, 179, 180, 239, 240, 600].map(gapBucket), [0, 1, 1, 2, 2, 3, 3, 4, 4], "under an hour, 1 to 2, 2 to 3, 3 to 4, 4 or more");
+  });
+
+  // ── top-ups: a bottle given with a feed is part of it ──
+  const given = (at: string, ml?: number, o: { day?: number; milk?: FeedData["milk"] } = {}): EntryOf<"feed"> => {
+    const t = o.day === undefined ? T(at) : shift(T(at), o.day);
+    return {
+      id: nid++, kind: "feed", started_at: t, ended_at: null, active: false,
+      data: { method: "bottle", ...(ml != null ? { amount_ml: ml } : {}), ...(o.milk ? { milk: o.milk } : {}) }, note: null,
+      created_by: null, updated_by: null, source: "web", created_at: t, updated_at: t,
+    };
+  };
+  const ms = (at: string) => Date.parse(T(at));
+  check("top-ups: during a feed, under 10 minutes before it, or under 30 minutes after it ended; anything else is a feed", () => {
+    eq([TOP_UP_AFTER_MS, TOP_UP_BEFORE_MS], [30 * 60_000, 10 * 60_000]);
+    const runs = nursingRuns([fe("L 09:45-10:00, R 10:00-10:15")], D("12:00"));
+    const of = (at: string) => topUpRunFor(runs, ms(at), D("12:00"))?.start ?? null;
+    eq([of("09:45"), of("10:05"), of("10:15")], [runs[0].start, runs[0].start, runs[0].start], "during, start to end");
+    eq([of("10:44"), of("10:45"), of("10:50")], [runs[0].start, null, null], "under 30 minutes after it ended");
+    eq([of("09:36"), of("09:35"), of("09:20")], [runs[0].start, null, null], "under 10 minutes before it began");
+    eq(topUpRunFor(runs, Number.NaN, D("12:00")), null, "no time");
+  });
+  check("top-ups: a feed on the breast reaches now, and a break inside a feed is still that feed", () => {
+    const live = nursingRuns([fe("L 10:00-", { active: true })], D("10:20"));
+    eq(topUpRunFor(live, ms("10:18"), D("10:20"))?.start, live[0].start, "an SNS amount logged while she nurses");
+    const paused = nursingRuns([fe("L 10:00-10:10, R 10:16-10:30")], D("12:00"));
+    eq([paused.length, topUpRunFor(paused, ms("10:12"), D("12:00"))?.start], [1, paused[0].start], "on a 6-minute break");
+  });
+  check("top-ups: during wins over after, and after over before", () => {
+    // A feed ended 10:15; the next began 10:26: 10:30 is during the second, though under 30 minutes after the first.
+    const two = nursingRuns([fe("L 10:00-10:15"), fe("R 10:26-10:40")], D("12:00"));
+    eq([two.length, topUpRunFor(two, ms("10:30"), D("12:00"))?.start], [2, two[1].start]);
+    // A feed ended 10:15, the next begins 10:35: a bottle at 10:30 tops up the one before.
+    const apart = nursingRuns([fe("L 10:00-10:15"), fe("R 10:35-10:50")], D("12:00"));
+    eq(topUpRunFor(apart, ms("10:30"), D("12:00"))?.start, apart[0].start);
+  });
+  check("top-ups ride on their feed: never a feed, never a cluster member, never 'Last fed'", () => {
+    const sns = fe("L 07:00-07:08, R 07:08-07:15");
+    const bare = fe("L 09:45-10:00, R 10:00-10:15");
+    const entries = [sns, given("07:16", 30, { milk: "formula" }), bare, given("10:30", 35, { milk: "breastmilk" })];
+    const runs = nursingRuns(entries, D("10:40"));
+    eq(runs.map((r) => [r.topUps.map((b) => b.data.amount_ml), topUpMl(r)]), [[[30], 30], [[35], 35]]);
+    eq([...topUpIds(runs)], [entries[1].id, entries[3].id]);
+    eq(topUpMl({ topUps: [given("10:30")] }), null, "no amount");
+    eq(feedClusters(runs).length, 0);
+    const lf = lastFedAnchor(entries, D("10:40"), runs)!;
+    eq([lf.kind, clock(lf.at), lf.entry.id, lf.run?.topUps.length], ["breast", "09:45", bare.id, 1], "Last fed stays at the nursing start");
+    eq(countedFeeds(entries, D("10:40"), runs).map((f) => [clock(new Date(f.start).toISOString()), f.run ? "nursing" : "bottle"]), [["07:00", "nursing"], ["09:45", "nursing"]]);
+  });
+  check("a plan day: SNS feeds, bare breast with a pump and a top-up, and night bottles after a pump", () => {
+    const day = [
+      // Night: a pump, then a bottle of that milk topped up with formula: a feed of its own.
+      given("01:05", 50, { milk: "mixed" }),
+      given("04:05", 50, { milk: "mixed" }),
+      // SNS at 7:00, 12:30 and 18:00 (the amount logged as she finished); bare breast at 9:45, 15:15 and 20:45 with a
+      // top-up 15 minutes after.
+      fe("L 07:00-07:08, R 07:08-07:15"), given("07:15", 30, { milk: "formula" }),
+      fe("L 09:45-10:00, R 10:00-10:15"), given("10:30", 35, { milk: "breastmilk" }),
+      fe("L 12:30-12:38, R 12:38-12:45"), given("12:45", 30, { milk: "formula" }),
+      fe("L 15:15-15:30, R 15:30-15:45"), given("16:00", 35, { milk: "breastmilk" }),
+      fe("L 18:00-18:08, R 18:08-18:15"), given("18:15", 30, { milk: "formula" }),
+      fe("L 20:45-21:00, R 21:00-21:15"), given("21:30", 35, { milk: "breastmilk" }),
+    ];
+    const s = statsFor(day, D("00:00"), D("23:59"), "day", D("23:59"));
+    eq([s.feeds, s.breastFeeds, s.bottleFeeds, s.topUps, s.bottleMl, s.topUpMl], [8, 6, 2, 6, 295, 195]);
+    // Start to start, the night bottles and the nursing feeds: never "about every 45m".
+    const week = [...day, ...day.map((e) => ({ ...e, id: e.id + 100_000, started_at: shift(e.started_at, -1), ended_at: e.ended_at && shift(e.ended_at, -1), data: e.data.segments ? { ...e.data, segments: e.data.segments.map((x) => ({ ...x, start: shift(x.start, -1), end: x.end && shift(x.end, -1) })) } : e.data }))] as EntryOf<"feed">[];
+    eq(typicalFeedGapMin(week, D("23:59")), 165);
+    const parts = daySummaryParts(s, "metric");
+    eq(parts.slice(0, 3), ["8 feeds", "2h 15m nursing", "295 ml bottle (6 top-ups)"]);
+  });
+  check("describeEntry: a top-up reads as one", () => {
+    const b = given("10:30", 35, { milk: "breastmilk" });
+    eq(describeEntry(b, { units: "metric", topUp: true }).text, "Top-up · 35 ml · breast milk");
+    eq(describeEntry(b, { units: "metric" }).text, "Bottle · 35 ml · breast milk");
+  });
+  check("describeEntry: how a bottle was given and a Mixed bottle's split", () => {
+    const of = (data: Partial<FeedData>, topUp = false) => describeEntry({ ...given("10:30"), data: { method: "bottle", ...data } }, { units: "metric", topUp }).text;
+    eq(of({ amount_ml: 30, milk: "formula", via: "sns" }), "SNS · 30 ml · formula");
+    eq(of({ amount_ml: 30, milk: "formula", via: "sns" }, true), "Top-up · 30 ml · formula · SNS");
+    eq(of({ amount_ml: 35, milk: "breastmilk", via: "paced" }, true), "Top-up · 35 ml · breast milk · paced bottle");
+    eq(of({ amount_ml: 50, milk: "mixed", breastmilk_ml: 30, formula_ml: 20, via: "bottle" }), "Bottle · 50 ml · 30 ml breast milk + 20 ml formula");
+    eq(of({ amount_ml: 50, milk: "mixed", breastmilk_ml: 30, formula_ml: 20, via: "bottle" }, true), "Top-up · 50 ml · 30 ml breast milk + 20 ml formula · bottle");
+    eq(of({ milk: "mixed", formula_ml: 20 }), "Bottle · mixed, 20 ml formula");
+    eq(of({ amount_ml: 50, milk: "mixed" }), "Bottle · 50 ml · mixed");
+  });
+  check("milk by bottle: formula and breast milk from each bottle's milk and a Mixed one's parts", () => {
+    const d = (x: Partial<FeedData>): FeedData => ({ method: "bottle", ...x });
+    eq([bottleAmount(d({ amount_ml: 50 })), bottleAmount(d({ milk: "mixed", formula_ml: 20 })), bottleAmount(d({}))], [50, 20, null]);
+    eq(milkSplit(d({ amount_ml: 30, milk: "formula" })), { formula: 30, breastmilk: 0 });
+    eq(milkSplit(d({ amount_ml: 35, milk: "breastmilk" })), { formula: 0, breastmilk: 35 });
+    eq(milkSplit(d({ amount_ml: 50, milk: "mixed", breastmilk_ml: 30, formula_ml: 20 })), { formula: 20, breastmilk: 30 });
+    eq(milkSplit(d({ amount_ml: 50, milk: "mixed" })), { formula: 0, breastmilk: 0 }, "a Mixed bottle with no split: not said");
+    eq(milkSplit(d({ amount_ml: 50 })), { formula: 0, breastmilk: 0 }, "no milk said");
+    eq(topUpMl({ topUps: [{ ...given("10:30"), data: d({ milk: "mixed", formula_ml: 20 }) }] }), 20, "a top-up of parts only counts its parts");
+  });
+  check("a plan day's milk: formula and breast milk by bottle, top-ups included, and the day line", () => {
+    const day = [
+      fe("L 07:00-07:08, R 07:08-07:15"), given("07:15", 30, { milk: "formula" }),
+      fe("L 09:45-10:00, R 10:00-10:15"), given("10:30", 35, { milk: "breastmilk" }),
+      { ...given("13:05"), data: { method: "bottle", milk: "mixed", amount_ml: 50, breastmilk_ml: 30, formula_ml: 20 } } as EntryOf<"feed">,
+      given("16:00", 40),
+    ];
+    const s = statsFor(day, D("00:00"), D("23:59"), "day", D("23:59"));
+    eq([s.feeds, s.topUps, s.bottleMl, s.formulaMl, s.breastMilkMl], [4, 2, 155, 50, 65]);
+    eq(daySummaryParts(s, "metric").slice(2, 4), ["155 ml bottle (2 top-ups)", "50 ml formula"]);
+  });
+  check("a target per feed: only the family's own number, read, shown, typed and checked", () => {
+    eq(feedTargetOf({ feed_target_ml: { min: 45, max: 60 } }), { min: 45, max: 60 });
+    eq([feedTargetOf({}), feedTargetOf(null), feedTargetOf({ feed_target_ml: { min: 60, max: 45 } }), feedTargetOf({ feed_target_ml: "45-60" })], [null, null, null, null]);
+    eq([formatVolumeRange({ min: 45, max: 60 }, "metric"), formatVolumeRange({ min: 45, max: 60 }, "us"), formatVolumeRange({ min: 50, max: 50 }, "metric")], ["45–60 ml", "1.52–2.03 oz", "50 ml"]);
+    eq(formatVolumeRangeBoth({ min: 45, max: 60 }), "45–60 ml (1.52–2.03 oz)");
+    eq(feedTargetFrom("45", "60", "metric"), { min: 45, max: 60 });
+    eq(feedTargetFrom("60", "45", "metric"), { min: 45, max: 60 }, "either order");
+    eq(feedTargetFrom("50", "", "metric"), { min: 50, max: 50 }, "one amount is the whole target");
+    eq(feedTargetFrom("1.5", "2", "us"), { min: 44.4, max: 59.1 });
+    eq(feedTargetFrom(" ", "", "metric"), null);
+    let threw = "";
+    try { feedTargetFrom("4a", "", "metric"); } catch (e) { threw = (e as Error).message; }
+    eq(threw, "Enter the target per feed as ml, like 45 and 60");
+    const patch: Record<string, unknown> = { feed_target_ml: { min: 44.44, max: 59.15 } };
+    checkFeedTarget(patch);
+    eq(patch.feed_target_ml, { min: 44.4, max: 59.2 });
+    checkFeedTarget({ feed_target_ml: null });
+    checkFeedTarget({ other: 1 });
+    for (const bad of [{ min: 60, max: 45 }, { min: 2, max: 60 }, { min: 45, max: 400 }, { min: "45", max: 60 }, [45, 60], "45-60"]) {
+      let refused = false;
+      try { checkFeedTarget({ feed_target_ml: bad }); } catch { refused = true; }
+      ok(refused, `refused ${JSON.stringify(bad)}`);
+    }
+  });
+  check("cleanData: a Mixed bottle's split adds up; how it was given only on a bottle", () => {
+    const bottle = (d: Record<string, unknown>) => cleanData("feed", { method: "bottle", ...d });
+    eq(bottle({ milk: "mixed", breastmilk_ml: 30, formula_ml: 20 }), { method: "bottle", milk: "mixed", breastmilk_ml: 30, formula_ml: 20, amount_ml: 50 });
+    eq(bottle({ milk: "mixed", amount_ml: 50.4, breastmilk_ml: 29.6, formula_ml: 20.7 }).amount_ml, 50.3, "within a ml (oz rounding), the parts win");
+    eq(bottle({ milk: "mixed", amount_ml: 50, formula_ml: 20 }), { method: "bottle", amount_ml: 50, milk: "mixed", formula_ml: 20, breastmilk_ml: 30 });
+    eq(bottle({ milk: "mixed", amount_ml: 50, breastmilk_ml: 50 }).formula_ml, 0);
+    eq(bottle({ milk: "mixed", formula_ml: 20 }), { method: "bottle", milk: "mixed", formula_ml: 20 }, "no amount: the part alone");
+    eq(bottle({ milk: "formula", amount_ml: 50, formula_ml: 20, via: "paced" }), { method: "bottle", amount_ml: 50, milk: "formula", via: "paced" }, "only a Mixed bottle has a split");
+    eq(cleanData("feed", { method: "breast", left_sec: 60, via: "sns", breastmilk_ml: 10 }), { method: "breast", left_sec: 60 });
+    let threw = "";
+    try { bottle({ milk: "mixed", amount_ml: 60, breastmilk_ml: 30, formula_ml: 20 }); } catch (e) { threw = (e as Error).message; }
+    eq(threw, "amount_ml: The breast milk and formula add up to 50 ml, not the 60 ml total");
+    try { bottle({ milk: "mixed", amount_ml: 30, formula_ml: 40 }); } catch (e) { threw = (e as Error).message; }
+    eq(threw, "formula_ml: The formula is more than the whole 30 ml bottle");
+    try { bottle({ via: "spoon" }); } catch (e) { threw = (e as Error).message; }
+    ok(threw.startsWith("via: "), threw);
   });
 }
 

@@ -124,6 +124,40 @@ async function storeChecks(shape: Shape) {
     eq(await count(), n);
   });
 
+  await test(`${shape}: a Mixed bottle's split adds up through saves and edits, and how it was given is kept`, async () => {
+    const at = new Date(Date.now() - 2 * 3600_000);
+    // Keys sorted: the database keeps JSON's keys in its own order.
+    const data = async (id: number) => Object.fromEntries(Object.entries((await store.getEntry(B, id))!.data as Record<string, unknown>).sort(([x], [y]) => x.localeCompare(y)));
+    // Both parts make the amount; how it was given rides along.
+    const b = await store.createEntry(B, { babyId: beta.babyId, kind: "feed", startedAt: at, data: { method: "bottle", milk: "mixed", breastmilk_ml: 30, formula_ml: 20, via: "paced" }, createdBy: beta.owner, source: "web" });
+    eq(await data(b.id), { amount_ml: 50, breastmilk_ml: 30, formula_ml: 20, method: "bottle", milk: "mixed", via: "paced" });
+    // One part and a new amount give the other.
+    await store.updateEntry(B, b.id, { data: { amount_ml: 60, formula_ml: 25 } }, beta.owner);
+    const one = await data(b.id);
+    eq([one.amount_ml, one.breastmilk_ml, one.formula_ml], [60, 35, 25]);
+    // A new amount with no split drops the old one (it no longer adds up).
+    await store.updateEntry(B, b.id, { data: { amount_ml: 45 } }, beta.owner);
+    const two = await data(b.id);
+    eq([two.amount_ml, two.breastmilk_ml, two.formula_ml, two.via], [45, undefined, undefined, "paced"]);
+    // Both parts and no amount: the amount is their sum.
+    await store.updateEntry(B, b.id, { data: { breastmilk_ml: 25, formula_ml: 25 } }, beta.owner);
+    eq((await data(b.id)).amount_ml, 50);
+    await store.updateEntry(B, b.id, { data: { amount_ml: 45 } }, beta.owner);
+    // Parts that don't add up to the amount sent with them are refused, and nothing changes.
+    let refused = "";
+    try {
+      await store.updateEntry(B, b.id, { data: { amount_ml: 60, breastmilk_ml: 10, formula_ml: 10 } }, beta.owner);
+    } catch (err) {
+      refused = err instanceof Error ? err.message : String(err);
+    }
+    ok(/add up to 20 ml, not the 60 ml total/.test(refused), refused);
+    eq((await data(b.id)).amount_ml, 45);
+    // A split or a way of giving on a nursing feed means nothing: dropped.
+    const n = await store.createEntry(B, { babyId: beta.babyId, kind: "feed", startedAt: at, endedAt: new Date(at.getTime() + 10 * 60_000), data: { method: "breast", left_sec: 600, via: "sns", formula_ml: 10 }, createdBy: beta.owner, source: "web" });
+    const nursed = await data(n.id);
+    eq([nursed.via, nursed.formula_ml], [undefined, undefined]);
+  });
+
   await test(`${shape}: a client_id replay returns the caller's own save, never another family's`, async () => {
     const at = new Date(Date.now() - 3600_000);
     const replay = await store.createEntryOnce(A, { babyId: alpha.babyId, kind: "diaper", startedAt: at, data: { poop: true }, createdBy: alpha.owner, source: "web", clientId: alpha.entryClientId });

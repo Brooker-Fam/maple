@@ -11,9 +11,12 @@
 import {
   feedClusters,
   feedMinutes,
+  bottleAmount,
   lastFedAnchor,
+  milkSplit,
   nextSideFor,
   nursingRuns,
+  topUpIds,
   type FeedCluster,
   type LastFed,
   type NextSide,
@@ -57,11 +60,15 @@ export type DayStats = {
   /**
    * Feeds as the family counts them: nursing by the 10-minute rule
    * (nursingRuns: Pause or Done alike, a 10+ minute break starts a new feed)
-   * plus each bottle, counted on the day each began.
+   * plus each bottle given on its own, counted on the day each began. A
+   * bottle given with nursing is that feed's top-up, not a feed.
    */
   feeds: number;
   breastFeeds: number;
+  /** Bottles given on their own (each a feed). */
   bottleFeeds: number;
+  /** Bottles given with nursing (feed.ts TOP_UP_AFTER_MS): part of those feeds, never counted as feeds. */
+  topUps: number;
   /** Of breastFeeds, how many were in a cluster ("11 · 4 in a cluster"). */
   clusterFeeds: number;
   /** Clusters that began in the window ("11 feeds (one cluster)"). */
@@ -75,7 +82,17 @@ export type DayStats = {
   rightSec: number;
   /** Back and forth (both sides, not tracked): part of nursingSec, never of leftSec or rightSec. */
   bothSec: number;
+  /** Every bottle's amount, top-ups too, on the day each was given. */
   bottleMl: number;
+  /** Of bottleMl, the top-ups'. */
+  topUpMl: number;
+  /**
+   * Of bottleMl, what was formula and what breast milk (feed.ts milkSplit): a
+   * formula or breast milk bottle's amount, a Mixed bottle's parts; the rest
+   * wasn't said.
+   */
+  formulaMl: number;
+  breastMilkMl: number;
   pumpMl: number;
   pumpSessions: number;
   pumpMeasuredSessions: number;
@@ -167,12 +184,16 @@ export type Summary = {
 export const isVitaminD = (name: string) =>
   /vit(amin)?[\s.-]*d\b|vit(amin)?[\s.-]*d3|\bd3\b|\bd\s*drops?\b|ddrops|(d|tri|poly)[- ]?vi[- ]?sol|cholecalciferol|sunshine/i.test(name);
 
+/** Of a day's bottle amount, the bottles given on their own (not top-ups), to the tenth of a ml. */
+export const soloBottleMl = (d: Pick<DayStats, "bottleMl" | "topUpMl">): number => Math.max(0, Math.round((d.bottleMl - d.topUpMl) * 10) / 10);
+
 function emptyStats(key: string): DayStats {
   return {
     key,
     feeds: 0,
     breastFeeds: 0,
     bottleFeeds: 0,
+    topUps: 0,
     clusterFeeds: 0,
     clusters: 0,
     nursingSec: 0,
@@ -180,6 +201,9 @@ function emptyStats(key: string): DayStats {
     rightSec: 0,
     bothSec: 0,
     bottleMl: 0,
+    topUpMl: 0,
+    formulaMl: 0,
+    breastMilkMl: 0,
     pumpMl: 0,
     pumpSessions: 0,
     pumpMeasuredSessions: 0,
@@ -210,13 +234,15 @@ function overlapSec(a: number, b: number, lo: number, hi: number): number {
  * that carries on one from 11:55 PM counts, minutes and all, on the day it
  * began); pass `runs` worked out from every loaded entry when `entries` is
  * only this window's, so a feed that began before the window isn't counted
- * again in it.
+ * again in it, and a top-up after it is still its top-up. A bottle is a feed
+ * only on its own; a top-up adds its amount, never a feed.
  */
 export function statsFor(entries: Entry[], from: Date, to: Date, key: string, now: Date, runs?: readonly NursingRun[]): DayStats {
   const s = emptyStats(key);
   const lo = from.getTime();
   const hi = to.getTime();
   const all = runs ?? nursingRuns(entries, now);
+  const topUp = topUpIds(all);
   const clustersSeen = new Set<number>();
   for (const r of all) {
     if (r.cluster !== null && !clustersSeen.has(r.cluster)) {
@@ -241,11 +267,20 @@ export function statsFor(entries: Entry[], from: Date, to: Date, key: string, no
     switch (e.kind) {
       case "feed": {
         if (!inWindow) break;
-        // Nursing is counted above, as runs.
+        // Nursing is counted above, as runs (a top-up with its feed).
         if (e.data.method === "bottle") {
-          s.feeds++;
-          s.bottleFeeds++;
-          s.bottleMl += e.data.amount_ml ?? 0;
+          const ml = bottleAmount(e.data) ?? 0;
+          const milk = milkSplit(e.data);
+          s.formulaMl += milk.formula;
+          s.breastMilkMl += milk.breastmilk;
+          if (topUp.has(e.id)) {
+            s.topUps++;
+            s.topUpMl += ml;
+          } else {
+            s.feeds++;
+            s.bottleFeeds++;
+          }
+          s.bottleMl += ml;
         }
         break;
       }

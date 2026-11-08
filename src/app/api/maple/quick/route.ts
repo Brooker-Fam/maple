@@ -7,7 +7,7 @@ import { aheadOfSlot, careTime, countedAs, matchPlan, pressingFirst, type PlanMa
 import { momSpeak, samePlans, spokenLine } from "@/lib/maple/care-mcp";
 import { carePersonName, carePlanViews, careSession, logCareDose, planDoses } from "@/lib/maple/care-store";
 import { describeEntry } from "@/lib/maple/describe";
-import { openSegment, staleFeed } from "@/lib/maple/feed";
+import { nursingRuns, openSegment, staleFeed } from "@/lib/maple/feed";
 import { LABEL_NOT_WHILE_NURSING, MOM_HELP, MOM_TIER_LABEL, TIER_LABEL, VITAMIN_D_DEFAULT } from "@/lib/maple/guidelines";
 import { memberName, summarize } from "@/lib/maple/insights";
 import { lastFedSpeak } from "@/lib/maple/mcp-tools";
@@ -302,7 +302,10 @@ export async function POST(request: NextRequest) {
         const r = await createEntryOnce(fam, { ...base, kind: "feed", startedAt: now, data, clientId });
         entry = r.entry;
         if (!r.deduped) await rememberAct(qc, "entry", [wrote("entry", r.entry)]);
-        speak = `Logged a ${"amount_ml" in data ? `${oz} ounce ` : ""}bottle at ${at}.`;
+        // Given with a nursing feed, it's that feed's top-up (feed.ts), and Siri says so.
+        const near = await listEntries(fam, { babyId: baby.id, kinds: ["feed"], from: new Date(now.getTime() - 12 * 3600_000), to: new Date(now.getTime() + 60_000), includeActive: true, limit: 500 });
+        const fed = nursingRuns(near, now).find((x) => x.topUps.some((b) => b.id === r.entry.id));
+        speak = `Logged a ${"amount_ml" in data ? `${oz} ounce ` : ""}bottle at ${at}${fed ? `, a top-up for the ${formatTime(fed.start, tz)} feed` : ""}.`;
         break;
       }
       case "status": {

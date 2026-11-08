@@ -444,6 +444,23 @@ export async function updateEntry(fam: FamilyRef, id: number, patch: EntryPatch,
     mergedData = { ...mergedData, ...incoming };
     for (const [k, v] of Object.entries(incoming)) if (v === null) delete mergedData[k];
   }
+  // A Mixed bottle's split and its amount describe each other (validate.ts bottleParts works out what's missing), so
+  // an edit keeps only what it sent of the three: both parts make the amount, one part leaves the other to be worked
+  // out from the amount, and a new amount or milk sent without a split drops the old one (as the pump form's sides).
+  if (cur.kind === "feed" && patch.data && mergedData.method === "bottle") {
+    const sent = (k: string) => k in patch.data!;
+    const given = (k: string) => patch.data![k] != null;
+    const b = given("breastmilk_ml");
+    const f = given("formula_ml");
+    if (b && f) {
+      if (!sent("amount_ml")) delete mergedData.amount_ml;
+    } else if (b || f) {
+      if (!sent(b ? "formula_ml" : "breastmilk_ml")) delete mergedData[b ? "formula_ml" : "breastmilk_ml"];
+    } else if ((sent("amount_ml") || sent("milk")) && !sent("breastmilk_ml") && !sent("formula_ml")) {
+      delete mergedData.breastmilk_ml;
+      delete mergedData.formula_ml;
+    }
+  }
   // Editing a finished nursing session's side minutes replaces its segments.
   if (
     cur.kind === "feed" &&

@@ -8,6 +8,8 @@ import { timeCases } from "./time-cases.mjs";
 import { handoffCases } from "./handoff-cases.mjs";
 import { amountCases } from "./amount-cases.mjs";
 import { bottleReviewCases } from "./bottle-review-cases.mjs";
+import { topUpCases } from "./top-up-cases.mjs";
+import { bottleMethodCases } from "./bottle-method-cases.mjs";
 import { pumpReviewCases } from "./pump-review-cases.mjs";
 import { volumeBoundaryCases } from "./volume-boundary-cases.mjs";
 import { pumpSummaryCases } from "./pump-summary-cases.mjs";
@@ -95,6 +97,8 @@ const localDay = (at, timezone) => {
 const cases = [
   ...amountCases({ fixture, record, writes, assert }),
   ...bottleReviewCases({ fixture, freshState, record, writes, assert }),
+  ...topUpCases({ fixture, freshState, record, writes, assert }),
+  ...bottleMethodCases({ fixture, freshState, record, writes, assert }),
   ...pumpReviewCases({ fixture, freshState, record, writes, assert }),
   ...volumeBoundaryCases({ fixture, freshState, record, writes, assert }),
   ...pumpSummaryCases({ fixture, freshState, record, writes, assert }),

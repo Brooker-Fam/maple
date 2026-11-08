@@ -14,10 +14,10 @@ const declarations = names.map((name) => source.statements.find((node) => ts.isF
 const pumpImports = source.statements.filter((node) => ts.isImportDeclaration(node) && node.moduleSpecifier.text === "./pump-summary").map((node) => node.getText(source));
 const compiled = await build({
   stdin: { loader: "ts", resolveDir: path.join(root, "src/lib/maple"), contents: `
-    import { statsFor, dailyStats, isVitaminD } from "./insights";
-    import { nursingRuns } from "./feed";
+    import { statsFor, dailyStats, isVitaminD, soloBottleMl } from "./insights";
+    import { countedFeeds, nursingRuns } from "./feed";
     import { addDays, babyAge, dayBounds, dayKey, startOfDay, formatDayLabel, formatDuration } from "./time";
-    import { formatVolumeBoth } from "./units";
+    import { feedTargetOf, formatVolumeBoth, formatVolumeRangeBoth } from "./units";
     import { voiceFor } from "./voice";
     ${pumpImports.join("\n")}
     const HOUR = 3600000, MIN = 60000;

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { listMembers } from "@/lib/maple/auth";
 import { withMember } from "@/lib/maple/api";
 import { describeEntry } from "@/lib/maple/describe";
+import { nursingRuns, topUpIds } from "@/lib/maple/feed";
 import { memberName } from "@/lib/maple/insights";
 import { milestoneWordsOf } from "@/lib/maple/milestones";
 import { getBaby, listEntries, toClientEntry } from "@/lib/maple/store";
@@ -33,11 +34,14 @@ export const GET = withMember("GET /api/maple/export", async (_request, _me, ctx
   const words = milestoneWordsOf(ctx.familyId, baby);
   const header = ["id", "date", "start", "end", "minutes", "kind", "summary", "note", "logged_by", "via", "data_json"];
   const lines = [header.map(csvCell).join(",")];
+  const exportedAt = new Date();
+  // A bottle given with a nursing feed reads "Top-up" (feed.ts), as in the app.
+  const topUps = topUpIds(nursingRuns(entries.map(toClientEntry), exportedAt));
   for (const raw of entries) {
     const e = toClientEntry(raw);
     const start = new Date(e.started_at);
     const end = e.ended_at ? new Date(e.ended_at) : null;
-    const d = describeEntry(e, { units: "us", words });
+    const d = describeEntry(e, { units: "us", words, topUp: topUps.has(e.id) });
     lines.push(
       [
         e.id,

@@ -35,6 +35,7 @@ export default function EntryRow({
   onClick,
   showRelative = false,
   quietAction = false,
+  topUp = false,
   now,
 }: {
   entry: Entry;
@@ -46,12 +47,14 @@ export default function EntryRow({
    * the title's line. The whole row is still the tap, and its accessible name still says what the tap does.
    */
   quietAction?: boolean;
+  /** A bottle given with a nursing feed (feed.ts topUpIds): it reads "Top-up". The list works it out from its own entries. */
+  topUp?: boolean;
   now: Date;
 }) {
   const { units, state, member, readOnly } = useMaple();
   const words = useMilestoneWords();
   const tz = state?.baby.timezone ?? "America/New_York";
-  const d = describeEntry(entry, { units, now, words });
+  const d = describeEntry(entry, { units, now, words, topUp });
   const who = member(entry.created_by);
   const firstPhoto = entry.kind === "moment" && entry.data.photos?.length && entry.id > 0;
 

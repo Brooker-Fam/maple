@@ -4,7 +4,7 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { describeEntry } from "@/lib/maple/describe";
 import { clockContains, clockFraction, clockSpans } from "@/lib/maple/clock-spans";
-import { clusterLine, feedClusters, feedGaps, nursingRuns, type FeedCluster } from "@/lib/maple/feed";
+import { clusterLine, feedClusters, feedGaps, nursingRuns, topUpIds, type FeedCluster } from "@/lib/maple/feed";
 import { diaperTargets, FEEDS_PER_DAY, STOOL_COLOR_INFO, tummyGoalMinutes } from "@/lib/maple/guidelines";
 import { statsFor } from "@/lib/maple/insights";
 import { nursingSpans } from "@/lib/maple/nursing-spans";
@@ -298,6 +298,8 @@ export default function DayDial({ activity = "all" }: { activity?: PatternActivi
   const dots = activity === "all" || activity === "diapers" ? marks.dots : [];
   // One set of numbers for the dial's label and the tallies below, from the same entries and window.
   const runs = useMemo(() => nursingRuns(source, now), [source, now]);
+  // Bottles given with a feed read "Top-up" (feed.ts), as on the Timeline.
+  const topUps = useMemo(() => topUpIds(runs), [runs]);
   const stats = useMemo(() => statsFor(source, new Date(lo), new Date(hi), dayView ?? "last24h", now, runs), [source, lo, hi, dayView, now, runs]);
   // Every time on the breast and every bottle, with the time since the one before (start to start), for Between feeds.
   const steps = useMemo(() => feedGaps(source, now, runs), [source, now, runs]);
@@ -734,7 +736,7 @@ export default function DayDial({ activity = "all" }: { activity?: PatternActivi
                 {selectedItems.length ? (
                   <div className={cx(tone.divide, "max-h-[320px] overflow-y-auto overscroll-contain border-t border-mp-line")}>
                     {selectedItems.map((entry) => {
-                      const description = describeEntry(entry, { units, now, words });
+                      const description = describeEntry(entry, { units, now, words, topUp: topUps.has(entry.id) });
                       return (
                         <div key={entry.id} className="flex items-start gap-2.5 px-4 py-3">
                           <KindBadge entry={entry} size={30} />
@@ -762,7 +764,7 @@ export default function DayDial({ activity = "all" }: { activity?: PatternActivi
             {brackets.length > 0 && <ul className={cx(tone.muted, "space-y-1 px-3 pb-2 text-[12px]")}>{[...new Map(brackets.map(({ c }) => [c.start, c])).values()].map((cluster) => <li key={cluster.start}>{clusterLine(cluster, tz)}</li>)}</ul>}
             {plotted.length ? <div className={cx(tone.divide, "max-h-[280px] overflow-y-auto overscroll-contain")}>
               {[...plotted].sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at)).map((entry) => {
-                const description = describeEntry(entry, { units, now, words });
+                const description = describeEntry(entry, { units, now, words, topUp: topUps.has(entry.id) });
                 return <button
                   key={entry.id}
                   type="button"

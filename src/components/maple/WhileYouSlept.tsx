@@ -3,7 +3,7 @@
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
 import { describeEntry } from "@/lib/maple/describe";
-import { nursingRuns } from "@/lib/maple/feed";
+import { countedFeeds } from "@/lib/maple/feed";
 import { STOOL_COLOR_INFO } from "@/lib/maple/guidelines";
 import { isVitaminD } from "@/lib/maple/insights";
 import { DEFAULT_TZ, formatDuration, formatTime, localParts } from "@/lib/maple/time";
@@ -66,15 +66,15 @@ export default function WhileYouSlept() {
   );
   if (!fresh.length) return null;
 
-  // Finished feeds as the family counts them (nursingRuns: Done and a side again under 10 minutes apart is one feed,
-  // as on Today's tally and in Claude's recap), plus each bottle; one still going is "Nursing now", not counted as done.
-  const done = fresh.filter((e) => e.kind === "feed" && !e.active);
-  const feedStarts = [
-    ...nursingRuns(done, now())
-      .filter((r) => r.start >= since)
-      .map((r) => r.start),
-    ...done.filter((e) => e.kind === "feed" && e.data.method === "bottle").map((e) => Date.parse(e.started_at)),
-  ].sort((a, b) => b - a);
+  // Finished feeds as the family counts them (countedFeeds: Done and a side again under 10 minutes apart is one feed,
+  // as on Today's tally and in Claude's recap), plus each bottle on its own; one still going is "Nursing now", not
+  // counted as done. A bottle given with a feed is its top-up whoever logged the feed, so feeds are worked out from
+  // every finished one, then kept when the others logged them.
+  const theirs = new Set(fresh.map((e) => e.id));
+  const feedStarts = countedFeeds(state.entries.filter((e) => e.kind === "feed" && !e.active && e.id > 0), now())
+    .filter((f) => f.start >= since && (f.run ? f.run.entries.some((e) => theirs.has(e.id)) : theirs.has(f.bottle.id)))
+    .map((f) => f.start)
+    .sort((a, b) => b - a);
   const nursing = fresh.find((e) => e.kind === "feed" && e.active);
   const diapers = fresh.filter((e) => e.kind === "diaper").sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
   const wet = diapers.filter((e) => e.kind === "diaper" && e.data.pee).length;

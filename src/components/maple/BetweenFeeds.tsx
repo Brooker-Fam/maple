@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, type ReactNode } from "react";
-import { gapSummary, minutesShort, sideMinutesText, spanText, stepsIn, type GapStep, type Latch } from "@/lib/maple/feed";
+import { bottleAmount, gapSummary, minutesShort, sideMinutesText, spanText, stepsIn, topUpMl, type GapStep, type Latch } from "@/lib/maple/feed";
 import { dayKey, formatDayLabel, formatDuration, formatTime } from "@/lib/maple/time";
 import type { UnitSystem } from "@/lib/maple/types";
 import { formatVolume } from "@/lib/maple/units";
@@ -19,7 +19,8 @@ import { HowToRead, cx, tone } from "./ui";
  * Rows come from feed.ts feedGaps: coming off for under 2 minutes is the
  * same row, any longer and going back on is a new one, whatever was tapped.
  * Back on within 10 minutes is still one feed on Today and in the counts, so
- * its row says "back on after 6m". A cluster is a shaded band, never folded,
+ * its row says "back on after 6m"; a top-up is part of its feed, so it rides
+ * on that row ("+ 35 ml top-up"), never a row or a gap of its own. A cluster is a shaded band, never folded,
  * so its gaps show too. The time on the breast just before the window leads,
  * quieter, so a day's first gap (from the evening before) shows. It only
  * describes what was logged: no targets, no scores, and over 12 hours
@@ -45,15 +46,20 @@ function sidesText(latch: Latch): string {
   return sideMinutesText(latch.min);
 }
 
-/** A row's words: what it was, then its sides, and how soon she was back on when that's the same feed. */
+/** A row's words: what it was, then its sides, a top-up given with it (as Today says it), and how soon she was back on. */
 function feedWords(step: GapStep, units: UnitSystem): { main: string; more: string[] } {
   if (step.feed.kind === "bottle") {
-    const ml = step.feed.entry.data.amount_ml;
+    const ml = bottleAmount(step.feed.entry.data);
     return { main: ml ? `Bottle · ${formatVolume(ml, units)}` : "Bottle", more: [] };
   }
   const latch = step.feed.latch;
   const total = minutesShort(latch.min.total);
-  const more = [sidesText(latch), step.backOnMin !== null ? `back on after ${minutesShort(step.backOnMin)}` : ""].filter(Boolean);
+  const topUp = latch.topUps.length ? topUpMl(latch) : undefined;
+  const more = [
+    sidesText(latch),
+    topUp === undefined ? "" : topUp !== null ? `+ ${formatVolume(topUp, units)} top-up` : "+ top-up",
+    step.backOnMin !== null ? `back on after ${minutesShort(step.backOnMin)}` : "",
+  ].filter(Boolean);
   return { main: latch.end === null ? `Nursing · ${total} so far` : `Nursed ${total}`, more };
 }
 
@@ -239,7 +245,7 @@ export default function BetweenFeeds({
         {rows}
       </ol>
       <HowToRead className="border-t border-mp-line px-4">
-        <p>Each row is a time on the breast, or a bottle. Between rows is the time from one start to the next start. Coming off for under 2 minutes, like switching sides, stays on the same row.</p>
+        <p>Each row is a time on the breast, or a bottle on its own. Between rows is the time from one start to the next start. Coming off for under 2 minutes, like switching sides, stays on the same row, and a top-up given with nursing is on its row.</p>
         <p>Back on within 10 minutes counts as the same feed on Today and in the feed counts. Here it gets its own row, marked &ldquo;back on after&rdquo;, so that gap shows too.</p>
         <p>A shaded band is a cluster: 3 or more feeds, each starting less than 30 minutes after the last one ended.</p>
         <p>Only what was logged counts. Over 12 hours between two logged feeds is left out of the numbers, in case a feed wasn&apos;t logged.</p>

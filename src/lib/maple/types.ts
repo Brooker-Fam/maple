@@ -44,6 +44,10 @@ export type TimerKind = (typeof TIMER_KINDS)[number];
 
 export type Segment = { side: StretchSide; start: string; end: string | null };
 
+/** How a bottle's milk was given: a bottle, a paced bottle, or an SNS (supplementer) at the breast. */
+export const BOTTLE_VIAS = ["bottle", "paced", "sns"] as const;
+export type BottleVia = (typeof BOTTLE_VIAS)[number];
+
 /** Names one stretch on a side by its side and start, matched within ±1.5 s so it survives re-saves. */
 export type StretchRef = { side: StretchSide; start: string };
 
@@ -61,6 +65,14 @@ export type FeedData = {
   /** Bottle volume. */
   amount_ml?: number;
   milk?: "breastmilk" | "formula" | "mixed";
+  /**
+   * Mixed: how much of it was breast milk and how much formula (validate.ts
+   * keeps them adding up to amount_ml). Only on a Mixed bottle.
+   */
+  breastmilk_ml?: number;
+  formula_ml?: number;
+  /** How the milk was given (BOTTLE_VIAS): a bottle, a paced bottle, or an SNS at the breast. Absent: not said. */
+  via?: BottleVia;
   /**
    * Stopped while paused: the feed ended when she came off (ended_at = the
    * last segment's end), and reopening brings it back paused. Feeds stopped

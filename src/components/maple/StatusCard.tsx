@@ -3,10 +3,10 @@
 import { useVoice } from "./familyWords";
 import { AnimatePresence, motion } from "framer-motion";
 import { Fragment, useState } from "react";
-import { lastFedRule, minutesShort, spanText, typicalFeedGapMin, type NextSide as NextSideInfo, type NursingRun } from "@/lib/maple/feed";
+import { lastFedRule, minutesShort, spanText, topUpMl, typicalFeedGapMin, type NextSide as NextSideInfo, type NursingRun } from "@/lib/maple/feed";
 import type { DayStats, Summary } from "@/lib/maple/insights";
 import { DEFAULT_TZ, formatDuration, formatRelative, formatTime } from "@/lib/maple/time";
-import { formatVolume } from "@/lib/maple/units";
+import { feedTargetOf, formatVolume, formatVolumeRange } from "@/lib/maple/units";
 import type { Side, StretchSide } from "@/lib/maple/types";
 import { Icon, type IconName } from "./icons";
 import { useNightActive } from "./nightLook";
@@ -156,11 +156,19 @@ export default function StatusCard() {
       bits.push(spanText(cluster.start, cluster.end, tz), `${cluster.feeds} feeds`, `nursed ${minutesShort(cluster.min.total)}`);
     } else if (last.data.method === "bottle") {
       bits.push(last.data.amount_ml ? `${formatVolume(last.data.amount_ml, units)} bottle` : "bottle");
+      // A bottle on its own is the whole feed: its care team's target, when they gave one, sits beside it.
+      const target = feedTargetOf(state.baby.settings);
+      if (target) bits.push(`target ${formatVolumeRange(target, units)}`);
     } else if (fed?.run) {
       const run = fed.run;
       if (run.min.total) bits.push(minutesShort(run.min.total));
       const sides = sidesLabel(run);
       if (sides) bits.push(sides);
+      // A bottle given with it is part of this feed: "+ 35 ml top-up".
+      if (run.topUps.length) {
+        const ml = topUpMl(run);
+        bits.push(ml != null ? `+ ${formatVolume(ml, units)} top-up` : "+ top-up");
+      }
     }
     feedSub = bits;
   }
@@ -365,7 +373,9 @@ export function Tallies({
   const both = s.bothSec >= 60 ? `both ${formatDuration(s.bothSec)}` : null;
 
   // Each count's bar fills toward the usual number for her day of life (the footnote says what that is).
-  // Feeds count each feed in a cluster (split by 10+ minutes off the breast): "11 · 4 in a cluster".
+  // Feeds count each feed in a cluster (split by 10+ minutes off the breast): "11 · 4 in a cluster". A top-up is part of
+  // its feed, never one of its own: "8 · 6 top-ups".
+  const topUps = s.topUps ? `${s.topUps} top-up${s.topUps === 1 ? "" : "s"}` : null;
   const tiles: { key: string; label: string; value: string; goal: number | null; have: number; color: string; note?: string; aria?: string }[] = [
     {
       key: "feeds",
@@ -374,8 +384,8 @@ export function Tallies({
       have: s.feeds,
       goal: t ? t.feeds[0] : null,
       color: DETAIL_COLOR.nursing,
-      note: s.clusterFeeds ? `${s.clusterFeeds} in a cluster` : undefined,
-      aria: s.clusterFeeds ? `${s.feeds} feeds, ${s.clusterFeeds} in a cluster` : undefined,
+      note: s.clusterFeeds ? `${s.clusterFeeds} in a cluster` : topUps ?? undefined,
+      aria: s.clusterFeeds ? `${s.feeds} feeds, ${s.clusterFeeds} in a cluster` : topUps ? `${s.feeds} feeds, with ${topUps}` : undefined,
     },
     { key: "wet", label: "Wet", value: String(s.wet), have: s.wet, goal: t?.wet ?? null, color: DETAIL_COLOR.pee },
     { key: "dirty", label: "Dirty", value: String(s.dirty), have: s.dirty, goal: t?.dirty ?? null, color: DETAIL_COLOR.poop },
@@ -406,7 +416,8 @@ export function Tallies({
       below: both ? [split, both].filter(Boolean).join(" · ") : null,
       value: formatDuration(s.nursingSec),
     },
-    s.bottleMl > 0 && { icon: "bottle", color: DETAIL_COLOR.bottle, label: "By bottle", detail: null, value: formatVolume(s.bottleMl, units) },
+    // Every bottle's amount, top-ups too, with the formula in it when any was logged.
+    s.bottleMl > 0 && { icon: "bottle", color: DETAIL_COLOR.bottle, label: "By bottle", detail: s.formulaMl > 0 ? `${formatVolume(s.formulaMl, units)} formula` : null, value: formatVolume(s.bottleMl, units) },
     s.pumpMl > 0 && { icon: "milk", color: KIND_COLOR.pump, label: "Pumped", detail: null, value: formatVolume(s.pumpMl, units) },
   ].filter(Boolean) as { icon: IconName; color: string; label: string; detail: string | null; below?: string | null; value: string }[];
 

@@ -524,7 +524,7 @@ try {
 
     // Yesterday, whole: a cluster is a shaded band with every one of its gaps, never folded.
     await page.getByRole("radio", { name: "Yesterday", exact: true }).click();
-    assert.match(await text(list), /2h 25m until the next start 2:40 PM Bottle · 2\.03 oz 1h 50m until the next start Cluster 4:30–6:20 PM · 4 feeds 4:30 PM Nursed 15m · Left 35m until the next start 5:05 PM Nursed 10m · Right 30m until the next start 5:35 PM Nursed 15m · Left 35m until the next start 6:10 PM Nursed 10m · Right 2h 35m until the next start 8:45 PM/);
+    assert.match(await text(list), /2h 25m until the next start 2:40 PM Bottle · 2\.03 oz 1h 50m until the next start Cluster 4:30–6:20 PM · 4 feeds 4:30 PM Nursed 15m · Left 35m until the next start 5:05 PM Nursed 10m · Right 30m until the next start 5:35 PM Nursed 15m · Left 35m until the next start 6:10 PM Nursed 10m · Right 2h 35m until the next start 8:45 PM Nursed 25m · Left · \+ 1\.01 oz top-up 2h 35m until the next start 11:20 PM/);
     assert.equal(await text(card.locator("dl")), "Under 1 hour 4 1 to 2 hours 2 2 to 3 hours 6 3 to 4 hours 1 4 hours or more 0");
     await card.scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(screenshots, "between-feeds-375-yesterday.png"), fullPage: true });

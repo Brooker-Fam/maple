@@ -68,20 +68,22 @@ if (query.has("lateCluster")) {
   }
 }
 // An ordinary newborn feeding day, made up: sides switched a minute apart, back on 6 minutes after coming off (one
-// feed as counted, two rows in Between feeds), back and forth, a bottle, and an evening cluster of four. Every day from two days back, up to now.
+// feed as counted, two rows in Between feeds), back and forth, a bottle, an evening cluster of four, and a top-up
+// 10 minutes after a feed (part of it: no row of its own). Every day from two days back, up to now.
 if (query.has("feedingDay")) {
   entries.splice(0);
   const at = (date, clock) => { const { year, month, day } = parseDayKey(date); const [hour, minute] = clock.split(":").map(Number); return zonedTimeToUtc(year, month, day, hour, minute, TZ).toISOString(); };
   const feedDay = [
     ["L 00:40-00:58"], ["R 03:35-03:50, L 03:51-04:05"], ["B 06:50-07:25", "L"], ["L 09:30-09:50"], ["R 09:56-10:04"], ["R 12:15-12:35"],
-    ["bottle 14:40"], ["L 16:30-16:45"], ["R 17:05-17:15"], ["L 17:35-17:50"], ["R 18:10-18:20"], ["L 20:45-21:10"], ["R 23:20-23:40"],
+    ["bottle 14:40"], ["L 16:30-16:45"], ["R 17:05-17:15"], ["L 17:35-17:50"], ["R 18:10-18:20"], ["L 20:45-21:10"], ["bottle 21:20 30"], ["R 23:20-23:40"],
   ];
   for (const offset of [-2, -1, 0]) {
     const date = addDays(TODAY, offset);
     for (const [spec, first] of feedDay) {
       if (spec.startsWith("bottle")) {
-        const start = at(date, spec.split(" ")[1]);
-        if (Date.parse(start) <= Date.parse(NOW)) entries.push({ id: ++nextId, kind: "feed", started_at: start, ended_at: start, active: false, data: { method: "bottle", amount_ml: 60 }, note: null, source: "app", created_by: MEMBER.email, updated_by: null, created_at: NOW, updated_at: NOW });
+        const [, clock, ml = "60"] = spec.split(" ");
+        const start = at(date, clock);
+        if (Date.parse(start) <= Date.parse(NOW)) entries.push({ id: ++nextId, kind: "feed", started_at: start, ended_at: start, active: false, data: { method: "bottle", amount_ml: Number(ml) }, note: null, source: "app", created_by: MEMBER.email, updated_by: null, created_at: NOW, updated_at: NOW });
         continue;
       }
       const segments = spec.split(",").map((part) => { const [side, range] = part.trim().split(" "); const [a, b] = range.split("-"); return { side, start: at(date, a), end: at(date, b) }; });

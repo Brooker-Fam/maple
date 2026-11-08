@@ -2,6 +2,7 @@
 
 import { AnimatePresence } from "framer-motion";
 import { useEffect, useRef } from "react";
+import { nursingRuns, topUpIds } from "@/lib/maple/feed";
 import { dayKey, formatClock, formatDuration } from "@/lib/maple/time";
 import AlertStack from "./AlertCard";
 import AccountMenu from "./AccountMenu";
@@ -41,6 +42,8 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
   const born = !!state.baby.born_at;
   const nothingYet = state.entries.length === 0;
   const recent = state.entries.filter((e) => !e.active).slice(0, 3);
+  // A bottle given with a feed reads "Top-up" (feed.ts), worked out from every loaded entry.
+  const topUps = recent.some((e) => e.kind === "feed" && e.data.method === "bottle") ? topUpIds(nursingRuns(state.entries, now)) : null;
   const timing = summary.active.length > 0;
   // A bassinet try or someone holding her awake: shown on every family phone, in Right now.
   const sleepNow = !!state.sleep && (state.sleep.tries.some((t) => !t.ended_at) || state.sleep.shifts.some((x) => !x.ended_at));
@@ -123,7 +126,7 @@ export default function TodayTab({ onNavigate }: { onNavigate: (t: NavTarget) =>
               </div>
               <div className={cx(tone.card, tone.divide, "overflow-hidden")}>
                 {recent.map((e) => (
-                  <EntryRow key={e.id} entry={e} now={now} showRelative quietAction onClick={() => open({ kind: e.kind, entry: e, preset: entryEditPreset(e, readOnly) })} />
+                  <EntryRow key={e.id} entry={e} now={now} showRelative quietAction topUp={!!topUps?.has(e.id)} onClick={() => open({ kind: e.kind, entry: e, preset: entryEditPreset(e, readOnly) })} />
                 ))}
               </div>
             </section>
