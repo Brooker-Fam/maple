@@ -816,6 +816,13 @@ export type StepView = {
   minutes: number | null;
   /** Milk logged for it (ml): a bottle step's bottles, or a nursing step's milk at the breast. */
   ml: number | null;
+  /**
+   * A bottle step that must reach an amount (up to the target per feed, or pumped milk first, then formula to
+   * finish): that amount in ml, as its words give it (its own, else the target). It stays "todo" while `ml` is
+   * under need.min, even with bottles logged. Null for every other step: a bottle step without it is done at its
+   * first bottle.
+   */
+  need: Range | null;
   /** A nursing step with milk at the breast whose milk wasn't logged: the nursing is done, the milk isn't. */
   milkMissing: boolean;
   /** What was logged for it. */
@@ -861,8 +868,19 @@ const sumMl = (list: readonly FeedEntry[]) => {
 
 const entryMinutes = (e: Entry, nowMs: number) => Math.max(0, Math.round(((e.ended_at ? t(e.ended_at) : nowMs) - t(e.started_at)) / MIN));
 
-/** A plan feed against what was logged for it (null group: not started). */
-export function viewFeed(feed: PlanFeed, why: PlanFeedView["why"], night: boolean, g: PlanGroup | null, now: Date, pending: readonly PumpEntry[] = []): PlanFeedView {
+/**
+ * The amount a bottle step must reach before it's done (StepView.need): the amount its words give (its own, else
+ * the target per feed), when it's up to the target or pumped milk first, then formula to finish. Null for any other
+ * bottle step, and for one up to a target that isn't set.
+ */
+export function bottleNeed(s: BottleStep, target: FeedTarget | null): Range | null {
+  if (!s.to_target && s.milk !== "breastmilk_first") return null;
+  const amount = s.ml ?? (s.to_target ? target : null);
+  return amount ? { min: amount.min, max: amount.max } : null;
+}
+
+/** A plan feed against what was logged for it (null group: not started); `target` is the target per feed, for a bottle up to it. */
+export function viewFeed(feed: PlanFeed, why: PlanFeedView["why"], night: boolean, g: PlanGroup | null, now: Date, target: FeedTarget | null, pending: readonly PumpEntry[] = []): PlanFeedView {
   const nowMs = now.getTime();
   const run = g?.run ?? null;
   const milk = [...(run?.topUps ?? []), ...(g?.bottles ?? [])];
@@ -884,7 +902,7 @@ export function viewFeed(feed: PlanFeed, why: PlanFeedView["why"], night: boolea
   let pumpIndex = 0;
   let bottleUsed = false;
   const steps: StepView[] = feed.steps.map((s, i): StepView => {
-    const base = { i, step: s, minutes: null, ml: null, milkMissing: false, entries: [] as Entry[] };
+    const base = { i, step: s, minutes: null, ml: null, need: null, milkMissing: false, entries: [] as Entry[] };
     if (s.do === "note") return { ...base, status: "info" };
     if (s.do === "nurse") {
       if (!run) return { ...base, status: "todo" };
@@ -897,10 +915,15 @@ export function viewFeed(feed: PlanFeed, why: PlanFeedView["why"], night: boolea
       if (!p) return { ...base, status: "todo" };
       return { ...base, status: p.active ? "running" : "done", minutes: entryMinutes(p, nowMs), entries: [p] };
     }
-    // A bottle step: the first takes the bottles (pumped milk and formula to finish are one step).
-    if (bottleUsed || bottleMilk.length === 0) return { ...base, status: "todo" };
+    // A bottle step: the first takes the bottles (pumped milk and formula to finish are one step). One that must reach
+    // an amount stays to do while what's logged is short of it (the pumped milk given, the formula to finish not yet);
+    // a bottle logged without an amount can't say, so it counts as reaching it.
+    const need = bottleNeed(s, target);
+    if (bottleUsed || bottleMilk.length === 0) return { ...base, need, status: "todo" };
     bottleUsed = true;
-    return { ...base, status: "done", ml: sumMl(bottleMilk), entries: bottleMilk };
+    const ml = sumMl(bottleMilk);
+    const short = need !== null && bottleMilk.every((b) => bottleAmount(b.data) != null) && (ml ?? 0) < need.min;
+    return { ...base, need, status: short ? "todo" : "done", ml, entries: bottleMilk };
   });
   // Going on: a step's timer, or she's on the breast in a feed whose plan has no nursing (a bottle feed she nursed in).
   const live = steps.some((s) => s.status === "running") || !!run?.live || pumps.some((p) => p.active);
@@ -1031,7 +1054,7 @@ export function feedPlanNow(
     .sort((a, b) => t(a.started_at) - t(b.started_at));
   // Every plan feed read against what was logged for it goes through here.
   const read = (feed: PlanFeed, why: PlanFeedView["why"], night: boolean, g: PlanGroup | null, pending: readonly PumpEntry[] = []) =>
-    viewFeed(feed, why, night, g, now, pending);
+    viewFeed(feed, why, night, g, now, target, pending);
 
   /**
    * When the feed after one that counts from `baseMs` is due, as it reads at

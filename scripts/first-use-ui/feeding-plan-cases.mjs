@@ -207,10 +207,10 @@ export function feedingPlanCases({ fixture, freshState, record, writes, assert }
         assert.equal(saved.kind, "feed");
         assert.deepEqual(saved.data, { method: "bottle", amount_ml: 20, milk: "formula", via: "sns", plan: "p1f1", top_up_of: 51 });
         assert.equal(typeof saved.client_id, "string");
-        // Logged: the step says so, and the pump is next.
+        // Logged: the step says so, and the pump waits until she's off the breast.
         await c.getByText("Nursing now · 8m · 20 ml in the SNS", { exact: false }).waitFor();
         assert.equal(await c.getByRole("button", { name: /^Log 20 ml/ }).count(), 0);
-        assert(await c.getByRole("button", { name: "Start pumping", exact: true }).isVisible());
+        assert.equal(await c.getByRole("button", { name: "Start pumping", exact: true }).count(), 0, "she's still on: the pump waits");
         assert.deepEqual(f.errors, []);
       } finally {
         await f.close();
