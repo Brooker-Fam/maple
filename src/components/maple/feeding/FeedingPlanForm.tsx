@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { AT_BREAST_WORDS, PLAN_LIMITS, type AtBreastVia, type PlanBottleVia, type PlanMilk } from "@/lib/maple/feeding-plan";
+import { AT_BREAST_WORDS, PLAN_LIMITS, type AtBreastVia, type PlanBottleVia, type PlanMilk, type Range } from "@/lib/maple/feeding-plan";
 import { useBabyWords } from "../familyWords";
 import { Icon, type IconName } from "../icons";
 import { GROUP, Toggle } from "../settings/parts";
 import { Label } from "../sheets/parts";
-import { Chip, cx, NumberProblem, parseTypedNumber, RepeatButton, Segmented, TextArea, tone, useTypedNumber } from "../ui";
+import { Button, Chip, cx, NumberProblem, parseTypedNumber, RepeatButton, Segmented, TextArea, tone, useTypedNumber } from "../ui";
 import {
   addFeed,
   amountMax,
@@ -15,12 +15,15 @@ import {
   isEmptyRange,
   move,
   newStep,
+  quotedList,
   rangeOut,
   setNightFeed,
   shownAmount,
+  staleNameWords,
   stepTitle,
   takeOutFeed,
   typedAmount,
+  wakeText,
   type BottleDraft,
   type FeedDraft,
   type NurseDraft,
@@ -64,13 +67,21 @@ const ADD: { kind: StepKind; label: string; icon: IconName }[] = [
   { kind: "note", label: "Note", icon: "sticky-note" },
 ];
 
+/** A wake switch's hint: when, in hours, once the time between feeds says ("Wake her if she's still asleep at 3.5 hours from the start of the last feed."). */
+const wakeHint = (every: Range | undefined, w: { him: string; hes: string }) => {
+  const words = every ? wakeText(every, w, { from: true }) : `wake ${w.him} if ${w.hes} still asleep when the time's up`;
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)}.`;
+};
+
 /** A compact number box (a range's end): 44px tall, 16px type so iOS doesn't zoom. */
 const BOX =
   "h-11 w-[4.75rem] min-w-0 rounded-xl border border-mp-line bg-mp-surface px-2 text-center text-base font-semibold text-mp-ink tabular-nums outline-none transition focus:border-mp-focus focus:ring-2 focus:ring-mp-focus/25";
 const BAD = "border-mp-danger! ring-2! ring-mp-danger/25!";
 
-export function PlanForm({ draft, change, watch, invalid, mark, onRemoved }: {
+export function PlanForm({ draft, initial, change, watch, invalid, mark, onRemoved }: {
   draft: PlanDraft;
+  /** The draft as the edit began: what a feed's steps held then (its name may still say so). */
+  initial: PlanDraft | null;
   change: Change;
   watch: Watch;
   /** A number somewhere reads wrong: nothing folds away until it's fixed (a folded field would lose the typo unseen). */
@@ -133,13 +144,26 @@ export function PlanForm({ draft, change, watch, invalid, mark, onRemoved }: {
             <HoursRange title="Time between feeds, in hours" aria="hours between feeds by day" value={draft.every} onChange={(every) => set({ every })} watch={watch} wkey="every" />
             <p className={cx(tone.muted, "text-[13px] leading-snug")}>From the start of one feed to the next. Leave empty if the plan doesn&apos;t say.</p>
           </div>
-          <Toggle label="Wake to feed by the end" hint={`Wake ${w.him} if ${w.hes} still asleep when the time's up.`} checked={draft.wake} onChange={(wake) => set({ wake })} />
+          <Toggle label="Wake to feed" hint={wakeHint(rangeOut(draft.every), w)} checked={draft.wake} onChange={(wake) => set({ wake })} />
         </div>
       </FormSection>
 
       <FormSection title="Feeds" count={`${draft.feeds.length} of ${PLAN_LIMITS.feeds}`}>
         {draft.feeds.map((f, i) => (
-          <FeedEditor key={f.key} feed={f} index={i} draft={draft} change={change} watch={watch} canFold={!invalid} mark={mark?.feed === f.key ? mark : null} hasTarget={hasTarget} onRemove={() => dropFeed(f, i)} onRemoved={onRemoved} />
+          <FeedEditor
+            key={f.key}
+            feed={f}
+            was={initial?.feeds.find((x) => x.key === f.key) ?? null}
+            index={i}
+            draft={draft}
+            change={change}
+            watch={watch}
+            canFold={!invalid}
+            mark={mark?.feed === f.key ? mark : null}
+            hasTarget={hasTarget}
+            onRemove={() => dropFeed(f, i)}
+            onRemoved={onRemoved}
+          />
         ))}
         {draft.feeds.length < PLAN_LIMITS.feeds ? (
           <Chip onClick={() => change((d) => addFeed(d))}>
@@ -163,8 +187,10 @@ export function PlanForm({ draft, change, watch, invalid, mark, onRemoved }: {
 
 // ── a feed ─────────────────────────────────────────────────────────────────
 
-function FeedEditor({ feed, index, draft, change, watch, canFold, mark, hasTarget, onRemove, onRemoved }: {
+function FeedEditor({ feed, was, index, draft, change, watch, canFold, mark, hasTarget, onRemove, onRemoved }: {
   feed: FeedDraft;
+  /** The feed as the edit began (null: added in this edit). */
+  was: FeedDraft | null;
   index: number;
   draft: PlanDraft;
   change: Change;
@@ -185,6 +211,14 @@ function FeedEditor({ feed, index, draft, change, watch, canFold, mark, hasTarge
   // and one a refusal is about opens (and stays open while it's fixed).
   const [open, setOpen] = useState(!feed.id);
   if (mark && !open) setOpen(true);
+  // Its name still says what this edit took out ("Nurse + SNS" with no SNS any more): say so, with a way to rename it.
+  const stale = staleNameWords(feed, was);
+  const staleText = stale.length ? `Its name still says ${quotedList(stale)}.` : null;
+  const nameRef = useRef<HTMLInputElement>(null);
+  const rename = () => {
+    nameRef.current?.focus();
+    nameRef.current?.select();
+  };
 
   const dropStep = (s: StepDraft, i: number) => {
     setSteps((list) => list.filter((x) => x.key !== s.key));
@@ -200,6 +234,7 @@ function FeedEditor({ feed, index, draft, change, watch, canFold, mark, hasTarge
           <span className="min-w-0 flex-1">
             <span className="block text-[16px] leading-snug font-semibold text-mp-ink [overflow-wrap:anywhere]">{label}</span>
             <span className={cx(tone.muted, "mt-0.5 block text-[14px] leading-snug [overflow-wrap:anywhere]")}>{feedSummary(feed, draft.unit, rangeOut(draft.target) ?? null)}</span>
+            {staleText && <span className="mt-1 block text-[13px] leading-snug font-medium text-mp-ink-2">{staleText}</span>}
           </span>
           <span className="mt-0.5 flex shrink-0 items-center gap-0.5 text-[14px] font-medium text-mp-accent-fg">
             Change
@@ -219,14 +254,26 @@ function FeedEditor({ feed, index, draft, change, watch, canFold, mark, hasTarge
       </div>
       <div className="-mt-2">
         <input
+          ref={nameRef}
           className={cx(tone.input, feedProblem && /name/.test(feedProblem) && BAD)}
           aria-label={`Feed ${index + 1} name`}
+          aria-describedby={staleText ? `${feed.key}-stale` : undefined}
           value={feed.name}
           maxLength={PLAN_LIMITS.name}
           placeholder="Its name, like “Nurse, then top up”"
           onChange={(e) => setFeed((f) => ({ ...f, name: e.target.value }))}
         />
         {feedProblem && <div className="mt-1.5"><Problem>{feedProblem}</Problem></div>}
+        {staleText && (
+          <div className="mt-0.5 -mr-3 flex items-center gap-1">
+            <p id={`${feed.key}-stale`} className={cx(tone.muted, "min-w-0 flex-1 text-[13px] leading-snug")}>
+              {staleText}
+            </p>
+            <Button variant="ghost" size="sm" aria-label={`Rename ${label}`} onClick={rename}>
+              Rename
+            </Button>
+          </div>
+        )}
       </div>
       {feed.steps.length > 0 ? (
         <ol className="space-y-2.5" aria-label={`${label}: steps`}>
@@ -456,7 +503,7 @@ function NightEditor({ draft, change, watch }: { draft: PlanDraft; change: Chang
                 <p className={cx(tone.muted, "text-[13px] leading-snug")}>Leave empty to keep the day&apos;s.</p>
               </div>
             </div>
-            <Toggle label="Wake to feed at night" hint={`Wake ${w.him} if ${w.hes} still asleep when the time's up.`} checked={n.wake} onChange={(wake) => setNight({ wake })} />
+            <Toggle label="Wake to feed at night" hint={wakeHint(rangeOut(n.every) ?? rangeOut(draft.every), w)} checked={n.wake} onChange={(wake) => setNight({ wake })} />
             {draft.feeds.length > 1 && (
               <div className="px-4 py-4">
                 <Label>The night&apos;s feed</Label>

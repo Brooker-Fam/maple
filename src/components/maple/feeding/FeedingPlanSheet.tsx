@@ -1,20 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import {
-  amountText,
-  checkInText,
-  clockWords,
-  everyText,
-  feedById,
-  feedingPlanOf,
-  parseFeedingPlan,
-  PLAN_LIMITS,
-  PlanError,
-  stepText,
-  type FeedingPlan,
-  type PlanFeed,
-} from "@/lib/maple/feeding-plan";
+import { amountText, checkInText, clockWords, everyText, feedById, feedingPlanOf, PLAN_LIMITS, stepText, type FeedingPlan, type PlanFeed } from "@/lib/maple/feeding-plan";
 import { dayKey, DEFAULT_TZ } from "@/lib/maple/time";
 import type { Baby } from "@/lib/maple/types";
 import { feedTargetOf, type FeedTarget } from "@/lib/maple/units";
@@ -25,7 +12,7 @@ import { ContextNote, useNumberChecks } from "../sheets/parts";
 import { Button, cx, Sheet, tone } from "../ui";
 import { ApiError, useMaple } from "../useMaple";
 import { PlanForm, type PlanMark } from "./FeedingPlanForm";
-import { draftFromShape, draftOf, inputOf, PLAN_SHAPES, problemPlace, samePlan, sameTarget, type PlanDraft, type PlanInput, type PlanShape } from "./planDraft";
+import { draftFromShape, draftOf, draftProblem, inputOf, PLAN_SHAPES, problemPlace, samePlan, sameTarget, wakeText, type PlanDraft, type PlanShape } from "./planDraft";
 
 /**
  * The feeding plan's sheet: the family's plan from their care team
@@ -41,7 +28,7 @@ import { draftFromShape, draftOf, inputOf, PLAN_SHAPES, problemPlace, samePlan, 
  * send a photo of the plan sheet to the chat (read back there, saved on a yes).
  *
  * Edit: a new plan starts from a shape (the kinds of step, no numbers). Save
- * checks the plan as the server will (parseFeedingPlan), then sends PATCH
+ * checks the plan as the server will (draftProblem), then sends PATCH
  * /api/maple/baby { settings: { feeding_plan: { ...plan, base_rev },
  * feed_target_ml } }, amounts in ml, each only when it changed. A plan saved
  * on another phone meanwhile comes back as a 409 with the latest: load it, or
@@ -131,36 +118,22 @@ export default function FeedingPlanSheet({ open, edit: startEditing = false, onC
     setEditing((e) => ({ base: e?.base ?? null, baseTarget: e?.baseTarget ?? target, initial: d, draft: d }));
   };
 
-  /** The plan's own check, before anything is sent: the same words the server would say. */
-  const precheck = (d: PlanDraft, input: PlanInput, t: FeedTarget | null, base: FeedingPlan | null): string | null => {
-    if (d.night.on && (!d.night.from || !d.night.to)) return "Say when the night starts and ends, or switch off Different at night.";
-    const short = [d.every, d.night.on ? d.night.every : null].some((r) => r && ((r.min != null && r.min < 30) || (r.max != null && r.max < 30)));
-    if (short) return "The time between feeds is half an hour or more.";
-    if (t && (t.min < 5 || t.max > 300)) return d.unit === "oz" ? "A target per feed is between 0.17 and 10.14 oz." : "A target per feed is between 5 and 300 ml.";
-    try {
-      parseFeedingPlan(input, base, now());
-      return null;
-    } catch (e) {
-      if (e instanceof PlanError) return e.message;
-      throw e;
-    }
-  };
-
   const save = async (over?: Conflict) => {
     if (!editing?.draft || busy || checks.invalid) return;
     const d = editing.draft;
     const base = over ? over.latest : editing.base;
     const { plan: input, target: t } = inputOf(d);
-    const local = precheck(d, input, t, base);
+    // Only what changed goes: an untouched plan isn't saved again, nor an untouched target (Settings may have one open).
+    const planChanged = !!over || !editing.base || !editing.initial || !samePlan(d, editing.initial);
+    const targetChanged = !sameTarget(t, editing.baseTarget);
+    if (!planChanged && !targetChanged) return leave();
+    // Checked here first, as the server will: nothing is sent while it would be refused.
+    const local = draftProblem(d, base, now(), planChanged);
     if (local) {
       const at = problemPlace(local, d);
       setProblem({ message: local, mark: at ? { ...at, message: local } : null });
       return;
     }
-    // Only what changed goes: an untouched plan isn't saved again, nor an untouched target (Settings may have one open).
-    const planChanged = !!over || !editing.base || !editing.initial || !samePlan(d, editing.initial);
-    const targetChanged = !sameTarget(t, editing.baseTarget);
-    if (!planChanged && !targetChanged) return leave();
     const body = {
       settings: {
         ...(planChanged ? { feeding_plan: { ...input, ...(base ? { base_rev: base.rev } : {}) } } : {}),
@@ -314,6 +287,7 @@ export default function FeedingPlanSheet({ open, edit: startEditing = false, onC
             )}
             <PlanForm
               draft={draft}
+              initial={editing?.initial ?? null}
               change={change}
               watch={checks.watch}
               invalid={checks.invalid}
@@ -372,12 +346,17 @@ function PlanView({ plan, target, canWrite, onEdit, onRemove, onClose }: { plan:
   const turns = plan.order.map((id) => feedById(plan, id)).filter((f): f is PlanFeed => !!f);
   const night = plan.night;
   const nightFeed = night ? feedById(plan, night.feed) : null;
-  const wake = `wake ${w.him} to feed by the end`;
+  // When to wake her, in hours: the window's end (with no time between feeds, there's no time to wake her at).
+  const nightEvery = night?.every ?? plan.day.every;
   const nightHow = night
-    ? [night.every ? cap(everyText(night.every)) : plan.day.every ? `${cap(everyText(plan.day.every))}, as by day` : "No set time between feeds", night.wake ? wake : null]
+    ? [
+        night.every ? cap(everyText(night.every)) : plan.day.every ? `${cap(everyText(plan.day.every))}, as by day` : "No set time between feeds",
+        night.wake && nightEvery ? wakeText(nightEvery, w) : null,
+      ]
         .filter(Boolean)
         .join(" · ")
     : "";
+  const dayHow = plan.day.every ? (plan.day.wake ? cap(wakeText(plan.day.every, w, { from: true })) : "From the start of one feed to the next") : undefined;
   return (
     <div className="space-y-5">
       <dl className={cx(tone.card, tone.divide, "overflow-hidden")}>
@@ -386,7 +365,7 @@ function PlanView({ plan, target, canWrite, onEdit, onRemove, onClose }: { plan:
             <span className="font-semibold">{amountText(target, plan.unit)}</span>
           </Fact>
         )}
-        <Fact label={night ? "By day" : "How often"} sub={plan.day.every ? ["From the start of one feed to the next", plan.day.wake ? wake : null].filter(Boolean).join(" · ") : undefined}>
+        <Fact label={night ? "By day" : "How often"} sub={dayHow}>
           {plan.day.every ? cap(everyText(plan.day.every)) : "No set time between feeds"}
         </Fact>
         {turns.length > 1 && (

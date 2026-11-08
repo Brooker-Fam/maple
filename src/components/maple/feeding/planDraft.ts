@@ -14,7 +14,19 @@
  * step and leaves every minute and amount for the family to copy from their
  * plan.
  */
-import { stepText, type AtBreastVia, type FeedingPlan, type PlanBottleVia, type PlanMilk, type PlanStep, type PlanUnit, type Range } from "@/lib/maple/feeding-plan";
+import {
+  checkFeedingPlan,
+  feedText,
+  PlanConflict,
+  PlanError,
+  type AtBreastVia,
+  type FeedingPlan,
+  type PlanBottleVia,
+  type PlanMilk,
+  type PlanStep,
+  type PlanUnit,
+  type Range,
+} from "@/lib/maple/feeding-plan";
 import { ML_PER_FL_OZ, type FeedTarget } from "@/lib/maple/units";
 
 /** A from–to in minutes or ml; either end may be empty (one number is both ends). */
@@ -215,7 +227,73 @@ const json = (v: unknown) => JSON.stringify(v);
 export const samePlan = (a: PlanDraft, b: PlanDraft) => json(inputOf(a).plan) === json(inputOf(b).plan);
 export const sameTarget = (a: FeedTarget | null, b: FeedTarget | null) => json(a ? rangeOut(a) : null) === json(b ? rangeOut(b) : null);
 
+/**
+ * Why the draft can't be saved yet, before anything is sent (null: it can):
+ * the form's few rules of its own, then the server's check (checkFeedingPlan,
+ * as a save over `base`, the plan the edit began from), so it's in the
+ * server's words, a feed that doesn't feed her included. `plan`: whether the
+ * plan goes at all (an untouched one doesn't, so only the target is checked).
+ * A plan changed on another phone meanwhile is the server's to find.
+ */
+export function draftProblem(d: PlanDraft, base: FeedingPlan | null, now: Date, plan = true): string | null {
+  const input = inputOf(d);
+  if (plan) {
+    if (d.night.on && (!d.night.from || !d.night.to)) return "Say when the night starts and ends, or switch off Different at night.";
+    const short = [d.every, d.night.on ? d.night.every : null].some((r) => r && ((r.min != null && r.min < 30) || (r.max != null && r.max < 30)));
+    if (short) return "The time between feeds is half an hour or more.";
+  }
+  const t = input.target;
+  if (t && (t.min < 5 || t.max > 300)) return d.unit === "oz" ? "A target per feed is between 0.17 and 10.14 oz." : "A target per feed is between 5 and 300 ml.";
+  if (!plan) return null;
+  try {
+    checkFeedingPlan({ feeding_plan: { ...input.plan, ...(base ? { base_rev: base.rev } : {}) } }, base ? { feeding_plan: base } : null, now);
+    return null;
+  } catch (e) {
+    if (e instanceof PlanError) return e.message;
+    if (e instanceof PlanConflict) return null;
+    throw e;
+  }
+}
+
 // ── changing the draft ────────────────────────────────────────────────────
+
+/** Things a feed's name can mention that its steps hold: the nipple shield, milk at the breast by syringe or SNS, a top-up, a pump. */
+const NAME_WORDS: { word: RegExp; has: (f: FeedDraft) => boolean }[] = [
+  { word: /\bshields?\b/i, has: (f) => f.steps.some((s) => s.do === "nurse" && s.shield) },
+  { word: /\bsyringes?\b/i, has: (f) => f.steps.some((s) => s.do === "nurse" && s.atBreast === "syringe") },
+  { word: /\bsns\b/i, has: (f) => f.steps.some((s) => s.do === "nurse" && s.atBreast === "sns") },
+  { word: /\btop[\s-]?ups?\b/i, has: (f) => f.steps.some((s) => s.do === "bottle") },
+  { word: /\bpump(?:s|ing)?\b/i, has: (f) => f.steps.some((s) => s.do === "pump") },
+];
+
+/** The word as the name says it, unless it says it's without it ("no shield", "without SNS"). */
+function nameSays(name: string, word: RegExp): string | null {
+  const m = word.exec(name);
+  if (!m) return null;
+  return /\b(?:no|not|without|w\/o)\s+$/i.test(name.slice(0, m.index)) ? null : m[0];
+}
+
+/**
+ * What a feed's name still says that an edit took out of its steps: the name
+ * says "shield", the shield was on when the edit began (`was`, the feed then)
+ * and isn't now. As the name writes it, lowercased unless it's in capitals
+ * ("SNS"); empty when the name still fits, or for a feed the edit added.
+ */
+export function staleNameWords(f: FeedDraft, was: FeedDraft | null | undefined): string[] {
+  if (!was) return [];
+  const out: string[] = [];
+  for (const { word, has } of NAME_WORDS) {
+    const said = nameSays(f.name, word);
+    if (said && has(was) && !has(f)) out.push(said === said.toUpperCase() ? said : said.toLowerCase());
+  }
+  return out;
+}
+
+/** “shield”, “shield” and “syringe”, “a”, “b” and “c”. */
+export function quotedList(words: readonly string[]): string {
+  const q = words.map((w) => `“${w}”`);
+  return q.length > 1 ? `${q.slice(0, -1).join(", ")} and ${q[q.length - 1]}` : (q[0] ?? "");
+}
 
 /** A feed's name for lists, or its place when it has none yet ("Feed 2"). */
 export const feedLabel = (d: Pick<PlanDraft, "feeds">, key: string) => {
@@ -239,22 +317,39 @@ export function removeFeed(d: PlanDraft, key: string): PlanDraft {
 }
 
 /**
- * A feed taken out (removeFeed), and Put it back: the feed in its place, the
- * turns as they were (a turn handed to another feed only because the turns
- * would otherwise be empty goes back; one given since stays), the night's
- * feed again if it was. Anything else changed meanwhile stays changed.
+ * `key` back among `now` where it was in `was`, among the ones still there:
+ * right after the nearest one it came after, else right before the nearest one
+ * it came before, else at its old place.
+ */
+function placeBack(now: readonly string[], was: readonly string[], key: string): string[] {
+  const j = was.indexOf(key);
+  const at = (i: number) => [...now.slice(0, i), key, ...now.slice(i)];
+  for (let k = j - 1; k >= 0; k--) if (now.includes(was[k])) return at(now.indexOf(was[k]) + 1);
+  for (let k = j + 1; k < was.length; k++) if (now.includes(was[k])) return at(now.indexOf(was[k]));
+  return at(Math.min(Math.max(j, 0), now.length));
+}
+
+/**
+ * A feed taken out (removeFeed), and Put it back, on the draft as it is by
+ * then: the feed back in its place, its turn back where it was among the turns
+ * still there (after the turn it followed), and the night's feed again if it
+ * was and no other has been picked since. A turn handed to another feed only
+ * because the turns would otherwise be empty is taken back. Anything else
+ * changed meanwhile stays changed: turns moved, added or taken out, and a feed
+ * made the night's (it stays out of the day's turns).
  */
 export function takeOutFeed(before: PlanDraft, key: string): { next: PlanDraft; putBack: (d: PlanDraft) => PlanDraft } {
-  const i = before.feeds.findIndex((f) => f.key === key);
-  const feed = before.feeds[i];
+  const feed = before.feeds.find((f) => f.key === key);
   const next = removeFeed(before, key);
   const filled = next.order.filter((k) => !before.order.includes(k));
   const putBack = (d: PlanDraft): PlanDraft => {
     if (!feed || d.feeds.some((f) => f.key === key)) return d;
-    const feeds = [...d.feeds.slice(0, i), feed, ...d.feeds.slice(i)];
-    const kept = new Set(feeds.map((f) => f.key));
-    const order = [...before.order.filter((k) => kept.has(k)), ...d.order.filter((k) => !before.order.includes(k) && !filled.includes(k))];
-    return { ...d, feeds, order, night: before.night.feed === key ? { ...d.night, feed: key } : d.night };
+    const byKey = new Map([...d.feeds, feed].map((f) => [f.key, f]));
+    const feeds = placeBack(d.feeds.map((f) => f.key), before.feeds.map((f) => f.key), key).map((k) => byKey.get(k)!);
+    const turns = d.order.filter((k) => !filled.includes(k));
+    const order = before.order.includes(key) ? placeBack(turns, before.order, key) : turns;
+    const night = before.night.feed === key && !d.night.feed ? { ...d.night, feed: key } : d.night;
+    return { ...d, feeds, order, night };
   };
   return { next, putBack };
 }
@@ -306,25 +401,43 @@ export function planShortLine(plan: FeedingPlan | null): string {
   return [plan.from ? `From ${plan.from}` : null, `${n} ${n === 1 ? "feed" : "feeds"}`].filter(Boolean).join(" · ");
 }
 
+/** A time between feeds' end, in hours the way everyText says them: "3 hours", "3.5 hours", "1 hour", "2h 15m". */
+export function hoursText(minutes: number): string {
+  const m = Math.round(minutes);
+  if (m % 30 === 0) return `${m / 60} ${m === 60 ? "hour" : "hours"}`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+}
+
 /**
- * A feed's steps in one line, the way the plan reads them (feedText's words),
- * for a folded feed on the form; a step still missing what its words need
- * ("SNS", no amount yet) is just its name.
+ * When the plan says to wake her, plainly: "wake her if she's still asleep at
+ * 3.5 hours", the time between feeds' longer end (the end of the window
+ * Today's card shows, counted from the start of the last feed; `from` says
+ * so). `w`: the baby's words ("him", "he's"; the name with no sex set).
+ */
+export function wakeText(every: Pick<Range, "max">, w: { him: string; hes: string }, opts: { from?: boolean } = {}): string {
+  return `wake ${w.him} if ${w.hes} still asleep at ${hoursText(every.max)}${opts.from ? " from the start of the last feed" : ""}`;
+}
+
+/**
+ * A feed's steps in one line, for a folded feed on the form: the steps in the
+ * plan's own words (feedText: "Pump 20 min; then bottle up to 50–70 ml"), then
+ * each note as a sentence of its own after them ("… 50–70 ml. Burp halfway"),
+ * as the plan's words read notes, never joined with "then" as if it were
+ * another step. A step still missing what its words need (an SNS with no
+ * amount yet) is just its name; an empty note is "Note".
  */
 export function feedSummary(f: FeedDraft, unit: PlanUnit, target: FeedTarget | null): string {
-  let nursed = false;
-  const parts = f.steps.map((s, i) => {
+  if (!f.steps.length) return "No steps yet";
+  const steps: PlanStep[] = [];
+  const notes: string[] = [];
+  for (const s of f.steps) {
     const out = stepOut(s);
-    let words: string;
-    try {
-      words = out.do === "note" ? out.text || "Note" : stepText(out as PlanStep, { unit }, target, { afterNurse: nursed });
-    } catch {
-      words = stepTitle(s, nursed);
-    }
-    if (s.do === "nurse") nursed = true;
-    return i === 0 ? words : `then ${words.charAt(0).toLowerCase()}${words.slice(1)}`;
-  });
-  return parts.length ? parts.join("; ") : "No steps yet";
+    if (out.do === "note") notes.push(out.text.replace(/[\s.;,]+$/, "") || "Note");
+    else if (out.do === "nurse" && out.supplement && !out.supplement.ml) steps.push({ do: "nurse" });
+    else steps.push(out as PlanStep);
+  }
+  const said = steps.length ? feedText({ id: f.id ?? f.key, name: f.name, steps }, { unit }, target) : "";
+  return [said, ...notes].filter(Boolean).join(". ");
 }
 
 /** A step's name on its card: a bottle after nursing is the top-up. */

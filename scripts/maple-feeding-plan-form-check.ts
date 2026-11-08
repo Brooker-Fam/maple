@@ -8,23 +8,32 @@
  *
  * The plans here are invented examples, not any family's. One PASS/FAIL line per case, exit 1 on any failure.
  */
-import { amountText, parseFeedingPlan, PlanError, type FeedingPlan } from "../src/lib/maple/feeding-plan";
+import { amountText, checkFeedingPlan, feedText, parseFeedingPlan, PlanError, type FeedingPlan } from "../src/lib/maple/feeding-plan";
 import {
   addFeed,
   draftFromShape,
   draftOf,
+  draftProblem,
+  feedSummary,
+  hoursText,
   inputOf,
+  move,
   newFeed,
+  newStep,
   PLAN_SHAPES,
   planShortLine,
   problemPlace,
+  quotedList,
   removeFeed,
   samePlan,
   setNightFeed,
   shownAmount,
+  staleNameWords,
   takeOutFeed,
   typedAmount,
+  wakeText,
   type PlanDraft,
+  type StepDraft,
 } from "../src/components/maple/feeding/planDraft";
 
 let passed = 0;
@@ -180,7 +189,7 @@ check("Put it back: a feed taken out comes back exactly, with its turn and the n
   const out = takeOutFeed(d, topUp);
   eq(inputOf(out.putBack(out.next)), inputOf(d));
   // The only turn taken out hands it to the night's feed for now; Put it back hands it back.
-  const oneTurn = draftOf(parseFeedingPlan({ feeds: [{ name: "Day", steps: [{ do: "nurse" }] }, { name: "Night", steps: [{ do: "pump" }] }], order: ["Day"], night: { from: "23:00", to: "05:00", feed: "Night" } }, null, NOW), null, "ml");
+  const oneTurn = draftOf(parseFeedingPlan({ feeds: [{ name: "Day", steps: [{ do: "nurse" }] }, { name: "Night", steps: [{ do: "pump" }, { do: "bottle" }] }], order: ["Day"], night: { from: "23:00", to: "05:00", feed: "Night" } }, null, NOW), null, "ml");
   const [day, night] = oneTurn.feeds.map((f) => f.key);
   const gone = takeOutFeed(oneTurn, day);
   eq(gone.next.order, [night]);
@@ -192,12 +201,133 @@ check("Put it back: a feed taken out comes back exactly, with its turn and the n
   eq([back.night.feed, inputOf(back).plan.order], [d.feeds[2].key, [1, 2, 4]]);
 });
 
+check("Put it back: on the form as it is now, so turns moved, taken out or given to the night meanwhile stay that way", () => {
+  // PLAN's three feeds, all taking turns by day.
+  const turns = draftOf(parseFeedingPlan({ unit: "ml", feeds: PLAN.feeds.map(({ name, steps }) => ({ name, steps })), order: [1, 2, 3] }, null, NOW), null, "ml");
+  const [sns, topUp, pump] = turns.feeds.map((f) => f.key);
+  const out = takeOutFeed(turns, topUp);
+  eq(out.next.order, [sns, pump]);
+  // "Pump + bottle" moved first meanwhile: "Nurse, top up" goes back after the turn it followed, and the move stays.
+  const moved = { ...out.next, order: move(out.next.order, 1, -1) };
+  eq(moved.order, [pump, sns]);
+  const back = out.putBack(moved);
+  eq([back.feeds.map((f) => f.name), back.order], [["Nurse + SNS", "Nurse, top up", "Pump + bottle"], [pump, sns, topUp]]);
+  // "Pump + bottle" made the night's feed meanwhile: it left the turns, and Put it back doesn't bring it back to them.
+  const nightOn = setNightFeed({ ...out.next, night: { ...out.next.night, on: true, from: "23:00", to: "05:00" } }, pump);
+  eq(nightOn.order, [sns]);
+  const atNight = out.putBack(nightOn);
+  eq([atNight.order, atNight.night.feed], [[sns, topUp], pump]);
+  eq(inputOf(atNight).plan.night, { from: "23:00", to: "05:00", feed: 3 });
+  // A turn taken out meanwhile stays out.
+  const dropped = out.putBack({ ...out.next, order: [sns] });
+  eq(dropped.order, [sns, topUp]);
+  // The first turn taken out goes back before the turn it came before.
+  const first = takeOutFeed(turns, sns);
+  eq(first.putBack(first.next).order, [sns, topUp, pump]);
+  eq(first.putBack({ ...first.next, order: move(first.next.order, 1, -1) }).order, [pump, sns, topUp]);
+  // Two taken out, put back newest first: exactly as it was.
+  const second = takeOutFeed(out.next, sns);
+  eq(second.next.order, [pump]);
+  eq(inputOf(out.putBack(second.putBack(second.next))), inputOf(turns));
+  // The night's feed taken out while another is picked for the night: the newer pick stays, and the feed comes back.
+  const d = draftOf(PLAN, null, "ml");
+  const n = takeOutFeed(d, d.feeds[2].key);
+  const picked = setNightFeed(n.next, d.feeds[1].key);
+  const kept = n.putBack(picked);
+  eq([kept.feeds.length, kept.night.feed, kept.order], [3, d.feeds[1].key, [d.feeds[0].key]]);
+});
+
+check("Save checks the draft as the server will, in its words: a feed that only pumps is refused on that feed before anything is sent", () => {
+  const d = draftOf(PLAN, null, "ml");
+  eq(draftProblem(d, PLAN, LATER), null, "the plan as it is");
+  eq(draftProblem(draftOf(null, null, "ml"), null, LATER), "A feeding plan needs at least one feed");
+  // "Pump + bottle" without its bottle: a pump and a note.
+  const dry: PlanDraft = { ...d, feeds: d.feeds.map((f, i) => (i === 2 ? { ...f, steps: f.steps.filter((s) => s.do !== "bottle") } : f)) };
+  const words = draftProblem(dry, PLAN, LATER);
+  eq(words, '"Pump + bottle" needs nursing or a bottle: a pump on its own goes in the plan\'s notes');
+  // The server says the same of the same plan.
+  let server = "";
+  try {
+    checkFeedingPlan({ feeding_plan: { ...inputOf(dry).plan, base_rev: PLAN.rev } }, { feeding_plan: PLAN }, LATER);
+  } catch (e) {
+    server = e instanceof PlanError ? e.message : String(e);
+  }
+  eq(server, words, "the server's words");
+  eq(problemPlace(words!, dry), { feed: d.feeds[2].key, step: null });
+  // A new plan's feed that only pumps, too.
+  const fresh = draftFromShape(PLAN_SHAPES[2], null, "ml");
+  eq(draftProblem({ ...fresh, feeds: [{ ...fresh.feeds[0], steps: fresh.feeds[0].steps.slice(0, 1) }] }, null, LATER), '"Pump and bottle" needs nursing or a bottle: a pump on its own goes in the plan\'s notes');
+  // An untouched plan isn't sent, so only the target is checked.
+  eq(draftProblem(dry, PLAN, LATER, false), null);
+  eq(draftProblem({ ...dry, target: { min: 1, max: null } }, PLAN, LATER, false), "A target per feed is between 5 and 300 ml.");
+  // The form's own rules first.
+  eq(draftProblem({ ...d, night: { ...d.night, to: "" } }, PLAN, LATER), "Say when the night starts and ends, or switch off Different at night.");
+});
+
 check("a refusal's words point at its feed and step", () => {
   const d = draftOf(PLAN, null, "ml");
   eq(problemPlace("Feed 2's name is needed", d), { feed: d.feeds[1].key, step: null });
   eq(problemPlace('"Nurse + SNS" step 2: the minutes must be between 1 and 120', d), { feed: d.feeds[0].key, step: d.feeds[0].steps[1].key });
   eq(problemPlace('"nurse, top up" needs at least one step', d), { feed: d.feeds[1].key, step: null });
   eq(problemPlace("Night's start must be a time like 22:00", d), null);
+});
+
+check("a folded feed reads in the plan's words, and a note is a sentence of its own, never joined with \"then\"", () => {
+  const d = draftOf(PLAN, null, "ml");
+  const target = { min: 50, max: 70 };
+  // Without notes, it's the plan's own line for the feed.
+  for (const i of [0, 1]) eq(feedSummary(d.feeds[i], "ml", target), feedText(PLAN.feeds[i], PLAN, target), PLAN.feeds[i].name);
+  // "Pump + bottle" ends with a note: its steps, then the note as a sentence of its own.
+  const steps = PLAN.feeds[2].steps.filter((s) => s.do !== "note");
+  eq(feedSummary(d.feeds[2], "ml", target), `${feedText({ ...PLAN.feeds[2], steps }, PLAN, target)}. Burp halfway`);
+  // A note between steps still reads after them, never as "then …".
+  const [nurse, topUp] = d.feeds[1].steps;
+  const note = (text: string) => ({ ...newStep("note"), text }) as StepDraft;
+  const between = feedSummary({ ...d.feeds[1], steps: [nurse, note("Only if still hungry."), topUp] }, "ml", target);
+  eq(between, `${feedText(PLAN.feeds[1], PLAN, target)}. Only if still hungry`);
+  if (/then only/i.test(between)) throw new Error(`a note joined with "then": ${between}`);
+  const nursing = feedText({ ...PLAN.feeds[1], steps: PLAN.feeds[1].steps.slice(0, 1) }, PLAN, target);
+  eq(feedSummary({ ...d.feeds[1], steps: [nurse, note("Burp halfway"), note("Pump the right side;")] }, "ml", target), `${nursing}. Burp halfway. Pump the right side`);
+  // Not finished yet: an SNS with no amount is just its name, an empty note is "Note", and no steps says so.
+  const sns = { ...newStep("nurse"), atBreast: "sns" } as StepDraft;
+  eq(feedSummary({ ...d.feeds[0], steps: [sns, d.feeds[0].steps[1]] }, "ml", null), "Nurse; then pump 15 min");
+  eq(feedSummary({ ...d.feeds[0], steps: [d.feeds[0].steps[1], note("")] }, "ml", null), "Pump 15 min. Note");
+  eq(feedSummary({ ...d.feeds[0], steps: [] }, "ml", null), "No steps yet");
+});
+
+check("a feed's name that still says what an edit took out (the shield, a syringe or SNS, a top-up, a pump) is pointed out", () => {
+  const d = draftOf(PLAN, null, "ml");
+  const [sns, topUp, pump] = d.feeds;
+  // Untouched, every name fits.
+  for (const f of d.feeds) eq(staleNameWords(f, f), [], f.name);
+  // "Nurse + SNS" with no milk at the breast any more.
+  const noSns = { ...sns, steps: sns.steps.map((s) => (s.do === "nurse" ? { ...s, atBreast: "none" as const } : s)) };
+  eq(staleNameWords(noSns, sns), ["SNS"]);
+  // A syringe instead: still not what the name says.
+  eq(staleNameWords({ ...sns, steps: sns.steps.map((s) => (s.do === "nurse" ? { ...s, atBreast: "syringe" as const } : s)) }, sns), ["SNS"]);
+  eq(staleNameWords({ ...topUp, steps: topUp.steps.filter((s) => s.do !== "bottle") }, topUp), ["top up"]);
+  eq(staleNameWords({ ...pump, steps: pump.steps.filter((s) => s.do !== "pump") }, pump), ["pump"]);
+  // Two at once, in the name's own words.
+  const both = { ...sns, name: "Nipple Shield and SNS" };
+  eq(staleNameWords({ ...noSns, name: both.name, steps: noSns.steps.map((s) => (s.do === "nurse" ? { ...s, shield: false } : s)) }, both), ["shield", "SNS"]);
+  // Renamed, or a feed this edit added, or a name that already said it of steps without it: not this edit's doing.
+  eq(staleNameWords({ ...noSns, name: "Nurse, then pump" }, sns), []);
+  eq(staleNameWords(noSns, null), []);
+  const nursing = { ...topUp, name: "Nurse, pumped milk top up later", steps: topUp.steps.filter((s) => s.do !== "bottle") };
+  eq(staleNameWords(nursing, nursing), []);
+  // A name that says it's without one already fits.
+  eq(staleNameWords({ ...noSns, name: "Nurse, no SNS" }, sns), []);
+  eq(staleNameWords({ ...noSns, name: "Nurse without SNS, then pump" }, sns), []);
+  eq([quotedList(["SNS"]), quotedList(["shield", "SNS"]), quotedList(["shield", "syringe", "pump"])], ["“SNS”", "“shield” and “SNS”", "“shield”, “syringe” and “pump”"]);
+});
+
+check("when to wake her, plainly: at the time between feeds' longer end, in hours, counted from the start of the last feed", () => {
+  eq([180, 210, 60, 90, 135, 179.6].map(hoursText), ["3 hours", "3.5 hours", "1 hour", "1.5 hours", "2h 15m", "3 hours"]);
+  const her = { him: "her", hes: "she's" };
+  eq(wakeText({ max: 180 }, her), "wake her if she's still asleep at 3 hours");
+  eq(wakeText(PLAN.day.every!, her, { from: true }), "wake her if she's still asleep at 3.5 hours from the start of the last feed");
+  // No sex set: the baby's name stands in.
+  eq(wakeText({ max: 180 }, { him: "River", hes: "River's" }), "wake River if River's still asleep at 3 hours");
 });
 
 check("the way in's line: who it's from and how many feeds, or the invitation", () => {

@@ -128,8 +128,9 @@ export function feedingPlanSheetCases({ fixture, freshState, assert }) {
         assert.match(text, /Target per feed 50–70 ml/);
         assert.match(text, /By day Every 2\.5–3\.5 hours From the start of one feed to the next/);
         assert.match(text, /Taking turns by day 1 Nurse \+ SNS 2 Nurse, top up/);
-        // No sex set: the baby's name stands in for "her".
-        assert.match(text, /At night 11 PM to 5 AM · Pump \+ bottle Every 3 hours · wake River to feed by the end/);
+        // No sex set: the baby's name stands in for "her". When to wake is said in hours, never "by the end".
+        assert.match(text, /At night 11 PM to 5 AM · Pump \+ bottle Every 3 hours · wake River if River's still asleep at 3 hours/);
+        assert.doesNotMatch(text, /by the end/);
         assert.deepEqual(await sheet.getByRole("article").evaluateAll((list) => list.map((a) => a.getAttribute("aria-label"))), ["Nurse + SNS", "Nurse, top up", "Pump + bottle"]);
         const steps = async (name) => (await sheet.getByRole("article", { name, exact: true }).getByRole("listitem").allTextContents()).map((s) => s.replace(/\s+/g, " ").trim());
         assert.deepEqual(await steps("Nurse + SNS"), ["1Step 1: Nurse 12–18 min with the nipple shield, 20 ml of formula in the SNS", "2Step 2: Pump 15 min"]);
@@ -140,6 +141,28 @@ export function feedingPlanSheetCases({ fixture, freshState, assert }) {
         assert.match(text, /Notes Weigh at the clinic on Friday\./);
         for (const name of ["Edit the plan", "Change it in the chat", "Remove plan"]) assert(await sheet.getByRole("button", { name, exact: true }).isVisible(), `${name} is offered`);
         assert.equal(await f.page.evaluate(() => document.documentElement.scrollWidth), 390, "nothing scrolls sideways");
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["Feeding plan sheet: says when to wake her in hours, by day from the start of the last feed, and the form's switches say the same", async () => {
+      const plan = structuredClone(PLAN);
+      plan.day.wake = true;
+      const state = planned({ plan });
+      state.baby = { ...state.baby, sex: "female" };
+      const f = await fixture({ state, apiResponse: server().apiResponse });
+      try {
+        await metric(f);
+        const sheet = await fromMore(f);
+        const text = (await sheet.innerText()).replace(/\s+/g, " ");
+        assert.match(text, /By day Every 2\.5–3\.5 hours Wake her if she's still asleep at 3\.5 hours from the start of the last feed/);
+        assert.match(text, /At night 11 PM to 5 AM · Pump \+ bottle Every 3 hours · wake her if she's still asleep at 3 hours/);
+        const form = await edit(f, sheet);
+        const said = (await form.innerText()).replace(/\s+/g, " ");
+        assert.match(said, /Wake to feed Wake her if she's still asleep at 3\.5 hours from the start of the last feed\./);
+        assert.match(said, /Wake to feed at night Wake her if she's still asleep at 3 hours from the start of the last feed\./);
+        // The hint follows the hours as they change.
+        await box(form, "hours between feeds by day, to").fill("4");
+        assert.match((await form.innerText()).replace(/\s+/g, " "), /Wake to feed Wake her if she's still asleep at 4 hours from the start of the last feed\./);
         assert.deepEqual(f.errors, []);
       } finally { await f.close(); }
     }],
@@ -177,9 +200,9 @@ export function feedingPlanSheetCases({ fixture, freshState, assert }) {
         assert.match(await row.textContent(), /From Feeding clinic · 3 feeds/);
         await row.click();
         const form = await edit(f, dialog(f, "Feeding plan"));
-        // Saved feeds start folded to their steps in the plan's words.
+        // Saved feeds start folded to their steps in the plan's words; a note is its own sentence after them, never "then".
         const folded = form.getByRole("button", { name: /^Pump \+ bottle/, expanded: false });
-        assert.match((await folded.innerText()).replace(/\s+/g, " "), /Pump \+ bottle Pump 20 min; then bottle up to 50–70 ml, pumped milk first, then formula to finish; then burp halfway Change/);
+        assert.match((await folded.innerText()).replace(/\s+/g, " "), /Pump \+ bottle Pump 20 min; then bottle up to 50–70 ml, pumped milk first, then formula to finish\. Burp halfway Change/);
         await unfold(form, "Nurse + SNS");
         await unfold(form, "Nurse, top up");
         // One number reads as one box: "15 to [ ] min".
@@ -232,6 +255,17 @@ export function feedingPlanSheetCases({ fixture, freshState, assert }) {
         await alerts.first().waitFor();
         assert.deepEqual((await alerts.allTextContents()).map((t) => t.trim()), ["Feed 2's name is needed", "Feed 2's name is needed"], "at the top and by the feed");
         assert.equal(s.patches.length, 0);
+        // A feed left only pumping once its bottle is taken out: the server's words, by that feed, and nothing sent.
+        await box(form, "Feed 2 name").fill("Nurse, top up");
+        await unfold(form, "Pump + bottle");
+        await form.getByRole("group", { name: "Feed 3", exact: true }).getByRole("button", { name: "Take out step 2", exact: true }).click();
+        await form.getByRole("button", { name: "Save the plan", exact: true }).click();
+        await alerts.first().waitFor();
+        const dry = `"Pump + bottle" needs nursing or a bottle: a pump on its own goes in the plan's notes`;
+        assert.deepEqual((await alerts.allTextContents()).map((t) => t.trim()), [dry, dry], "at the top and by the feed");
+        assert.equal(s.patches.length, 0);
+        await f.page.getByRole("button", { name: "Put it back", exact: true }).click();
+        assert.equal(await alerts.count(), 0, "the bottle back, nothing to say");
         // A night without its hours.
         await box(form, "Feed 2 name").fill("Nurse, top up");
         await form.getByLabel("Night starts", { exact: true }).fill("");
@@ -421,6 +455,30 @@ export function feedingPlanSheetCases({ fixture, freshState, assert }) {
         await form.getByRole("button", { name: "Save the plan", exact: true }).click();
         await dialog(f, "Feeding plan").waitFor();
         assert.equal(s.patches.length, 0);
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["Feeding plan sheet: a feed whose name still says what an edit took out says so, folded too, and Rename goes to its name", async () => {
+      const f = await fixture({ state: planned(), apiResponse: server().apiResponse });
+      try {
+        await metric(f);
+        const form = await edit(f, await fromMore(f));
+        await unfold(form, "Nurse + SNS");
+        const feed = form.getByRole("group", { name: "Feed 1", exact: true });
+        assert.equal(await feed.getByText(/Its name still says/).count(), 0, "the name fits as saved");
+        await form.getByRole("group", { name: "Nurse + SNS, step 1: milk at the breast", exact: true }).getByRole("button", { name: "None", exact: true }).click();
+        await feed.getByText("Its name still says “SNS”.", { exact: true }).waitFor();
+        // Folded, it still says so.
+        await form.getByRole("button", { name: "Fold Nurse + SNS to one line", exact: true }).click();
+        assert.match((await form.getByRole("button", { name: /^Nurse \+ SNS/, expanded: false }).innerText()).replace(/\s+/g, " "), /Its name still says “SNS”\./);
+        await unfold(form, "Nurse + SNS");
+        await feed.getByRole("button", { name: "Rename Nurse + SNS", exact: true }).click();
+        const name = box(form, "Feed 1 name");
+        assert(await name.evaluate((el) => document.activeElement === el && el.selectionStart === 0 && el.selectionEnd === el.value.length), "the name is ready to type over");
+        await f.page.keyboard.type("Nurse with the shield");
+        assert.equal(await name.inputValue(), "Nurse with the shield");
+        assert.equal(await feed.getByText(/Its name still says/).count(), 0, "renamed: nothing to say");
+        assert.equal(await f.page.evaluate(() => document.documentElement.scrollWidth), 390, "nothing scrolls sideways");
         assert.deepEqual(f.errors, []);
       } finally { await f.close(); }
     }],
