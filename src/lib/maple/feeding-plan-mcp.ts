@@ -106,6 +106,13 @@ function breastMilkLogged(s: StepView, plan: FeedingPlan, tz: string): string | 
   return `${amountText({ min: s.ml, max: s.ml }, plan.unit)} ${how} at ${formatTime(Math.max(...given.map((e) => Date.parse(e.started_at))), tz)}`;
 }
 
+/**
+ * A nursing step going now (on the breast, or on a break) whose plan gives milk at the breast and none is logged yet:
+ * it's still to give while she's on, which is the card's one action then.
+ */
+const breastMilkOwedNow = (s: StepView) =>
+  s.status === "running" && s.step.do === "nurse" && !!s.step.supplement && !s.entries.some((e) => e.kind === "feed" && e.data.method === "bottle");
+
 /** What the log holds for a step: "20 min", "30 ml", "12 min so far", "12 min so far, 20 ml in the SNS at 11:56 AM". */
 function logged(s: StepView, plan: FeedingPlan, tz: string): string[] {
   if (s.status === "running") {
@@ -143,7 +150,7 @@ function finishWords(s: StepView, short: { given: number; need: Range }, plan: F
 /** One step with what the log says about it: "Pump 15 min (done, 14 min)", "Top up 25–35 ml (not logged yet)". */
 function statusWords(s: StepView, text: string, plan: FeedingPlan, tz: string): string {
   if (s.status === "info") return text;
-  if (s.status === "running") return withLogged(text, ["going now", ...logged(s, plan, tz)]);
+  if (s.status === "running") return withLogged(text, ["going now", ...logged(s, plan, tz), ...(breastMilkOwedNow(s) ? [`${breastMilkWords(s, plan)} not logged yet`] : [])]);
   const short = shortBottle(s);
   if (short) return `${text} (${soFarWords(short, plan)}; next: ${finishWords(s, short, plan)})`;
   if (s.status === "todo") return `${text} (not logged yet)`;
@@ -177,7 +184,8 @@ function missedWords(n: FeedPlanNow, w: Words): string | null {
   const m = n.missed;
   if (!m) return null;
   const words = stepWords(m.view.feed, n.plan, n.target);
-  const at = m.view.start ?? m.view.group?.start ?? null;
+  // Named by its first nursing or bottle, as Today's card and its due line name it (never the night's pump before it).
+  const at = namedAt(m.view);
   // A bottle short of its amount says what's in it, then what it still needs: "bottle up to 50–70 ml (40 ml so far); not logged: formula to finish, 10–30 ml more".
   const short = m.steps.flatMap((s) => {
     const b = shortBottle(s);
@@ -223,7 +231,10 @@ export function planNowLine(n: FeedPlanNow, w: Words): string {
       done.length ? `Done: ${done.map((s) => withLogged(lower(words[s.i]), logged(s, n.plan, w.tz))).join("; ")}.` : "",
       // Nursed, with the milk at the breast not logged: the nursing is done, the milk is what's missing.
       ...unlogged.map((s) => `Nursed${s.minutes != null ? ` ${s.minutes} min` : ""}; not logged yet: ${breastMilkWords(s, n.plan)}.`),
-      now.length ? `Going now: ${now.map((s) => withLogged(lower(words[s.i]), logged(s, n.plan, w.tz))).join("; ")}.` : "",
+      // While she's on, milk at the breast not given yet is said with it: the card's one action then.
+      now.length
+        ? `Going now: ${now.map((s) => `${withLogged(lower(words[s.i]), logged(s, n.plan, w.tz))}${breastMilkOwedNow(s) ? `; not logged yet: ${breastMilkWords(s, n.plan)}` : ""}`).join("; ")}.`
+        : "",
       // A bottle short of its amount: what's in it so far, and next what it still needs ("formula to finish").
       short.length ? `So far: ${short.map((s) => `${lower(words[s.i])} (${soFarWords(shortBottle(s)!, n.plan)})`).join("; ")}.` : "",
       left.length ? `Next: ${left.map((s) => (shortBottle(s) ? finishWords(s, shortBottle(s)!, n.plan) : lower(words[s.i]))).join("; then ")}.` : "",
@@ -251,7 +262,7 @@ function planNowJson(n: FeedPlanNow, w: Words): Record<string, unknown> {
       const short = shortBottle(s);
       if (s.milkMissing) return `${breastMilkWords(s, n.plan)}, not logged`;
       if (short) return `${words[s.i]} (${soFarWords(short, n.plan)}; next: ${finishWords(s, short, n.plan)})`;
-      return s.status === "running" ? `${words[s.i]} (going now)` : words[s.i];
+      return s.status === "running" ? `${words[s.i]} (going now${breastMilkOwedNow(s) ? `; ${breastMilkWords(s, n.plan)} not logged yet` : ""})` : words[s.i];
     }),
     ...(n.after ? { after: n.after.feed.name, after_id: n.after.feed.id } : {}),
     ...(missed ? { missed, ...(topUpOf != null ? { top_up_of: topUpOf } : {}) } : {}),
@@ -946,9 +957,11 @@ export function planSpeak(n: FeedPlanNow, w: Words): string {
   const f = n.focus;
   if (f.state === "underway") {
     const words = stepWords(f.feed, n.plan, n.target);
-    const left = f.steps.filter((s) => s.status === "todo" || s.milkMissing);
+    // While she's on, milk at the breast not given yet comes first ("the 20 ml in the SNS, then pump 15 min").
+    const left = f.steps.filter((s) => s.status === "todo" || s.milkMissing || breastMilkOwedNow(s));
     const todo = left.map((s) => {
       const short = shortBottle(s);
+      if (breastMilkOwedNow(s)) return breastMilkWords(s, n.plan);
       if (s.milkMissing) return `log ${breastMilkWords(s, n.plan)}`;
       // A bottle short of its amount: what it still needs, with what's in it ("formula to finish, 10 to 30 ml more (40 ml so far)").
       return short ? `${finishWords(s, short, n.plan)} (${soFarWords(short, n.plan)})` : lower(words[s.i]);

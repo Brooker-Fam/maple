@@ -106,7 +106,8 @@ async function main() {
           ? { i, step, status: "todo", minutes: null, ml: 40, need: target, milkMissing: false, entries: [] }
           : { i, step, status: "info", minutes: null, ml: null, need: null, milkMissing: false, entries: [] }
     );
-    const short = { feed: plan.feeds[2], why: "night", night: true, start: T(1, 30), group: null, steps, done: false, live: false, lastAt: T(1, 55), extraNursing: false } as unknown as Now["focus"];
+    // Named by its first bottle (PlanFeedView.named), never the pump begun before it.
+    const short = { feed: plan.feeds[2], why: "night", night: true, start: T(1, 30), named: T(1, 55), group: null, steps, done: false, live: false, lastAt: T(1, 55), extraNursing: false } as unknown as Now["focus"];
     const base = feedPlanNow(plan, [], now, { tz, target });
     const w = { now, tz, vo: FAMILY_ONE_VOICE };
     const going: Now = { ...base, focus: { ...short, state: "underway" }, after: { feed: plan.feeds[0], night: true }, missed: null, others: [] };
@@ -116,7 +117,7 @@ async function main() {
     // Left like that, the next feed's line says it, as a step the feed didn't finish.
     const after: Now = { ...base, missed: { view: short, steps: short.steps.filter((s) => s.status === "todo") } };
     const missed = planNowLine(after, w);
-    ok(missed.includes('From the 1:30 AM feed ("Pump + bottle"), bottle up to 50–70 ml, pumped milk first, then formula to finish (40 ml so far); not logged: formula to finish, 10–30 ml more.'), missed);
+    ok(missed.includes('From the 1:55 AM feed ("Pump + bottle"), bottle up to 50–70 ml, pumped milk first, then formula to finish (40 ml so far); not logged: formula to finish, 10–30 ml more.'), missed);
   });
 
   await test("on demand, a step only if needed and one side in the plan's line and Siri's: when to feed by, what's left, never a miss", async () => {
@@ -357,10 +358,12 @@ async function main() {
       const plan = feedingPlanOf(await settings(A))!;
       eq([row.plan, row.shield], [plan.feeds[0].id, undefined], "tagged; this feed has no shield");
       const now = await tool(alpha.member, A, "feeding_plan");
-      ok(now.text.includes("Underway: \"Nurse + SNS\" (started from the plan, since 11:50 AM).") && now.text.includes("- Nurse 12–18 min, 20 ml of formula in the SNS (going now, 10 min so far)") && now.text.includes("- Pump 15 min (not logged yet)"), now.text);
+      // While she's on, the SNS milk not given yet is said with it: the card's one action then.
+      ok(now.text.includes("Underway: \"Nurse + SNS\" (started from the plan, since 11:50 AM).") && now.text.includes("- Nurse 12–18 min, 20 ml of formula in the SNS (going now, 10 min so far, the 20 ml in the SNS not logged yet)") && now.text.includes("- Pump 15 min (not logged yet)"), now.text);
       const status = await tool(alpha.member, A, "maple_status");
-      ok(status.text.includes('Feeding plan: "Nurse + SNS" is underway since 11:50 AM. Going now: nurse 12–18 min, 20 ml of formula in the SNS (10 min so far). Next: pump 15 min. After it: "Nurse, top up"; next feed 2:20 PM–3:20 PM, in 2h 20m.'), status.text);
-      ok(/From the feeding plan: Nurse \+ SNS is underway; still to do: pump 15 min\./.test((await siri(alpha.token, { action: "status" })).speak ?? ""), "Siri: what's left");
+      ok(status.text.includes('Feeding plan: "Nurse + SNS" is underway since 11:50 AM. Going now: nurse 12–18 min, 20 ml of formula in the SNS (10 min so far); not logged yet: the 20 ml in the SNS. Next: pump 15 min. After it: "Nurse, top up"; next feed 2:20 PM–3:20 PM, in 2h 20m.'), status.text);
+      eq((status.json.feeding_plan as { steps_left?: unknown }).steps_left, ["Nurse 12–18 min, 20 ml of formula in the SNS (going now; the 20 ml in the SNS not logged yet)", "Pump 15 min"], "maple_status's steps left");
+      ok(/From the feeding plan: Nurse \+ SNS is underway; still to do: the 20 ml in the SNS, then pump 15 min\./.test((await siri(alpha.token, { action: "status" })).speak ?? ""), "Siri: what's left, the SNS milk first");
       // Its SNS milk logged while she's still on: milk at the breast, part of this feed, said as given, never a top-up or a feed.
       const sns = await tool(alpha.member, A, "log_feed", { method: "bottle", amount: 20, unit: "ml", via: "sns", milk: "formula", minutes_ago: 4 });
       ok(sns.text.includes("Counted with the feed that began at 11:50 AM today: milk at the breast, part of that feed, not a feed of its own.") && sns.text.includes("(with 0.68 oz (20 ml) in the SNS)"), sns.text);
@@ -447,6 +450,18 @@ async function main() {
       const spoken = await siri(alpha.token, { action: "bottle", amount_oz: 1 });
       ok(spoken.speak === "Logged a 1 ounce bottle at 12:00 PM, a top-up for the 10:40 AM feed.", spoken.speak ?? "");
       eq((await sql(`SELECT (data->>'top_up_of')::int AS of FROM maple_entries WHERE family_id = $1 AND deleted_at IS NULL AND data->>'method' = 'bottle'`, [A]))[0]?.of, nursingId, "Siri's too");
+      // A feed with a re-latch is named by its first nursing, as Today's card names it, though the link names the newest nursing.
+      await wipe();
+      const first = await tool(alpha.owner, A, "log_feed", { method: "breast", left_minutes: 10, right_minutes: 10, first_side: "left", plan: "Nurse, top up", at: "10:00am" });
+      const relatch = await tool(alpha.owner, A, "log_feed", { method: "breast", left_minutes: 10, first_side: "left", at: "10:40am" });
+      void first;
+      const named = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 30, unit: "ml", via: "paced" });
+      ok(named.text.includes("Counted as a top-up to the feed that began at 10:00 AM today: part of that feed, not a feed of its own."), named.text);
+      ok(named.text.includes(`The feeding plan's 10:00 AM feed ("Nurse, top up") still had its top-up to log, so this was saved with that feed [entry #${Number(relatch.json.id)}].`), named.text);
+      // Milk the plan counts as a feed's milk at the breast, given later by Siri's bottle: for that feed, never "a top-up".
+      await wipe();
+      await tool(alpha.owner, A, "log_feed", { method: "breast", left_minutes: 12, first_side: "left", plan: "Nurse + SNS", minutes_ago: 52 });
+      eq((await siri(alpha.token, { action: "bottle", amount_oz: 0.6 })).speak, "Logged a 0.6 ounce bottle at 12:00 PM, for the 11:08 AM feed.", "Siri: milk at the breast");
       // Over 90 minutes after the nursing ended, a bottle is a feed of its own, and by day (the day's feeds all nurse) no plan feed's.
       await wipe();
       await tool(alpha.owner, A, "log_feed", { method: "breast", left_minutes: 10, right_minutes: 10, first_side: "left", plan: "Nurse, top up", minutes_ago: 115 });
