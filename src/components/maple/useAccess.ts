@@ -8,11 +8,12 @@ import { useMaple } from "./useMaple";
  * the questions for the doctor, moments, the chat): what the app shows and
  * offers them. The server decides every read and write on its own; this only
  * keeps the app from showing what's hidden or offering what it would refuse.
- * Before the first state arrives, nothing is offered.
+ * Before the first state arrives nothing is narrowed, as `readOnly` isn't
+ * either (no screen that reads this shows before it).
  */
 export function usePart(part: Part): PartLevel {
   const { state } = useMaple();
-  return state ? partLevelOf(state.me, part) : "none";
+  return state?.me ? partLevelOf(state.me, part) : "log";
 }
 
 /** The in-app chat is on for this person: not a photos-only guest, and not turned off by an owner. */

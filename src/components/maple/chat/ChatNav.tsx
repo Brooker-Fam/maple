@@ -54,7 +54,7 @@ export function ChatNavProvider({ children }: { children: ReactNode }) {
   const [pending, setPending] = useState<{ scope: string; value: PendingChatPrompt } | null>(null);
   const pendingPrompt = pending?.scope === scope ? pending.value : null;
   // An owner turned the chat off for this person (access.ts parts), or they're a photos-only guest: nothing opens it.
-  const chatOn = !!state && state.me.role !== "photos" && partLevelOf(state.me, "chat") !== "none";
+  const chatOn = !state?.me || (state.me.role !== "photos" && partLevelOf(state.me, "chat") !== "none");
 
   useEffect(() => {
     setPending((current) => current?.scope === scope ? current : null);
