@@ -5,7 +5,8 @@ import { encryptSecret, openSecret } from "@/lib/secret-box";
 import { describeEntry } from "../describe";
 import { milestoneWordsOf } from "../milestones";
 import { context, type Ctx, type Extra } from "../mcp-tools";
-import { rowToEntry, StoreUnavailable } from "../store";
+import { rowToEntry, StoreUnavailable, unseenSql } from "../store";
+import { partForbiddenCopy, partLevelOf } from "../access";
 import { addDays, dayBounds, dayKey, daysBetween } from "../time";
 import { chatEntryResultsSchema, searchCriteriaSchema, searchInputSchema, SEARCH_MAX_DAYS, SEARCH_PAGE_SIZE, type ChatEntryResults, type ChatSearchCriteria, type ChatSearchInput } from "./search";
 
@@ -70,8 +71,10 @@ export async function searchEntries(ctx: SearchContext, raw: ChatSearchInput): P
   const asOf = cursor ? new Date(cursor.asOf) : ctx.now;
   if (asOf > ctx.now || (cursor && (new Date(cursor.at) > asOf))) throw new ChatSearchError("That search page is invalid. Run the search again.");
   const [from, to] = bounds(criteria, ctx, asOf);
+  // The questions for the doctor, asked for by someone an owner hid them from (access.ts parts).
+  if (criteria.doctorQuestions && partLevelOf(ctx.fam, "doctor") === "none") throw new ChatSearchError(partForbiddenCopy("doctor", "none"));
   const rows = await query(
-    `SELECT * FROM maple_entries WHERE family_id = $1 AND baby_id = $2 AND deleted_at IS NULL
+    `SELECT * FROM maple_entries WHERE family_id = $1 AND baby_id = $2 AND deleted_at IS NULL${unseenSql(ctx.fam)}
       AND started_at >= $3 AND started_at < $4
       AND ($5::text IS NULL OR kind = $5)
       AND ($6::text IS NULL OR concat_ws(' ', note, data->>'title', data->>'name', data->>'tag', data->>'milestone') ILIKE $6 ESCAPE '\\')

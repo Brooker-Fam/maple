@@ -16,4 +16,4 @@ export const POST = withMember("POST /api/maple/chat/search", async (request, me
     if (error instanceof ChatSearchError) throw new BadRequest(error.message);
     throw error;
   }
-});
+}, { part: ["chat", "view"] });

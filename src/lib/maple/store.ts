@@ -23,6 +23,7 @@ import {
   type TapFeedData,
 } from "./feed";
 import { cleanData } from "./validate";
+import { entryPart, PartForbidden, partLevelOf, type Parts } from "./access";
 import { clientMomentPhoto, prepareMomentPhotos, writeMomentPhotos } from "./moment-photos";
 import { QUOTA_MESSAGE } from "./upload-quota";
 import type {
@@ -34,6 +35,7 @@ import type {
   FeedEdit,
   Lifetime,
   MomentData,
+  Role,
   Segment,
   Side,
   Source,
@@ -74,6 +76,57 @@ export class StoreUnavailable extends Error {
 }
 
 export class NotFound extends Error {}
+
+/**
+ * The member a store call is made for: a member's FamilyCtx carries their
+ * role and the parts an owner turned down (access.ts). A bare family id or
+ * scope (jobs, the push tick) is nobody's, and reads everything.
+ */
+function readerOf(fam: FamilyRef): { role: Role; parts?: Parts } | null {
+  if (typeof fam !== "object" || fam === null) return null;
+  const role = (fam as { role?: unknown }).role;
+  return role === "owner" || role === "member" || role === "viewer" || role === "photos" ? { role, parts: (fam as { parts?: Parts }).parts } : null;
+}
+
+/** The test for a question for the doctor, a NULL-safe one (a note without the flag isn't one). */
+const doctorRow = (t: string) => `(${t}kind = 'note' AND ${t}data->>'for_doctor' IS NOT DISTINCT FROM 'true')`;
+
+/**
+ * What this reader can't see, as conditions to add to a WHERE on
+ * maple_entries (`alias`: the table's alias): the questions for the doctor
+ * and moments, where an owner hid them (access.ts parts). Every read here
+ * made for a member adds it, so another way in (an id, a search, the change
+ * token) finds a hidden entry exactly as one that isn't there. Empty for
+ * owners, for anyone with nothing hidden, and for jobs.
+ */
+export function unseenSql(fam: FamilyRef, alias?: string): string {
+  const r = readerOf(fam);
+  if (!r || r.role === "owner") return "";
+  const t = alias ? `${alias}.` : "";
+  let out = "";
+  if (partLevelOf(r, "doctor") === "none") out += ` AND NOT ${doctorRow(t)}`;
+  if (partLevelOf(r, "moments") === "none") out += ` AND ${t}kind <> 'moment'`;
+  return out;
+}
+
+/** What this reader can't change (a part below "log"), as conditions for a write's WHERE; empty when they can change every part. */
+function unwritableSql(fam: FamilyRef): string {
+  const r = readerOf(fam);
+  if (!r || r.role === "owner") return "";
+  let out = "";
+  if (partLevelOf(r, "doctor") !== "log") out += ` AND NOT ${doctorRow("")}`;
+  if (partLevelOf(r, "moments") !== "log") out += " AND kind <> 'moment'";
+  return out;
+}
+
+/** Refuses writing `e` (as it is, or as it would become) beyond this reader's level of its part; anything in no part passes. */
+export function mayWriteEntry(fam: FamilyRef, e: { kind: string; data?: unknown }): void {
+  const r = readerOf(fam);
+  const part = r ? entryPart(e) : null;
+  if (!r || !part) return;
+  const level = partLevelOf(r, part);
+  if (level !== "log") throw new PartForbidden(part, level);
+}
 
 type Row = Record<string, unknown>;
 
@@ -271,7 +324,7 @@ export type ListOptions = {
 export async function listEntries(fam: FamilyRef, opts: ListOptions): Promise<Entry[]> {
   const rows = await q(
     `SELECT * FROM maple_entries
-     WHERE family_id = $9 AND baby_id = $1 AND deleted_at IS NULL
+     WHERE family_id = $9 AND baby_id = $1 AND deleted_at IS NULL${unseenSql(fam)}
        AND ($2::text[] IS NULL OR kind = ANY($2::text[]))
        AND (
          ($3::timestamptz IS NULL OR COALESCE(ended_at, started_at) >= $3::timestamptz)
@@ -302,7 +355,7 @@ export async function listEntries(fam: FamilyRef, opts: ListOptions): Promise<En
 export async function listMomentHighlights(fam: FamilyRef, babyId: number, milestones: string[]): Promise<Entry[]> {
   const rows = await q(
     `SELECT DISTINCT ON (data->>'milestone') * FROM maple_entries
-     WHERE family_id = $1 AND baby_id = $2 AND deleted_at IS NULL AND kind = 'moment'
+     WHERE family_id = $1 AND baby_id = $2 AND deleted_at IS NULL AND kind = 'moment'${unseenSql(fam)}
        AND data->>'milestone' = ANY($3::text[])
      ORDER BY data->>'milestone',
        CASE WHEN data->>'milestone' LIKE 'monthly-%' THEN started_at END DESC,
@@ -314,10 +367,10 @@ export async function listMomentHighlights(fam: FamilyRef, babyId: number, miles
   return rows.map(rowToEntry).sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at) || b.id - a.id);
 }
 
-/** An entry by id, or null when it doesn't exist, is deleted (unless asked), or is another family's. */
+/** An entry by id, or null when it doesn't exist, is deleted (unless asked), is another family's, or is hidden from this reader (unseenSql). */
 export async function getEntry(fam: FamilyRef, id: number, opts: { includeDeleted?: boolean } = {}): Promise<Entry | null> {
   const rows = await q(
-    `SELECT * FROM maple_entries WHERE id = $1 AND family_id = $2 ${opts.includeDeleted ? "" : "AND deleted_at IS NULL"}`,
+    `SELECT * FROM maple_entries WHERE id = $1 AND family_id = $2 ${opts.includeDeleted ? "" : "AND deleted_at IS NULL"}${unseenSql(fam)}`,
     [id, famId(fam)]
   );
   return rows.length ? rowToEntry(rows[0]) : null;
@@ -377,6 +430,8 @@ function isUniqueViolation(err: unknown, index: string): boolean {
 export async function createEntryOnce(fam: FamilyRef, e: NewEntry): Promise<{ entry: Entry; deduped: boolean }> {
   const familyId = famId(fam);
   const data = cleanData(e.kind, e.data);
+  // A question for the doctor or a moment, from someone who can only see them (or can't): nothing is saved.
+  mayWriteEntry(fam, { kind: e.kind, data });
   if (e.kind === "moment" && (data as MomentData).photos) {
     (data as MomentData).photos = prepareMomentPhotos(familyId, (data as MomentData).photos);
   }
@@ -458,6 +513,7 @@ function noFutureEnds(segments: Segment[], now: Date) {
 export async function updateEntry(fam: FamilyRef, id: number, patch: EntryPatch, by?: string, opts: { expectUpdatedAt?: string } = {}): Promise<Entry> {
   const cur = await getEntry(fam, id);
   if (!cur) throw new NotFound(`Entry ${id} not found`);
+  mayWriteEntry(fam, cur);
   if (cur.kind === "growth" && cur.source === "epic") {
     throw new Error("Imported measurements keep their original values. Remove this point and log a separate measurement if needed.");
   }
@@ -553,6 +609,8 @@ export async function updateEntry(fam: FamilyRef, id: number, patch: EntryPatch,
     };
   }
   const data = cleanData(cur.kind, mergedData);
+  // Nor can it become one: marking a note for the doctor is adding a question.
+  mayWriteEntry(fam, { kind: cur.kind, data });
 
   let endedAt = partsEnd ?? (patch.endedAt !== undefined ? patch.endedAt : cur.ended_at ? new Date(cur.ended_at) : null);
   if (cur.active) endedAt = null;
@@ -610,9 +668,16 @@ export async function updateEntry(fam: FamilyRef, id: number, patch: EntryPatch,
  * deleted rows), so Undo brings it back still running.
  */
 export async function softDeleteEntry(fam: FamilyRef, id: number, by?: string): Promise<Entry> {
+  // Someone who can't change a part (access.ts) gets its own words for one they can see, and not-found for one they can't.
+  const guard = unwritableSql(fam);
+  if (guard) {
+    const cur = await getEntry(fam, id);
+    if (!cur) throw new NotFound(`Entry ${id} not found`);
+    mayWriteEntry(fam, cur);
+  }
   const rows = await q(
     `UPDATE maple_entries SET deleted_at = NOW(), updated_by = COALESCE($2, updated_by), updated_at = NOW()
-     WHERE id = $1 AND family_id = $3 AND deleted_at IS NULL RETURNING *`,
+     WHERE id = $1 AND family_id = $3 AND deleted_at IS NULL${guard} RETURNING *`,
     [id, by ?? null, famId(fam)]
   );
   if (!rows.length) throw new NotFound(`Entry ${id} not found`);
@@ -638,8 +703,10 @@ export async function restoreEntry(fam: FamilyRef, id: number, by?: string): Pro
 /** restoreEntry, plus when a running timer had to come back stopped (else null). */
 export async function restoreEntryDetailed(fam: FamilyRef, id: number, by?: string): Promise<{ entry: Entry; stoppedAt: string | null }> {
   const familyId = famId(fam);
-  const prev = await getEntry(familyId, id, { includeDeleted: true });
+  // Read as this reader (unseenSql), and only put back what they may change.
+  const prev = await getEntry(fam, id, { includeDeleted: true });
   if (!prev) throw new NotFound(`Entry ${id} not found`);
+  mayWriteEntry(fam, prev);
   // Moved to mom's medicines (care-store moveFromMaple): back only through the Undo there, never as Maple's too.
   if ((prev.data as Record<string, unknown>).moved_to != null) throw new Error("That one moved to her own medicines, so it can't come back here. Undo the move from there.");
   try {
@@ -681,7 +748,7 @@ export async function restoreEntryDetailed(fam: FamilyRef, id: number, by?: stri
 /** Soft-deleted entries since a time, newest first ("Recently removed"). */
 export async function listDeleted(fam: FamilyRef, babyId: number, since: Date): Promise<Entry[]> {
   const rows = await q(
-    `SELECT * FROM maple_entries WHERE family_id = $3 AND baby_id = $1 AND deleted_at IS NOT NULL AND deleted_at >= $2 AND NOT (data ? 'moved_to')
+    `SELECT * FROM maple_entries WHERE family_id = $3 AND baby_id = $1 AND deleted_at IS NOT NULL AND deleted_at >= $2 AND NOT (data ? 'moved_to')${unseenSql(fam)}
      ORDER BY deleted_at DESC LIMIT 100`,
     [babyId, since.toISOString(), famId(fam)]
   );
@@ -1144,7 +1211,7 @@ export async function discardTimer(fam: FamilyRef, id: number, by?: string, opts
  * feed". undefined when it isn't deleted (or doesn't exist).
  */
 export async function discardedBy(fam: FamilyRef, id: number): Promise<string | null | undefined> {
-  const rows = await q(`SELECT updated_by FROM maple_entries WHERE id = $1 AND family_id = $2 AND deleted_at IS NOT NULL`, [id, famId(fam)]);
+  const rows = await q(`SELECT updated_by FROM maple_entries WHERE id = $1 AND family_id = $2 AND deleted_at IS NOT NULL${unseenSql(fam)}`, [id, famId(fam)]);
   if (!rows.length) return undefined;
   return rows[0].updated_by == null ? null : String(rows[0].updated_by);
 }
@@ -1447,7 +1514,8 @@ export async function rev(fam: FamilyRef, babyId: number, opts: { checkins?: boo
 export async function revParts(fam: FamilyRef, babyId: number, opts: { checkins?: boolean } = {}): Promise<{ rev: string; sleep: boolean }> {
   const rows = await q(
     `SELECT
-       (SELECT COALESCE(MAX(updated_at)::text, '') || '/' || COUNT(*) FROM maple_entries WHERE family_id = $2 AND baby_id = $1) AS e,
+       -- Only what this reader can see (unseenSql): a hidden question for the doctor never moves their token.
+       (SELECT COALESCE(MAX(updated_at)::text, '') || '/' || COUNT(*) FROM maple_entries WHERE family_id = $2 AND baby_id = $1${unseenSql(fam)}) AS e,
        (SELECT COALESCE(updated_at::text, '') FROM maple_babies WHERE id = $1 AND family_id = $2) AS b,
        (SELECT COALESCE(MAX(updated_at)::text, '') || '/' || COUNT(*) FROM maple_members WHERE family_id = $2) AS m,
        -- The sleep plan, bassinet tries and holding shifts (sleep/schema.ts): a try or a handoff on one phone shows on the others.

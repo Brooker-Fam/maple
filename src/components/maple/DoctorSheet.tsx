@@ -12,6 +12,7 @@ import { Icon } from "./icons";
 import { requestGrowthChart, VisitSummary } from "./PatternsTab";
 import { Button, SectionTitle, Sheet, TextArea, cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
+import { usePart } from "./useAccess";
 
 /**
  * "For the doctor": everything for Maple's checkup in one place. Questions to
@@ -39,6 +40,8 @@ export default function DoctorSheet({ open, onClose, ask }: { open: boolean; onC
   const phones = usePhones();
   const [question, setQuestion] = useState("");
   const [savingQuestion, setSavingQuestion] = useState(false);
+  // An owner can hide the questions from someone, or let them only read them (access.ts parts).
+  const doctor = usePart("doctor");
   if (!state) return null;
   const tz = state.baby.timezone;
   const todayKey = dayKey(now, tz);
@@ -69,7 +72,7 @@ export default function DoctorSheet({ open, onClose, ask }: { open: boolean; onC
 
   return (
     <Sheet open={open} onClose={close} locked={savingQuestion} dirty={!!question.trim()} title="For the doctor" subtitle={`${baby}'s checkups`}>
-      <DoctorQuestions open={open} focus={!!ask && open} text={question} setText={setQuestion} saving={savingQuestion} setSaving={setSavingQuestion} />
+      {doctor !== "none" && <DoctorQuestions open={open} focus={!!ask && open && doctor === "log"} text={question} setText={setQuestion} saving={savingQuestion} setSaving={setSavingQuestion} />}
 
       <VisitSummary state={state} todayKey={todayKey} tz={tz} now={now} />
 
@@ -118,7 +121,10 @@ function Disclosure({ label, summary, open, onToggle, children }: { label: strin
 
 /** Questions for the next checkup (moved here from Family): add, tick off with the answer, put back, delete. */
 function DoctorQuestions({ open: sheetOpen, focus, text, setText, saving, setSaving }: { open: boolean; focus: boolean; text: string; setText: (value: string) => void; saving: boolean; setSaving: (value: boolean) => void }) {
-  const { state, api, log, update, remove, readOnly, memberName, now } = useMaple();
+  const { state, api, log, update, remove, readOnly: viewOnly, memberName, now } = useMaple();
+  // A viewer, or someone an owner let only read the questions (access.ts parts): no adding, ticking off or deleting.
+  const doctor = usePart("doctor");
+  const readOnly = viewOnly || doctor !== "log";
   const w = useBabyWords();
   const tz = state!.baby.timezone;
   const rev = state!.rev;

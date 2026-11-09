@@ -12,4 +12,4 @@ export const POST = withMember("POST /api/maple/chat/settings", async (request, 
     if (error instanceof SettingActionError) return json({ error: error.message, code: "setting_changed" }, error.status);
     throw error;
   }
-});
+}, { part: ["chat", "view"] });

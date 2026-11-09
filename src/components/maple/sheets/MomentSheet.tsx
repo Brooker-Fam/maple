@@ -15,6 +15,7 @@ import { useDraftChanged } from "../useDraftChanged";
 import { ApiError, useMaple } from "../useMaple";
 import type { SheetProps } from "./index";
 import { LoggedBy, SheetFooter, useOpenCount } from "./parts";
+import { usePart } from "../useAccess";
 
 type Moment = EntryOf<"moment">;
 
@@ -65,7 +66,10 @@ function useMomentSave(moment: Moment | undefined, draft: ReturnType<typeof useM
 }
 
 function MomentForm({ open, onClose, entry, preset, onReload }: SheetProps & { onReload: (entry: Moment) => void }) {
-  const { state, remove, toast, now, readOnly } = useMaple();
+  const { state, remove, toast, now, readOnly: viewOnly } = useMaple();
+  // A moment an owner let this person only see (access.ts parts) opens to read, as a viewer's does.
+  const addsMoments = usePart("moments") === "log";
+  const readOnly = viewOnly || !addsMoments;
   const moment = entry?.kind === "moment" ? entry : undefined;
   const tz = state?.baby.timezone ?? "America/New_York";
   const draft = useMomentDraft(moment, preset, tz, now);

@@ -174,6 +174,9 @@ const GROUP_WORDS: Record<ToolGroup, RegExp[]> = {
     /\b(remove|kick) \w+ (from|out)\b/i,
     /\badd \w+( \w+)? to (the )?(app|family|maple|account|log)\b/i,
     /\bshare (maple|the app|the log|access)\b/i,
+    // What one person can see or do (access.ts parts): "don't let Jamie see the doctor questions", "hide the moments from Pat".
+    /\b(let|allow|stop|keep) (?!me\b|us\b|her\b|him\b|them\b|it\b)\w+ (from )?(see|seeing|view|viewing|use|using|add|adding)\b/i,
+    /\bhide\b[^.?!]{0,60}\bfrom (?!me\b|us\b|her\b|him\b|them\b|it\b)\w+/i,
   ],
   memory_admin: [
     /\b(memor(y|ies)|remember\w*|forget|forgot|anymore|no longer|archive\w*|resolve\w*|outdated|out of date)\b/i,

@@ -34,12 +34,12 @@ export async function findDelivery(fam: Fam, member: string, requestId: string):
 
 /** A requested receipt is readable after its conversation page or entire history has been removed. */
 export async function deliveryStatus(fam: Fam, member: string, open: boolean | ThreadAccess, requestId: string): Promise<ChatDeliveryStatus> {
-  const { viewer, careHidden } = asThreadAccess(open);
+  const { viewer, careHidden, doctorHidden, momentsHidden } = asThreadAccess(open);
   const r = await rows(`SELECT d.completed_at IS NOT NULL AS completed, d.cancelled_at IS NOT NULL AS cancelled, t.id AS thread_id,
       EXISTS (SELECT 1 FROM maple_chat_member_locks l WHERE l.family_id = d.family_id AND l.member = d.member AND l.thread_id = d.thread_id AND l.busy_until > NOW()) AS busy
     FROM maple_chat_deliveries d LEFT JOIN maple_chat_threads t
-      ON t.id = d.thread_id AND t.family_id = d.family_id AND t.member = d.member AND ${openable("t", "$4", "$5")}
-    WHERE d.family_id = $1 AND d.member = $2 AND d.request_id = $3`, [fam.familyId, member, requestId, viewer, careHidden]);
+      ON t.id = d.thread_id AND t.family_id = d.family_id AND t.member = d.member AND ${openable("t", "$4", "$5", "$6", "$7")}
+    WHERE d.family_id = $1 AND d.member = $2 AND d.request_id = $3`, [fam.familyId, member, requestId, viewer, careHidden, doctorHidden, momentsHidden]);
   return { requestId, state: !r.length ? "missing" : r[0].cancelled === true ? "cancelled" : r[0].completed === true ? "completed" : "received", threadId: r[0]?.thread_id == null ? null : String(r[0].thread_id), busy: r[0]?.busy === true };
 }
 

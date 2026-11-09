@@ -67,6 +67,7 @@ import {
   type ToolCopy,
 } from "./mcp-tools";
 import { NotFound, StoreUnavailable } from "./store";
+import { partForbiddenCopy } from "./access";
 import { addDays, dayKey } from "./time";
 import type { CareEntry, CarePlan, DoseEntry, MedReason, PlanInput, Source } from "./types";
 import { cToF, fToC } from "./units";
@@ -236,6 +237,8 @@ function addCareTool<S extends ZodRawShapeCompat>(
   const handler = async (args: ShapeOutput<S>, extra: Extra): Promise<CallToolResult> => {
     try {
       const ctx = await context(extra);
+      // A chat an owner set to read only (access.ts parts) reads her page as its level allows, and changes nothing.
+      if (cfg.write && ctx.chatReadsOnly) return fail(partForbiddenCopy("chat", "view"));
       const s = await careFor(ctx);
       needAccess(ctx, s, !!cfg.write);
       return await run(args, ctx, s);

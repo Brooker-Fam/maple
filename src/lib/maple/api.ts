@@ -18,6 +18,7 @@ import { analyticsTags } from "@/lib/analytics/config";
 import { deliver, deliveryDeps } from "./usage-alerts/delivery";
 import { MAPLE_ORIGIN } from "./origin";
 import type { AnalyticsActor } from "@/lib/analytics/identity";
+import { atLeast, PartForbidden, partForbiddenCopy, partLevelOf, type Part, type PartLevel } from "./access";
 
 /**
  * Shared plumbing for /api/maple/* routes: resolve the signed-in member and
@@ -49,12 +50,13 @@ export function familyMismatch(request: NextRequest, ctx: Pick<FamilyCtx, "famil
 /**
  * Wrap a route handler so it only runs for a signed-in member, with the
  * family their session names (`write: true` also turns away read-only
- * viewers; a family still setting up gets STILL_SETTING_UP unless `setup`). Every store call the handler makes takes that `ctx`. Errors
+ * viewers; `part: [part, level]` turns away anyone an owner gave less of that
+ * part, access.ts; a family still setting up gets STILL_SETTING_UP unless `setup`). Every store call the handler makes takes that `ctx`. Errors
  * thrown inside become 400 (BadRequest / validation), 403, 404, 409 (lost a
  * race with the other parent; body carries the current entry), 503 (no
  * database), or 500 (reported to PostHog).
  */
-export function withMember(route: string, handler: Handler, opts: { write?: boolean; setup?: boolean; photos?: boolean } = {}) {
+export function withMember(route: string, handler: Handler, opts: { write?: boolean; setup?: boolean; photos?: boolean; part?: [Part, PartLevel] } = {}) {
   return async function (request: NextRequest): Promise<Response> {
     let fam: FamilyCtx | undefined;
     const requestId = syncRequestFor(route, request);
@@ -78,6 +80,11 @@ export function withMember(route: string, handler: Handler, opts: { write?: bool
       if (mismatch) return finish(mismatch);
       if (member.role === "photos" && (!opts.photos || opts.write)) return finish(json({ error: "Your access is limited to shared moments.", code: "photos_only" }, 403));
       if (opts.write && member.role === "viewer") return finish(json({ error: viewOnlyCopy() }, 403));
+      if (opts.part) {
+        const [part, need] = opts.part;
+        const level = partLevelOf({ role: member.role, parts: ctx.parts }, part);
+        if (!atLeast(level, need)) return finish(json({ error: partForbiddenCopy(part, level), code: "part", part }, 403));
+      }
       return finish(await handler(request, member, ctx));
     } catch (error) {
       const response = await errorResponse(route, error, fam);
@@ -128,6 +135,8 @@ export async function errorResponse(route: string, error: unknown, fam?: FamilyC
     return json({ error: error.message, reason: error.reason, entry: toClientEntry(error.entry) }, 409);
   }
   if (error instanceof Forbidden) return json({ error: error.message || "Not allowed" }, 403);
+  // A question for the doctor or a moment beyond what an owner gave this person (access.ts parts).
+  if (error instanceof PartForbidden) return json({ error: error.message, code: "part", part: error.part }, 403);
   if (error instanceof BadRequest) return json({ error: error.message }, 400);
   // A time fix that doesn't fit the feed: the sheet shows the copy, code says which bound.
   if (error instanceof FeedEditError) {

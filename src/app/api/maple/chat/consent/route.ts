@@ -23,4 +23,4 @@ export const POST = withMember("POST /api/maple/chat/consent", async (request: N
   if (care === true) await acceptConsent(ctx, member.email, "chat_care");
   if (care === false) await withdrawConsent(ctx, member.email, "chat_care");
   return json(await chatConsent(ctx, member));
-}, { setup: true });
+}, { setup: true, part: ["chat", "view"] });

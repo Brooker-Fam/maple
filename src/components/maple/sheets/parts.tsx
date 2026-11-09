@@ -171,7 +171,9 @@ export function LoggedBy({ entry, noTime }: { entry: Entry; noTime?: boolean }) 
 
 /**
  * The sticky footer: [Delete] (quiet danger text, editing only) on the left
- * and the primary action on the right. Viewers just get Close.
+ * and the primary action on the right. Viewers just get Close, as does
+ * anyone `viewOnly` names: an entry in a part an owner let them only see
+ * (access.ts parts: a question for the doctor, a moment).
  */
 export function SheetFooter({
   onDelete,
@@ -181,7 +183,9 @@ export function SheetFooter({
   busy,
   hint,
   onClose,
+  viewOnly = false,
 }: {
+  viewOnly?: boolean;
   onDelete?: () => void;
   onPrimary: () => void;
   label: string;
@@ -193,7 +197,7 @@ export function SheetFooter({
 }) {
   const { readOnly } = useMaple();
   const ask = useAskWho();
-  if (readOnly) {
+  if (readOnly || viewOnly) {
     return (
       <div className="flex items-center gap-3">
         <p className={cx(tone.muted, "flex flex-1 items-center gap-2 text-sm")}>

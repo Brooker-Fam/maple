@@ -14,9 +14,10 @@ function authorId(ctx: FamilyCtx, id: string | null): string | null {
 
 export function membersForReader(ctx: FamilyCtx, members: Member[]): Member[] {
   if (ctx.role !== "photos") return members;
-  // Who reaches her page is nothing a photos-only guest needs.
-  return members.map(({ care: _care, ...member }) => {
+  // Who reaches her page, or which parts anyone else has (access.ts), is nothing a photos-only guest needs.
+  return members.map(({ care: _care, parts: _parts, ...member }) => {
     void _care;
+    void _parts;
     return { ...member, email: authorId(ctx, member.email)! };
   });
 }

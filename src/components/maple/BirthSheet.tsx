@@ -14,6 +14,7 @@ import { MiniStepper, useOpenCount } from "./sheets/parts";
 import { useDraftChanged } from "./useDraftChanged";
 import { Button, Field, Sheet, WhenField, cx, tone } from "./ui";
 import { useMaple } from "./useMaple";
+import { usePart } from "./useAccess";
 
 type Mode = "birth" | "edit";
 
@@ -52,6 +53,8 @@ export default function BirthSheet(props: Props) {
 
 function BirthForm({ open, onClose, mode = "birth" }: Props) {
   const { state, units, now, api, log, refresh, toast } = useMaple();
+  // The "Hello, world" moment needs moments this person can add to (access.ts parts); someone else can keep one later.
+  const addsMoments = usePart("moments") === "log";
   const words = useBabyWords();
   const baby = state?.baby;
   const tz = baby?.timezone ?? "America/New_York";
@@ -147,7 +150,7 @@ function BirthForm({ open, onClose, mode = "birth" }: Props) {
     // One "Hello, world" moment, even if both parents tap "She's here!" at once:
     // the fixed client_id makes the server keep the first.
     const already = state?.entries.some((e) => e.kind === "moment" && e.data.milestone === "born");
-    if (!already) {
+    if (!already && addsMoments) {
       await log(
         {
           kind: "moment",
@@ -313,6 +316,7 @@ const subscribe = (cb: () => void) => {
 export function WelcomeHost() {
   const w = useSyncExternalStore(subscribe, () => welcome, () => null);
   const { open } = useSheets();
+  const addsMoments = usePart("moments") === "log";
   const words = useBabyWords();
   const still = useStill();
   const actions = useRef<HTMLDivElement>(null);
@@ -366,17 +370,19 @@ export function WelcomeHost() {
             {w.stats && <p className={cx(tone.muted, "mt-0.5 text-[15px] tabular-nums")}>{w.stats}</p>}
             <p className={cx(tone.muted, "mt-4 text-[15px]")}>The whole forest is glad you&apos;re here.</p>
             <div ref={actions} className="mt-8 grid gap-2">
-              <Button
-                size="lg"
-                className="w-full"
-                onClick={() => {
-                  closeWelcome();
-                  open({ kind: "moment", preset: { title: "First photo" } });
-                }}
-              >
-                <Icon name="camera" size={20} />
-                Add {words.his} first photo
-              </Button>
+              {addsMoments && (
+                <Button
+                  size="lg"
+                  className="w-full"
+                  onClick={() => {
+                    closeWelcome();
+                    open({ kind: "moment", preset: { title: "First photo" } });
+                  }}
+                >
+                  <Icon name="camera" size={20} />
+                  Add {words.his} first photo
+                </Button>
+              )}
               <Button variant="ghost" className="w-full" onClick={closeWelcome}>
                 Later
               </Button>

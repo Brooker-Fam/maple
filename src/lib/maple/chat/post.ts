@@ -8,10 +8,10 @@ import { mentionsCrisis } from "./crisis";
 import { ChatInputError, denyPending, mergeApprovals, readIncoming, roughText, stepsTaken, titleFrom, userMessage, withCrisisHelp, type Incoming } from "./messages";
 import type { ToolCopy } from "../mcp-tools";
 import { chatCareOpen } from "../consent";
-import { careLevelOf } from "../access";
+import { careLevelOf, partLevelOf, rolePartLevel } from "../access";
 import type { ModelPrice } from "./prices";
 import { contextLine, stateLines } from "./prompt";
-import type { LockedThread, UsageRow } from "./store";
+import type { LockedThread, OpenParts, UsageRow } from "./store";
 import { CHAT_CUT, CHAT_OFF, chatTurn, questionReply } from "./turn";
 import { hasPendingQuestion, mergeQuestionAnswers } from "./questions";
 import { CHAT_TERMS_NEEDED, THREAD_ID_RE, type ChatConsent, type ChatMessage, type ChatRefusal } from "./types";
@@ -30,7 +30,8 @@ import type { SearchNames } from "./web-search";
 export type ChatStore = {
   consent: (member: Member) => Promise<ChatConsent>;
   usageSince: (member: string, day: string, dayStart: Date, monthStart: Date) => Promise<Usage>;
-  lockThread: (id: string, member: string, model: string, viewer: boolean, care: boolean) => Promise<LockedThread | "busy" | "missing">;
+  /** `open`: the parts an owner can hide that are open to this turn (access.ts); left out, both are. */
+  lockThread: (id: string, member: string, model: string, viewer: boolean, care: boolean, open?: OpenParts) => Promise<LockedThread | "busy" | "missing">;
   releaseThread: (id: string, leaseId?: string) => Promise<void>;
   loadMessages: (threadId: string) => Promise<ChatMessage[]>;
   saveMessage: (threadId: string, member: string, m: ChatMessage) => Promise<void>;
@@ -88,6 +89,8 @@ export type ChatMemories = { block: string; epoch: number; forgotten: string[] }
 
 export const BUSY = "One message at a time: the last answer is still coming.";
 export const CARE_CLOSED = "Her page is closed to the chat now, so a new chat starts here.";
+/** An owner hid the questions for the doctor, or moments, from this person (access.ts parts) since this chat began. */
+export const PART_CLOSED = "Some of the log isn't shared with you anymore, so a new chat starts here.";
 export const STALE = "That question has moved on. Ask again if you still want it.";
 
 const newMessageId = createIdGenerator({ prefix: "msg", size: 16 });
@@ -216,7 +219,18 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
   if (limit) return refuse({ error: limit, code: "limit" }, 429);
 
   const viewer = member.role === "viewer";
-  const thread = await store.lockThread(body.threadId, member.email, deps.modelKey, viewer, care);
+  // The parts an owner can hide from this person that this turn may read (access.ts): a thread that ever had one open
+  // can quote it, so once it's hidden that thread stays where it is and a new one starts.
+  const doctor = partLevelOf(member, "doctor");
+  const moments = partLevelOf(member, "moments");
+  const open = { doctor: doctor !== "none", moments: moments !== "none" };
+  // What the prompt says of those limits, matching the tools (chatLimits): a viewer's own addendum already says the chat only reads.
+  const readsOnly = !viewer && partLevelOf(member, "chat") === "view";
+  const turnedDown = { doctor: doctor !== rolePartLevel(member.role, "doctor"), moments: moments !== rolePartLevel(member.role, "moments") };
+  const partLimits = readsOnly || turnedDown.doctor || turnedDown.moments
+    ? { ...(readsOnly ? { readsOnly } : {}), ...(turnedDown.doctor ? { doctor } : {}), ...(turnedDown.moments ? { moments } : {}) }
+    : undefined;
+  const thread = await store.lockThread(body.threadId, member.email, deps.modelKey, viewer, care, open);
   if (thread === "busy") return refuse({ error: BUSY, code: "busy" }, 409);
   if (thread === "missing") return reply({ error: "Not found" }, 404);
 
@@ -233,6 +247,7 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
   try {
     // Its history can quote her page (results and the replies that repeat them), which she has since closed to the chat.
     if (thread.careOpen && !care) return refuse({ error: CARE_CLOSED, code: "new_chat" }, 409);
+    if ((thread.doctorOpen && !open.doctor) || (thread.momentsOpen && !open.moments)) return refuse({ error: PART_CLOSED, code: "new_chat" }, 409);
     const duplicate = await alreadyReceived();
     if (duplicate) return duplicate;
     const history = await store.loadMessages(thread.id);
@@ -296,6 +311,7 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
       viewer,
       care,
       ...(page ? { page } : {}),
+      ...(partLimits ? { partLimits } : {}),
       copy,
       messages,
       responseId,

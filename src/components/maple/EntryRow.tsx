@@ -11,6 +11,7 @@ import { KIND_COLOR } from "./palette";
 import { photoUrl } from "./moments/photo";
 import { Avatar, cx, tone } from "./ui";
 import { useMaple } from "./useMaple";
+import { writesEntry } from "@/lib/maple/access";
 
 const VIA: Record<string, string> = {
   claude: "Claude",
@@ -80,7 +81,8 @@ export default function EntryRow({
   const who = member(entry.created_by);
   const firstPhoto = entry.kind === "moment" && entry.data.photos?.length && entry.id > 0;
 
-  const canEdit = !!onClick && !readOnly && entry.id > 0;
+  // A question for the doctor or a moment an owner let this person only see (access.ts parts) opens to read, not to edit.
+  const canEdit = !!onClick && !readOnly && entry.id > 0 && (!state || writesEntry(state.me, entry));
   const editLabel = entry.source === "epic" ? "View" : entryEditPreset(entry) ? "Edit time" : "Edit";
   const entryDay = dayKey(new Date(entry.started_at), tz);
   const today = dayKey(now, tz);

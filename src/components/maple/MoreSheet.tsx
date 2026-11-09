@@ -24,6 +24,7 @@ import { useFeedingPlanNav } from "./feeding/FeedingPlanNav";
 import { planShortLine } from "./feeding/planDraft";
 import { useSleepMaybe } from "./sleep/useSleep";
 import { useMaple } from "./useMaple";
+import { usePart } from "./useAccess";
 
 /**
  * "More": everything that isn't one of the eight everyday dock buttons, as
@@ -182,6 +183,8 @@ export default function MoreSheet({ open, onClose, earlierDay }: {
   const voice = useVoice();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const questions = useOpenQuestions(open);
+  // Moments an owner let this person only see, or hid (access.ts parts): no Moment row to add one.
+  const addsMoments = usePart("moments") === "log";
   // Pumping off (Family → On Today): no Pump row; anything already pumped still shows in the log.
   const { nursing, bottles, pumping } = logSwitches(state?.baby);
   const [loggingEarlier, setLoggingEarlier] = useState(false);
@@ -537,7 +540,7 @@ export default function MoreSheet({ open, onClose, earlierDay }: {
         onTap: () => go("note"),
         onHold: earlier("note"),
       },
-      { id: "moment", label: "Moment", sub: lastMoment ? when(lastMoment.started_at) : "Photo or words", icon: "camera", color: KIND_COLOR.moment, onTap: () => go("moment"), onHold: earlier("moment") },
+      ...(addsMoments ? [{ id: "moment", label: "Moment", sub: lastMoment ? when(lastMoment.started_at) : "Photo or words", icon: "camera" as const, color: KIND_COLOR.moment, onTap: () => go("moment"), onHold: earlier("moment") }] : []),
     ],
   ];
 

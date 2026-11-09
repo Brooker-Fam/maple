@@ -11,6 +11,7 @@ import { useNightActive } from "./nightLook";
 import { useSheets } from "./sheets";
 import { Button, cx, tone } from "./ui";
 import { useMaple } from "./useMaple";
+import { usePart } from "./useAccess";
 
 /**
  * Milestones ("One whole week of Maple", "100 diapers") once each, per person.
@@ -77,6 +78,8 @@ function CardLeaves({ onDone }: { onDone: () => void }) {
 
 export default function Celebrations() {
   const { state, summary, isNight, readOnly, memberName, now } = useMaple();
+  // Keeping one as a moment needs moments this person can add to (access.ts parts).
+  const addsMoments = usePart("moments") === "log";
   const { open } = useSheets();
   const reduce = useReducedMotion();
   const nightLook = useNightActive();
@@ -159,7 +162,7 @@ export default function Celebrations() {
             </button>
           </div>
           {/* Her first poop is worth a cheer, not a keepsake. */}
-          {!readOnly && current.id !== "first-poop" && (
+          {!readOnly && addsMoments && current.id !== "first-poop" && (
             <div className="relative mt-3 pl-[38px]">
               <Button
                 variant="soft"

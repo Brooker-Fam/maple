@@ -11,6 +11,7 @@ import { requestSection } from "../sectionFocus";
 import { useSheets } from "../sheets";
 import { Button, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
+import { usePart } from "../useAccess";
 
 export default function ChatNavigation({ navigation: raw }: { navigation: ChatNavigationCard | unknown }) {
   const app = useAppNav();
@@ -20,10 +21,13 @@ export default function ChatNavigation({ navigation: raw }: { navigation: ChatNa
   const sheets = useSheets();
   const feedingPlan = useFeedingPlanNav();
   const { readOnly } = useMaple();
+  // A button for a part an owner hid from this person (access.ts parts) does nothing: the server never offers one.
+  const doctor = usePart("doctor");
+  const moments = usePart("moments");
   const parsed = navigationCardSchema.safeParse(raw);
   if (!parsed.success) return null;
   const { destination } = parsed.data;
-  const available = destinationAllowed(destination, readOnly) && (destination !== "mom_medicines" || !!care);
+  const available = destinationAllowed(destination, readOnly, { doctor, moments }) && (destination !== "mom_medicines" || !!care);
   const open = () => {
     if (!available) return;
     switch (destination) {

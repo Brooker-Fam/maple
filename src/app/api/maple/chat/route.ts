@@ -47,7 +47,7 @@ export const GET = withMember("GET /api/maple/chat", async (request, member, fam
     requestId ? deliveryStatus(fam, member.email, open, requestId) : null,
   ]);
   return json({ ...stream, ...(delivery ? { delivery } : {}) });
-});
+}, { part: ["chat", "view"] });
 
 export const DELETE = withMember("DELETE /api/maple/chat", async (_request, member, fam) => {
   await deleteChats(fam, member.email, threadAccess(member));
@@ -65,4 +65,4 @@ export const POST = withMember("POST /api/maple/chat", async (request: NextReque
     familyPostDeps(fam, member, { model, modelKey: model, device: deviceOf(request), now: new Date(), report, waitUntil: (p) => after(() => p) })
   );
   return response;
-});
+}, { part: ["chat", "view"] });

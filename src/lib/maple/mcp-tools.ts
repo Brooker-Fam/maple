@@ -101,10 +101,12 @@ import {
   stopTimer,
   switchSide,
   touchLastSeen,
+  unseenSql,
   updateBaby,
   updateEntry,
   type SwitchResponse,
 } from "./store";
+import { atLeast, PartForbidden, partForbiddenCopy, partLevelOf, type Part as AccessPart, type PartLevel } from "./access";
 import {
   addDays,
   babyAge,
@@ -390,6 +392,8 @@ export type Ctx = {
   care: boolean;
   /** The in-app chat's turn: the family memories' epoch it started with (memory/store.ts), which its memory writes need; null for every other caller. */
   memoryEpoch: number | null;
+  /** The in-app chat only reads for this person: an owner set their chat to "view" (access.ts parts). Never set for any other caller. */
+  chatReadsOnly?: boolean;
 };
 
 /** A chat call without the flag counts as closed. */
@@ -421,6 +425,9 @@ export async function context(extra: Extra): Promise<Ctx> {
   }
   if (!fam) throw new ToolError(NOT_MEMBER_MESSAGE);
   if (fam.status === "onboarding") throw new ToolError(`This log isn't set up yet. Finish setting it up in the Maple's Log app (${MAPLE_HOST}/maple), then try again.`);
+  // The in-app chat as an owner set it for this person (access.ts parts): off reads and saves nothing; "view" only reads.
+  const chatLevel = via === "chat" ? partLevelOf(fam, "chat") : "log";
+  if (chatLevel === "none") throw new ToolError(partForbiddenCopy("chat", "none"));
   const [baby, members] = await Promise.all([getBaby(fam), listMembers(fam)]);
   const id = viaAdmin ? (adminActsAs(baby, members)?.email ?? signedIn) : signedIn;
   const me = members.find((m) => m.email === id);
@@ -440,14 +447,32 @@ export async function context(extra: Extra): Promise<Ctx> {
     device: via === "chat" ? cleanDevice(auth.device) : null,
     care: careOpen(auth),
     memoryEpoch: via === "chat" && typeof auth.memoryEpoch === "number" && Number.isSafeInteger(auth.memoryEpoch) ? auth.memoryEpoch : null,
+    ...(chatLevel === "view" ? { chatReadsOnly: true } : {}),
   };
 }
 
 export const VIEWER_MESSAGE =
   "You're a viewer on Maple's Log, so you can look but not log or change anything. An owner can make you a member in Maple's Log → Settings → People & permissions.";
 
+/** Why this caller can't change anything, or null when they can: a viewer, or a chat an owner set to read only (access.ts parts). Every tool module's writes check it. */
+export function writeRefusal(ctx: Pick<Ctx, "who" | "chatReadsOnly">): string | null {
+  if (ctx.who.role === "viewer") return VIEWER_MESSAGE;
+  if (ctx.chatReadsOnly) return partForbiddenCopy("chat", "view");
+  return null;
+}
+
 function requireWriter(ctx: Ctx) {
-  if (ctx.who.role === "viewer") throw new ToolError(VIEWER_MESSAGE);
+  const no = writeRefusal(ctx);
+  if (no) throw new ToolError(no);
+}
+
+/** This caller's level of a part an owner can turn down (access.ts): the questions for the doctor, moments. */
+export const partOf = (ctx: Pick<Ctx, "fam">, part: AccessPart): PartLevel => partLevelOf(ctx.fam, part);
+
+/** Refuses, in the part's own words, a read (`view`) or a write (`log`) beyond this caller's level of it. */
+export function requirePart(ctx: Pick<Ctx, "fam">, part: AccessPart, need: PartLevel): void {
+  const level = partOf(ctx, part);
+  if (!atLeast(level, need)) throw new ToolError(partForbiddenCopy(part, level));
 }
 
 export function ok(summary: string, data: Record<string, unknown>): CallToolResult {
@@ -463,6 +488,8 @@ export function fail(message: string): CallToolResult {
 
 async function toolError(name: string, err: unknown, ctx: Ctx | null): Promise<CallToolResult> {
   if (err instanceof ToolError) return fail(err.message);
+  // A question for the doctor or a moment beyond what an owner gave this person (access.ts parts): its own words.
+  if (err instanceof PartForbidden) return fail(`${err.message} Nothing was saved.`);
   // A nursing fix that doesn't fit the feed, worded so the model can act on it.
   if (err instanceof FeedEditError) return fail(feedEditCopy(err, "mcp", ctx?.tz ?? DEFAULT_TZ, ctx ? voiceOf(ctx) : unknownFamilyCopy(0).v));
   if (err instanceof StoreUnavailable) {
@@ -1259,7 +1286,7 @@ export function clientIdFor(ctx: Ctx, ref: string): string {
 }
 
 async function byClientId(ctx: Ctx, clientId: string): Promise<{ entry: Entry; deleted: boolean } | null> {
-  const rows = await query(`SELECT * FROM maple_entries WHERE family_id = $1 AND client_id = $2`, [ctx.fam.familyId, clientId]);
+  const rows = await query(`SELECT * FROM maple_entries WHERE family_id = $1 AND client_id = $2${unseenSql(ctx.fam)}`, [ctx.fam.familyId, clientId]);
   if (rows === null) throw new StoreUnavailable();
   if (!rows.length) return null;
   const row = rows[0] as Record<string, unknown>;
@@ -1297,7 +1324,7 @@ async function priorForRef(
 async function doctorQuestions(ctx: Ctx): Promise<EntryOf<"note">[]> {
   const rows = await query(
     `SELECT * FROM maple_entries
-     WHERE family_id = $1 AND baby_id = $2 AND kind = 'note' AND deleted_at IS NULL AND (data->>'for_doctor')::boolean IS TRUE
+     WHERE family_id = $1 AND baby_id = $2 AND kind = 'note' AND deleted_at IS NULL AND (data->>'for_doctor')::boolean IS TRUE${unseenSql(ctx.fam)}
      ORDER BY started_at, id`,
     [ctx.fam.familyId, ctx.baby.id]
   );
@@ -2051,6 +2078,8 @@ type NoteArgs = TimeArgs & {
 
 async function doNote(a: NoteArgs, ctx: Ctx, w: WriteOpts): Promise<Saved> {
   if (!a.tag && !a.note?.trim()) throw new ToolError("Give a tag (spitup, hiccups, fussy, gas, nails, cord, other) and/or the note text.");
+  // log_note and log_many's notes too: a question for the doctor needs that part (access.ts), before any duplicate check reads them.
+  if (a.for_doctor) requirePart(ctx, "doctor", "log");
   const assumed: string[] = [];
   const start = startFrom(a, ctx, assumed) ?? ctx.now;
   const core = await save(ctx, {
@@ -3529,6 +3558,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
     },
     async (a, ctx) => {
       const vo = voiceOf(ctx);
+      requirePart(ctx, "moments", "view");
       if (a.since && !isDayKey(a.since)) throw new ToolError("since must be a date like 2026-10-20.");
       const limit = a.limit ?? 30;
       const rows = (await listEntries(ctx.fam, {
@@ -3572,6 +3602,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
       invoked: "Questions ready 🩺",
     },
     async (a, ctx) => {
+      requirePart(ctx, "doctor", "view");
       const qs = (await doctorQuestions(ctx))
         .filter((n) => a.include_answered || !n.data.done)
         .map((n) => ({
@@ -4647,6 +4678,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
       write: true,
     },
     async (a, ctx) => {
+      requirePart(ctx, "moments", "log");
       if (!a.title?.trim() && !a.milestone?.trim() && !a.note?.trim()) throw new ToolError("Give a title, milestone or note for the moment.");
       let milestone: string | undefined;
       if (a.milestone?.trim()) {
@@ -4710,7 +4742,10 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
       invoked: "Question added 🩺",
       write: true,
     },
-    async (a, ctx) => writeResult(ctx, await doNote({ note: a.question, for_doctor: true }, ctx, w(a)))
+    async (a, ctx) => {
+      requirePart(ctx, "doctor", "log");
+      return writeResult(ctx, await doNote({ note: a.question, for_doctor: true }, ctx, w(a)));
+    }
   );
 
   // ── several at once ───────────────────────────────────────────────────
@@ -4810,7 +4845,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
           }
           results.push({ index: i, saved: sv });
         } catch (err) {
-          if (err instanceof ToolError || (err instanceof Error && err.constructor === Error && err.message.length < 200)) {
+          if (err instanceof ToolError || err instanceof PartForbidden || (err instanceof Error && err.constructor === Error && err.message.length < 200)) {
             results.push({ index: i, error: err.message });
           } else {
             throw err;
@@ -5051,7 +5086,7 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
       const [rows, mom, changed, momChange, planChange] = await Promise.all([
         query(
           `SELECT * FROM maple_entries
-           WHERE family_id = $1 AND baby_id = $2 AND created_by = $3 AND source = ANY($4::text[]) AND deleted_at IS NULL
+           WHERE family_id = $1 AND baby_id = $2 AND created_by = $3 AND source = ANY($4::text[]) AND deleted_at IS NULL${unseenSql(ctx.fam)}
              AND created_at >= NOW() - INTERVAL '30 minutes'
            ORDER BY created_at DESC, id DESC LIMIT 1`,
           [ctx.fam.familyId, ctx.baby.id, ctx.who.id, MCP_SOURCES]
@@ -5069,7 +5104,7 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
         // updated_by empty, so any row carrying your id here is one you changed.
         query(
           `SELECT * FROM maple_entries
-           WHERE family_id = $1 AND baby_id = $2 AND updated_by = $3 AND deleted_at IS NULL
+           WHERE family_id = $1 AND baby_id = $2 AND updated_by = $3 AND deleted_at IS NULL${unseenSql(ctx.fam)}
              AND updated_at >= NOW() - INTERVAL '30 minutes'
            ORDER BY updated_at DESC, id DESC LIMIT 1`,
           [ctx.fam.familyId, ctx.baby.id, ctx.who.id]

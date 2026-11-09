@@ -7,6 +7,7 @@ import { useChatNav } from "../chat/ChatNav";
 import { Icon } from "../icons";
 import { Button, cx, tone } from "../ui";
 import { useMaple } from "../useMaple";
+import { usePart } from "../useAccess";
 import { errorText } from "./parts";
 import type { UseCare } from "./useCare";
 
@@ -21,6 +22,8 @@ export default function NutritionQuickActions({ care, day, today, tz, save, savi
 }) {
   const { units, now, toast } = useMaple();
   const { ask } = useChatNav();
+  // Logging through the chat needs a chat that logs for this person (access.ts parts); otherwise the manual buttons are the way.
+  const chatLogs = usePart("chat") === "log";
   const waterUntil = useRef(0);
   const waterMl = units === "metric" ? 250 : ozToMl(8);
   const waterLabel = formatVolume(waterMl, units);
@@ -36,16 +39,16 @@ export default function NutritionQuickActions({ care, day, today, tz, save, savi
   });
 
   return <div className="space-y-3">
-    <div className="space-y-2">
+    {chatLogs && <div className="space-y-2">
       <Button size="lg" className="w-full gap-2" disabled={saving} onClick={logWithChat}>
         <Icon name="message-square" size={20} />Log food or drink
       </Button>
       <p className={cx(tone.muted, "px-1 text-[13px] leading-relaxed")}>Opens a chat draft to log food and drinks, with protein and fiber estimates for food.</p>
-    </div>
+    </div>}
     <button type="button" disabled={saving} aria-label={`Log water, ${waterLabel}`} onClick={() => void logWater()} className={cx(tone.card, "flex min-h-[52px] w-full items-center gap-2 px-3 py-3 text-mp-accent-fg transition active:bg-mp-sunken disabled:opacity-50")}>
       <Icon name="droplet" size={20} /><span className="text-[15px] font-semibold">Water</span><span className="ml-auto text-[13px] text-mp-ink-2">{waterLabel} · just now</span>
     </button>
-    <details className="px-1">
+    <details className="px-1" open={!chatLogs || undefined}>
       <summary className="min-h-[44px] cursor-pointer py-3 text-[14px] font-medium text-mp-accent-fg">Log manually</summary>
       <p className={cx(tone.muted, "mb-2 text-[13px] leading-relaxed")}>Save only what you enter, without AI analysis. Works offline too.</p>
       <div className="grid grid-cols-2 gap-2" role="group" aria-label="Log food and drink manually">

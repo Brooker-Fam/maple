@@ -333,6 +333,10 @@ export async function migrate() {
   // Some turn in it ran with her page open to the chat (chat_care), so its history can carry her data; older threads all did.
   // While her page is closed, these never go back to the model.
   await sql`ALTER TABLE maple_chat_threads ADD COLUMN IF NOT EXISTS care_open BOOLEAN NOT NULL DEFAULT TRUE`;
+  // Some turn in it could read the questions for the doctor, or moments (access.ts parts); older threads all could.
+  // Someone an owner hides either from opens only threads that never had it, so its history never goes back to the model.
+  await sql`ALTER TABLE maple_chat_threads ADD COLUMN IF NOT EXISTS doctor_open BOOLEAN NOT NULL DEFAULT TRUE`;
+  await sql`ALTER TABLE maple_chat_threads ADD COLUMN IF NOT EXISTS moments_open BOOLEAN NOT NULL DEFAULT TRUE`;
   await sql`
     CREATE TABLE IF NOT EXISTS maple_chat_messages (
       id TEXT PRIMARY KEY,
@@ -540,6 +544,11 @@ export async function migrateFamilies() {
   // it reads every owner and member as reaching all of her page, so clear these before rolling back past it.
   await addColumn("maple_members", "care_access", "TEXT");
   await addColumn("maple_invites", "care_access", "TEXT");
+  // The parts an owner turned down for someone below their role (access.ts PARTS: questions for the
+  // doctor, moments, the chat), as JSONB like {"doctor":"none"}; NULL is the role's own. Code from
+  // before it gives every member and viewer all of each part, so roll forward (docs/maple.md).
+  await addColumn("maple_members", "parts", "JSONB");
+  await addColumn("maple_invites", "parts", "JSONB");
 
   // With every row in family 1 these hold exactly when the old keys do, so they build cleanly beside them.
   await index("uniq_maple_babies_family_id", "maple_babies (family_id, id)", true);

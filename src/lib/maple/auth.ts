@@ -6,7 +6,7 @@ import { IDENTITY_LOCK } from "./auth-identities";
 import { getAppBaseUrl, encryptSecret, openSecret } from "@/lib/secret-box";
 import { verifyAdminCreds } from "@/lib/mcp/auth";
 import type { Member, Role } from "./types";
-import { parseCareLevel, type AccessRole, type CareLevel } from "./access";
+import { parseCareLevel, parseParts, type AccessRole, type CareLevel, type Parts } from "./access";
 import { LEGACY_ORIGIN, MAPLE_ORIGIN } from "./origin";
 import { NotFound, StoreUnavailable } from "./store";
 import { adminFamilyId, carrierFamily, familyForSession, FAMILY_ONE, homeFamilyOf, parseFamilyId, signupMode, type FamilyCtx, type FamilyScope } from "./family";
@@ -190,20 +190,27 @@ export function familyOf(fam: Fam): number {
   return id;
 }
 
-/** The columns every Member read takes (care_access: her page, when set apart from the role's default). */
-export const MEMBER_COLS = "email, role, display_name, emoji, color, care_access";
+/** The columns every Member read takes (care_access: her page, when set apart from the role's default; parts: the parts turned down below the role, access.ts). */
+export const MEMBER_COLS = "email, role, display_name, emoji, color, care_access, parts";
 
 export function rowToMember(r: Record<string, unknown>): Member {
   const care = parseCareLevel(r.care_access);
+  const role = (r.role === "owner" || r.role === "viewer" || r.role === "photos" ? r.role : "member") as Role;
+  // An owner has every part, whatever a row says.
+  const parts = role === "owner" ? null : parseParts(r.parts);
   return {
     email: String(r.email),
-    role: (r.role === "owner" || r.role === "viewer" || r.role === "photos" ? r.role : "member") as Role,
+    role,
     display_name: r.display_name == null ? null : String(r.display_name),
     emoji: r.emoji == null ? null : String(r.emoji),
     color: r.color == null ? null : String(r.color),
     ...(care ? { care } : {}),
+    ...(parts ? { parts } : {}),
   };
 }
+
+/** Parts as a JSONB parameter: null when there are none. */
+const partsParam = (parts: Parts | null | undefined): string | null => (parts && Object.keys(parts).length ? JSON.stringify(parts) : null);
 
 export async function memberFor(fam: Fam, id: string): Promise<Member | null> {
   const rows = await query(
@@ -324,7 +331,11 @@ export async function signedInAs(body: SessionBody | null | undefined): Promise<
   const familyId = carrierFamily(body.fam);
   if (familyId === null) return null;
   const [ctx, member] = await Promise.all([familyForSession(body), memberFor({ familyId }, body.id)]);
-  return ctx && member && ctx.familyId === familyId ? { member: { ...member, role: ctx.role }, ctx } : null;
+  if (!ctx || !member || ctx.familyId !== familyId) return null;
+  // The role and the parts turned down come from the same read as the family (resolveFamily), so the two never disagree.
+  const { parts: _parts, ...rest } = member;
+  void _parts;
+  return { member: { ...rest, role: ctx.role, ...(ctx.parts ? { parts: ctx.parts } : {}) }, ctx };
 }
 
 /** The signed-in member behind a request's cookie, and their family, or null. */
@@ -340,15 +351,15 @@ export function sessionContext(request: NextRequest): Promise<SignedIn | null> {
  * instead (createInvite with `email`), so nobody lands in a family they
  * didn't accept.
  */
-export async function addMember(fam: Fam, email: string, addedBy: string, emoji: string | null, role: AccessRole = "member", care: CareLevel | null = null, displayName: string | null = null): Promise<void> {
+export async function addMember(fam: Fam, email: string, addedBy: string, emoji: string | null, role: AccessRole = "member", care: CareLevel | null = null, displayName: string | null = null, parts: Parts | null = null): Promise<void> {
   const familyId = familyOf(fam);
   if (familyId !== FAMILY_ONE) throw Object.assign(new Error("invite_by_email"), { code: "invite_by_email" });
   const identity = `COALESCE((SELECT member_id FROM maple_auth_identities WHERE provider = 'email' AND subject = $2), $2)`;
   const out = await transaction([
     { sql: `SELECT pg_advisory_xact_lock(${IDENTITY_LOCK})` },
     { sql: `DELETE FROM maple_removed WHERE family_id = $1 AND email = ${identity}`, params: [familyId, email] },
-    { sql: `INSERT INTO maple_members (family_id, email, role, emoji, added_by, care_access, display_name) VALUES ($1, ${identity}, $3, $4, $5, $6, $7)
-      ON CONFLICT (family_id, email) DO NOTHING`, params: [familyId, email, role, emoji, addedBy, care, displayName] },
+    { sql: `INSERT INTO maple_members (family_id, email, role, emoji, added_by, care_access, display_name, parts) VALUES ($1, ${identity}, $3, $4, $5, $6, $7, $8::jsonb)
+      ON CONFLICT (family_id, email) DO NOTHING`, params: [familyId, email, role, emoji, addedBy, care, displayName, partsParam(parts)] },
   ]);
   if (!out) throw new StoreUnavailable();
 }
@@ -410,22 +421,24 @@ export async function leaveFamily(fam: Fam, email: string): Promise<LeaveRefusal
 
 /**
  * `care`: her page for this member, as stored (storedCareLevel: null puts the
- * role's default back); left out, it stays as it is. An owner's role and
- * her page stay as they are.
+ * role's default back); left out, it stays as it is. `parts`: every part
+ * turned down for them, as stored (storedParts: null puts the role's own back
+ * for all of them); left out, they stay as they are. An owner's role, her
+ * page and parts stay as they are.
  */
 export async function updateMember(
   fam: Fam,
   email: string,
-  patch: Partial<Pick<Member, "display_name" | "emoji" | "color">> & { role?: AccessRole | "owner"; care?: CareLevel | null }
+  patch: Partial<Pick<Member, "display_name" | "emoji" | "color">> & { role?: AccessRole | "owner"; care?: CareLevel | null; parts?: Parts | null }
 ): Promise<void> {
   const familyId = familyOf(fam);
-  const rows = await q(`SELECT display_name, emoji, color, role, care_access FROM maple_members WHERE family_id = $1 AND email = $2`, [familyId, email]);
+  const rows = await q(`SELECT display_name, emoji, color, role, care_access, parts FROM maple_members WHERE family_id = $1 AND email = $2`, [familyId, email]);
   if (!rows.length) throw new NotFound("Member not found");
   const cur = rows[0];
   const owner = cur.role === "owner";
   const role = patch.role && !owner ? patch.role : cur.role;
   await q(
-    `UPDATE maple_members SET display_name = $3, emoji = $4, color = $5, role = $6, care_access = $7, updated_at = NOW() WHERE family_id = $1 AND email = $2`,
+    `UPDATE maple_members SET display_name = $3, emoji = $4, color = $5, role = $6, care_access = $7, parts = $8::jsonb, updated_at = NOW() WHERE family_id = $1 AND email = $2`,
     [
       familyId,
       email,
@@ -434,6 +447,8 @@ export async function updateMember(
       patch.color !== undefined ? patch.color : cur.color,
       role,
       patch.care !== undefined && !owner ? patch.care : cur.care_access,
+      // Making someone an owner clears them: owners have every part.
+      role === "owner" ? null : partsParam(patch.parts !== undefined && !owner ? patch.parts : parseParts(cur.parts)),
     ]
   );
 }
@@ -445,6 +460,8 @@ export type Invite = {
   role: Role;
   /** Her page for whoever takes it up, when the owner set it apart from the role's default (access.ts). */
   care?: CareLevel;
+  /** The parts turned down for whoever takes it up, below the role's own (access.ts). */
+  parts?: Parts;
   /** Set on an invite by Google address: only that account can take it up, and only by signing in with it. */
   email: string | null;
   display_name: string | null;
@@ -455,16 +472,18 @@ export type Invite = {
 };
 
 const INVITE_DAYS = 7;
-const INVITE_COLS = "id, role, email, display_name, emoji, created_by, expires_at, used_at, care_access";
+const INVITE_COLS = "id, role, email, display_name, emoji, created_by, expires_at, used_at, care_access, parts";
 const inviteHash = (token: string) => createHash("sha256").update(token).digest("hex");
 const isoOrNull = (v: unknown): string | null => (v == null ? null : new Date(v as string | Date).toISOString());
 
 function rowToInvite(r: Record<string, unknown>): Invite {
   const care = parseCareLevel(r.care_access);
+  const parts = parseParts(r.parts);
   return {
     id: Number(r.id),
     role: (r.role === "owner" || r.role === "viewer" || r.role === "photos" ? r.role : "member") as Role,
     ...(care ? { care } : {}),
+    ...(parts ? { parts } : {}),
     email: r.email == null ? null : String(r.email),
     display_name: r.display_name == null ? null : String(r.display_name),
     emoji: r.emoji == null ? null : String(r.emoji),
@@ -482,16 +501,16 @@ function rowToInvite(r: Record<string, unknown>): Invite {
  */
 export async function createInvite(
   fam: Fam,
-  opts: { role: Role; displayName: string | null; emoji: string | null; createdBy: string; email?: string | null; care?: CareLevel | null }
+  opts: { role: Role; displayName: string | null; emoji: string | null; createdBy: string; email?: string | null; care?: CareLevel | null; parts?: Parts | null }
 ): Promise<{ invite: Invite; token: string }> {
   const familyId = familyOf(fam);
   const token = randomBytes(24).toString("base64url");
   if (opts.email) await q(`DELETE FROM maple_invites WHERE family_id = $1 AND email = $2 AND used_at IS NULL`, [familyId, opts.email]);
   const rows = await q(
-    `INSERT INTO maple_invites (family_id, token_hash, role, display_name, emoji, created_by, expires_at, email, care_access)
-     VALUES ($1, $2, $3, $4, $5, $6, NOW() + make_interval(days => $7), $8, $9)
+    `INSERT INTO maple_invites (family_id, token_hash, role, display_name, emoji, created_by, expires_at, email, care_access, parts)
+     VALUES ($1, $2, $3, $4, $5, $6, NOW() + make_interval(days => $7), $8, $9, $10::jsonb)
      RETURNING ${INVITE_COLS}`,
-    [familyId, inviteHash(token), opts.role, opts.displayName, opts.emoji, opts.createdBy, INVITE_DAYS, opts.email ?? null, opts.care ?? null]
+    [familyId, inviteHash(token), opts.role, opts.displayName, opts.emoji, opts.createdBy, INVITE_DAYS, opts.email ?? null, opts.care ?? null, partsParam(opts.parts)]
   );
   return { invite: rowToInvite(rows[0]), token };
 }
@@ -528,7 +547,7 @@ export async function redeemInvite(token: string): Promise<{ id: string; familyI
     `UPDATE maple_invites i SET used_at = NOW(), used_by = 'invite:' || i.id
      WHERE i.token_hash = $1 AND i.used_at IS NULL AND i.expires_at > NOW() AND i.email IS NULL
        AND EXISTS (SELECT 1 FROM maple_families f WHERE f.id = i.family_id AND f.status <> 'deleting')
-     RETURNING i.id, i.family_id, i.role, i.display_name, i.emoji, i.created_by, i.care_access`,
+     RETURNING i.id, i.family_id, i.role, i.display_name, i.emoji, i.created_by, i.care_access, i.parts`,
     [inviteHash(token)]
   );
   if (!rows.length) {
@@ -540,9 +559,9 @@ export async function redeemInvite(token: string): Promise<{ id: string; familyI
   if (familyId === null) return null;
   const id = `invite:${r.id}`;
   await q(
-    `INSERT INTO maple_members (family_id, email, role, display_name, emoji, added_by, accepted_at, care_access) VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7)
+    `INSERT INTO maple_members (family_id, email, role, display_name, emoji, added_by, accepted_at, care_access, parts) VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8::jsonb)
      ON CONFLICT (family_id, email) DO NOTHING`,
-    [familyId, id, r.role === "viewer" || r.role === "photos" ? r.role : "member", r.display_name, r.emoji, r.created_by, parseCareLevel(r.care_access)]
+    [familyId, id, r.role === "viewer" || r.role === "photos" ? r.role : "member", r.display_name, r.emoji, r.created_by, parseCareLevel(r.care_access), partsParam(parseParts(r.parts))]
   );
   return { id, familyId };
 }

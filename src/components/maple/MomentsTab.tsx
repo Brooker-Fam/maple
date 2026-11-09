@@ -28,6 +28,7 @@ import { useSheets } from "./sheets";
 import { useBabyWords, useMilestoneWords } from "./familyWords";
 import { Button, Chip, EmptyState, SectionTitle, cx, tone } from "./ui";
 import { useMaple } from "./useMaple";
+import { usePart } from "./useAccess";
 
 /**
  * Moments: Maple's keepsake. "Firsts" (found, then still to come), her
@@ -101,6 +102,8 @@ function groupByWeek(moments: Moment[], bornAt: string | null, tz: string): Week
 
 export default function MomentsTab() {
   const { state, now, readOnly } = useMaple();
+  // Moments an owner let this person only see (access.ts parts) read as a viewer's: no adding or editing.
+  const addsMoments = usePart("moments") === "log";
   const nav = useAppNav();
   const { open } = useSheets();
   const { moments, highlights, all, error, moreError, loading, loadingMore, hasMore, load, loadMore } = useMoments();
@@ -108,7 +111,7 @@ export default function MomentsTab() {
   const rev = state?.rev;
   const tz = state?.baby.timezone ?? "America/New_York";
   const bornAt = keepsakeBirthAt(state?.baby);
-  const viewer = readOnly;
+  const viewer = readOnly || !addsMoments;
   const photosOnly = state?.me.role === "photos";
   const babyName = state?.baby.name?.split(" ")[0] || "Baby";
 

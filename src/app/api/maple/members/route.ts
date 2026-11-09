@@ -9,7 +9,7 @@ import {
   normalizeMemberId,
   updateMember,
 } from "@/lib/maple/auth";
-import { parseCareLevel, type AccessRole, type CareLevel } from "@/lib/maple/access";
+import { parseCareLevel, parsePartsChange, type AccessRole, type CareLevel, type Parts, type PartsChange } from "@/lib/maple/access";
 import { FAMILY_ONE } from "@/lib/maple/family";
 import { accessPatch, inviteByEmail, removePerson, type ChangeRole } from "@/lib/maple/people";
 import { publicOrigin } from "@/lib/mcp/auth";
@@ -27,23 +27,32 @@ function careOf(body: Record<string, unknown>): CareLevel | null | undefined {
   return care;
 }
 
+/** `parts` in a body: the parts to turn down below the role (access.ts), each "none" / "view" / "log" or null for the role's own; absent to leave them. */
+function partsOf(body: Record<string, unknown>): PartsChange | undefined {
+  if (!("parts" in body)) return undefined;
+  const parts = parsePartsChange(body.parts);
+  if (!parts) throw new BadRequest("parts must name doctor, moments or chat, each none, view, log or null");
+  return parts;
+}
+
 export const GET = withMember("GET /api/maple/members", async (_request, _me, ctx) => json({ members: membersForReader(ctx, await listMembers(ctx)) }), { photos: true });
 
-/** POST { email, role?, care? } — owners invite by address (see people.ts: family 1 adds it at once). */
+/** POST { email, role?, care?, parts? } — owners invite by address (see people.ts: family 1 adds it at once). */
 export const POST = withMember("POST /api/maple/members", async (request, me, ctx) => {
   if (me.role !== "owner") throw new Forbidden("Only an owner can invite people");
   const body = await readJson(request);
   const role: AccessRole = body.role === "viewer" || body.role === "photos" ? body.role : "member";
-  const out = await inviteByEmail(ctx, me, { email: body.email, role, care: careOf(body), origin: publicOrigin(request) });
+  const out = await inviteByEmail(ctx, me, { email: body.email, role, care: careOf(body), parts: partsOf(body), origin: publicOrigin(request) });
   if (out.kind === "invited") return json({ members: await listMembers(ctx), invite: out.invite, url: out.url, emailed: out.emailed }, 201);
   if (out.kind === "member") return json({ members: await listMembers(ctx) });
   return json({ members: membersForReader(ctx, await listMembers(ctx)) });
 });
 
 /**
- * PATCH { email?, display_name?, emoji?, color?, role?, care? } — rename
- * yourself or pick an emoji; owners can tidy anyone's, and change someone
- * else's role or their level on her page, or make them an owner (people.ts).
+ * PATCH { email?, display_name?, emoji?, color?, role?, care?, parts? } —
+ * rename yourself or pick an emoji; owners can tidy anyone's, and change
+ * someone else's role, their level on her page or the parts turned down for
+ * them, or make them an owner (people.ts).
  */
 export const PATCH = withMember("PATCH /api/maple/members", async (request, me, ctx) => {
   const body = await readJson(request);
@@ -53,18 +62,18 @@ export const PATCH = withMember("PATCH /api/maple/members", async (request, me, 
   const current = await memberFor(ctx, target);
   if (!current) throw new BadRequest("Not a member");
 
-  const patch: { display_name?: string | null; emoji?: string | null; color?: string | null; role?: ChangeRole; care?: CareLevel | null } = {};
+  const patch: { display_name?: string | null; emoji?: string | null; color?: string | null; role?: ChangeRole; care?: CareLevel | null; parts?: Parts | null } = {};
   if ("display_name" in body) patch.display_name = familyName(ctx, body.display_name, 40, "The name");
   if ("emoji" in body) {
     const e = String(body.emoji ?? "").trim();
     if ([...e].length > 4) throw new BadRequest("Pick a single emoji");
     patch.emoji = e || null;
   }
-  if ("role" in body || "care" in body) {
+  if ("role" in body || "care" in body || "parts" in body) {
     if (me.role !== "owner") throw new Forbidden("Only an owner can change roles");
     if ("role" in body && body.role !== "owner" && body.role !== "member" && body.role !== "viewer" && body.role !== "photos") throw new BadRequest("role must be owner, member, viewer, or photos");
     if (target === me.email) throw new BadRequest("You can't change your own role");
-    Object.assign(patch, await accessPatch(ctx, me, current, { role: "role" in body ? (body.role as ChangeRole) : undefined, care: careOf(body) }));
+    Object.assign(patch, await accessPatch(ctx, me, current, { role: "role" in body ? (body.role as ChangeRole) : undefined, care: careOf(body), parts: partsOf(body) }));
   }
   if ("color" in body) {
     if (body.color !== null && !HEX_RE.test(String(body.color))) throw new BadRequest("color must be #RRGGBB");

@@ -360,9 +360,13 @@ export default function Privacy() {
         feeding plan, and its sleep goals but never the adults&rsquo; sleep check-ins; members can also add and edit them,
         and see everyone&rsquo;s check-ins. Separately, the owner chooses what each person sees of the recovery page when it is set up: members see
         and add to it unless the owner limits them to reading it or hides it, and view-only guests don&rsquo;t see it unless the
-        owner lets them read it. Reading it never includes mom&rsquo;s check-ins. Mom always has her own page. New invitations
-        default to photos-only access. Owners see and change everything, the recovery page included, and an owner can make
-        someone already in the family an owner too. In Maple, an owner can&rsquo;t change or remove another owner.
+        owner lets them read it. Reading it never includes mom&rsquo;s check-ins. Mom always has her own page. An owner can
+        also narrow three parts for one person, below what their access gives: the questions for the baby&rsquo;s doctor and
+        their answers, moments and photos, and Maple&rsquo;s chat. Each can be hidden or read only (the chat can be off, or only
+        read the log for them). Maple keeps that choice with the person&rsquo;s access, and what&rsquo;s hidden is left out of
+        what the app, its chat, connected AI tools and Siri show or read for them. New invitations default to photos-only
+        access. Owners see and change everything, the recovery page included, and an owner can make someone already in the
+        family an owner too. In Maple, an owner can&rsquo;t change or remove another owner.
       </p>
       <p>
         Removing someone ends their access through Maple. It cannot remove copies they already downloaded, shared or

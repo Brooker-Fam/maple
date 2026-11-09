@@ -53,7 +53,7 @@ export const GET = withMember("GET /api/maple/upload", async (_request, _member,
     types: MAPLE_PHOTO_TYPES,
     prefix: familyBlobPrefix(writer.familyId),
   });
-}, { write: true });
+}, { write: true, part: ["moments", "log"] });
 
 export async function POST(request: NextRequest) {
   const { allowed } = await checkUploadRateLimit(request);
@@ -110,7 +110,7 @@ const startUpload = withMember("POST /api/maple/upload", async (request, _member
     if (error instanceof UploadQuotaUnavailable) throw new StoreUnavailable();
     throw error;
   }
-}, { write: true });
+}, { write: true, part: ["moments", "log"] });
 
 class PhotoStorageUnavailable extends Error {}
 
@@ -164,4 +164,4 @@ export const DELETE = withMember("DELETE /api/maple/upload", async (request, _me
     deleted += mine.length;
   }
   return noStore({ deleted });
-}, { write: true });
+}, { write: true, part: ["moments", "log"] });

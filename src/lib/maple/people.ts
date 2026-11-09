@@ -1,6 +1,6 @@
 import { captureAppEventSoon } from "@/lib/analytics/server";
 import { babyNameFor, emailInvite } from "@/lib/email/notices";
-import { careLevelOf, careLevelProblem, storedCareLevel, type AccessRole, type CareLevel } from "./access";
+import { applyPartsChange, careLevelOf, careLevelProblem, PARTS, partLevelProblem, storedCareLevel, type AccessRole, type CareLevel, type Parts, type PartsChange } from "./access";
 import { BadRequest, familyName, Forbidden } from "./api";
 import { addMember, createInvite, listInvites, listMembers, memberFor, normalizeEmail, removeMember, revokeInvite, updateMember, type Invite } from "./auth";
 import { getCarePerson } from "./care-store";
@@ -32,6 +32,17 @@ export async function carePersonOf(ctx: Pick<FamilyCtx, "familyId">): Promise<st
   return (await getCarePerson(ctx))?.member ?? null;
 }
 
+/** Each part's level in a change, checked against the role it's for: a BadRequest in the part's own words when one doesn't fit. */
+function checkParts(role: AccessRole | "owner", change: PartsChange | undefined): void {
+  if (!change) return;
+  for (const part of PARTS) {
+    const level = change[part];
+    if (!level) continue;
+    const problem = partLevelProblem(role, part, level);
+    if (problem) throw new BadRequest(problem);
+  }
+}
+
 /** Her page's level as stored for this role, or a BadRequest when the role can't have it. */
 function careFor(role: AccessRole, care: CareLevel | null | undefined): CareLevel | null | undefined {
   if (care === undefined || care === null) return care;
@@ -57,12 +68,15 @@ export type InviteOutcome =
 export async function inviteByEmail(
   ctx: FamilyCtx,
   me: Actor,
-  opts: { email: unknown; role: AccessRole; care?: CareLevel | null; name?: unknown; origin: string }
+  opts: { email: unknown; role: AccessRole; care?: CareLevel | null; parts?: PartsChange; name?: unknown; origin: string }
 ): Promise<InviteOutcome> {
   ownerOnly(me, "invite people");
   const email = normalizeEmail(opts.email);
   if (!email) throw new BadRequest("Enter a valid email address");
   const care = careFor(opts.role, opts.care) ?? null;
+  checkParts(opts.role, opts.parts);
+  // The parts turned down below the role's own (access.ts), as stored.
+  const parts = opts.parts ? applyPartsChange(opts.role, null, opts.parts) : null;
   const name = opts.name === undefined ? null : familyName(ctx, opts.name, 40, "Their name");
   const current = await listMembers(ctx);
   const already = current.find((m) => m.email === email);
@@ -70,12 +84,12 @@ export async function inviteByEmail(
   if (ctx.familyId === FAMILY_ONE) {
     if (current.length >= MAX_MEMBERS) throw new BadRequest("That's a lot of people already!");
     // Their initial until they pick an emoji (Family tab), like every other way in.
-    await addMember(ctx, email, me.email, null, opts.role, care, name);
+    await addMember(ctx, email, me.email, null, opts.role, care, name, parts);
     return { kind: "added", email };
   }
   const open = (await listInvites(ctx)).filter((i) => i.email !== email);
   if (current.length + open.length >= MAX_MEMBERS) throw new BadRequest("That's a lot of people already!");
-  const { invite, token } = await createInvite(ctx, { role: opts.role, displayName: name, emoji: null, createdBy: me.email, email, care });
+  const { invite, token } = await createInvite(ctx, { role: opts.role, displayName: name, emoji: null, createdBy: me.email, email, care, parts });
   const actor = { familyId: ctx.familyId, member: me.email, role: me.role };
   captureAppEventSoon(actor, "invite_created");
   // The token rides in the #fragment, which browsers never send to servers or logs.
@@ -98,31 +112,42 @@ export async function inviteByEmail(
 /** A role an owner can give someone already in the family: the invite roles, or owner. */
 export type ChangeRole = AccessRole | "owner";
 
+/** A change to someone's access: their role, her page's level, and the parts turned down below the role (access.ts). */
+export type AccessChange = { role?: ChangeRole; care?: CareLevel | null; parts?: PartsChange };
+
 /**
- * The checked patch for changing someone's role and/or their level on her
- * page: owners only, never their own or another owner's (owners always have
- * all of it), and never her page for her own account (it's always hers).
- * `care` null puts the role's default back. Making someone an owner clears
- * their level on her page, since owners always have all of it; it can't be
- * undone here, as owners can't be changed or removed.
+ * The checked patch for changing someone's role, their level on her page
+ * and/or the parts turned down for them: owners only, never their own or
+ * another owner's (owners always have all of it), and never her page for her
+ * own account (it's always hers). `care` null puts the role's default back,
+ * as a part's null does. Parts left out of `parts` stay as they are, through
+ * a role change too (the role caps them). Making someone an owner clears her
+ * page's level and their parts, since owners always have all of it; it can't
+ * be undone here, as owners can't be changed or removed.
  */
 export async function accessPatch(
   ctx: FamilyCtx,
   me: Actor,
   target: Member,
-  change: { role?: ChangeRole; care?: CareLevel | null }
-): Promise<{ role?: ChangeRole; care?: CareLevel | null }> {
+  change: AccessChange
+): Promise<{ role?: ChangeRole; care?: CareLevel | null; parts?: Parts | null }> {
   if (change.role !== undefined) ownerOnly(me, "change roles");
   if (change.care !== undefined) ownerOnly(me, "change who sees her page");
+  if (change.parts !== undefined) ownerOnly(me, "change what people can see and do");
   if (target.email === me.email) throw new BadRequest("You can't change your own access");
   if (target.role === "owner") throw new BadRequest(change.role === "owner" ? "They're already an owner" : "Owners always have full access");
   if (change.role === "owner") {
     if (change.care != null && change.care !== "log") throw new BadRequest("Owners always have all of her page");
-    return { role: "owner", care: null };
+    if (change.parts && PARTS.some((part) => change.parts![part] != null && change.parts![part] !== "log")) throw new BadRequest("Owners always have everything");
+    return { role: "owner", care: null, parts: null };
   }
   const role = change.role ?? (target.role as AccessRole);
-  const patch: { role?: AccessRole; care?: CareLevel | null } = {};
+  const patch: { role?: AccessRole; care?: CareLevel | null; parts?: Parts | null } = {};
   if (change.role !== undefined) patch.role = change.role;
+  if (change.parts !== undefined) {
+    checkParts(role, change.parts);
+    patch.parts = applyPartsChange(role, target.parts, change.parts);
+  }
   if (change.care !== undefined) {
     if (change.care !== null && change.care !== "log" && target.email === (await carePersonOf(ctx))) {
       throw new BadRequest("It's her own page, so she always has it");
@@ -132,12 +157,12 @@ export async function accessPatch(
   return patch;
 }
 
-/** Changes one member's role and/or level on her page (accessPatch's rules); the member before and after. */
+/** Changes one member's role, level on her page and/or parts (accessPatch's rules); the member before and after. */
 export async function changeAccess(
   ctx: FamilyCtx,
   me: Actor,
   targetId: string,
-  change: { role?: ChangeRole; care?: CareLevel | null }
+  change: AccessChange
 ): Promise<{ before: Member; after: Member }> {
   const before = await memberFor(ctx, targetId);
   if (!before) throw new BadRequest("Not a member");

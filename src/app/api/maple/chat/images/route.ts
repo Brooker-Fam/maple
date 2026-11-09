@@ -24,7 +24,7 @@ function imageRoute(method: string, handler: Handler) {
       if (error instanceof StoreUnavailable) throw error;
       throw new ChatImageRequestFailed("chat_image_request_failed");
     }
-  });
+  }, { part: ["chat", "view"] });
   return async (request: NextRequest) => {
     const response = await authorized(request);
     if (response.status >= 400 && response.status < 500) await captureServerException(new Error("chat_image_request_failed"), { route: ROUTE, status: response.status }).catch(() => {});

@@ -1,7 +1,24 @@
 "use client";
 
 import { useState } from "react";
-import { CARE_LEVEL_LABEL, careLevelOf, matchPerson, parseCareLevel, ROLE_FROM_WORD, ROLE_LABEL, type CareLevel } from "@/lib/maple/access";
+import {
+  applyPartsChange,
+  CARE_LEVEL_LABEL,
+  careLevelOf,
+  matchPerson,
+  parseCareLevel,
+  PART_LABEL,
+  PART_LEVEL_LABEL,
+  partLevelOf,
+  PARTS,
+  rolePartLevel,
+  ROLE_FROM_WORD,
+  ROLE_LABEL,
+  type CareLevel,
+  type Part,
+  type Parts,
+  type PartsChange,
+} from "@/lib/maple/access";
 import type { ChatInvite } from "@/lib/maple/chat/types";
 import type { Member, Role } from "@/lib/maple/types";
 import { useCare } from "../care/useCare";
@@ -32,7 +49,17 @@ export function approvalWords(name: string): { idle: string; kept: string; unkno
   }
 }
 
-type Input = { email?: unknown; name?: unknown; person?: unknown; access?: unknown; mom_page?: unknown };
+type Input = { email?: unknown; name?: unknown; person?: unknown; access?: unknown; mom_page?: unknown; part?: unknown; level?: unknown };
+
+/** change_access's word for each part (people-mcp.ts). */
+const PART_FROM_ARG: Record<string, Part> = { doctor_questions: "doctor", moments: "moments", chat: "chat" };
+
+/** The one part a call names, with its level (every other part stays as it is). */
+const partsOf = (raw: Input): PartsChange => {
+  const part = typeof raw.part === "string" ? PART_FROM_ARG[raw.part] : undefined;
+  const level = parseCareLevel(raw.level);
+  return part && level ? { [part]: level } : {};
+};
 
 const roleOf = (word: unknown): Role | null => (typeof word === "string" && ROLE_FROM_WORD[word] ? ROLE_FROM_WORD[word] : null);
 
@@ -57,6 +84,17 @@ export function PeopleApproval({ name, input, onAnswer }: { name: string; input:
   const levelOf = (m: Member) => (m.email === herself && (m.role === "owner" || m.role === "member") ? "log" : careLevelOf(m));
   const pageRow = (role: Role, level: CareLevel, before?: CareLevel) =>
     page && role !== "photos" && role !== "owner" ? <Row label={page} value={before && before !== level ? `${CARE_LEVEL_LABEL[before]} → ${CARE_LEVEL_LABEL[level]}` : CARE_LEVEL_LABEL[level]} /> : null;
+  // Each part that isn't the role's own after the change, or that the change moves (access.ts parts).
+  const partRows = (role: Role, parts: Parts | null, before?: { role: Role; parts?: Parts | null }) =>
+    role === "owner" || role === "photos"
+      ? null
+      : PARTS.map((part) => {
+          const level = partLevelOf({ role, parts }, part);
+          const was = before ? partLevelOf(before, part) : null;
+          if (level === rolePartLevel(role, part) && (was === null || was === level)) return null;
+          const words = PART_LEVEL_LABEL[part];
+          return <Row key={part} label={PART_LABEL[part]} value={was && was !== level ? `${words[was]} → ${words[level]}` : words[level]} />;
+        });
 
   let title: string;
   let yes: string;
@@ -124,6 +162,7 @@ export function PeopleApproval({ name, input, onAnswer }: { name: string; input:
           {person}
           {role && <Row label="Baby's log" value={target && target.role !== role ? `${ROLE_LABEL[target.role]} → ${ROLE_LABEL[role]}` : ROLE_LABEL[role]} />}
           {role && level && pageRow(role, level, target ? levelOf(target) : undefined)}
+          {role && role !== "owner" && partRows(role, applyPartsChange(role, target?.parts, partsOf(raw)), target ?? undefined)}
         </div>
       );
     }

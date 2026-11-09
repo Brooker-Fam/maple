@@ -67,7 +67,7 @@ const FAQS: Faq[] = [
     q: "Can grandparents see the log?",
     a: [
       [
-        "Yes. Invite them as View only. They can follow the baby’s log and Moments but can’t add or change anything, and mom’s page is hidden from them.",
+        "Yes. Invite them as View only. They can follow the baby’s log and Moments but can’t add or change anything, and mom’s page is hidden from them. In Settings → People & permissions, an owner can also hide the questions for the doctor, moments or the chat from one person, or make them read only.",
       ],
     ],
   },

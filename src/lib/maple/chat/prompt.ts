@@ -70,6 +70,27 @@ ${MOM} hasn't let this chat see her food, drinks, medicines, temperatures or que
 You can't see her medicine list here, so before logging any medicine other than vitamin D, ask "${vo.Name}'s or ${MOM}'s?" unless the person already named whose it was ("she" or "her" alone doesn't). If it's ${MOM}'s, say to log it on her page in the app.`;
 }
 
+/**
+ * What an owner turned down for this person below their role (access.ts
+ * parts), as lines after the addendum: the chat only reading for them, and
+ * the questions for the doctor or moments hidden or read only. Empty when
+ * nothing is. Fixed per person, so the cached prefix stays the same between
+ * their requests.
+ */
+export type ChatPartLimits = { readsOnly?: boolean; doctor?: "none" | "view" | "log"; moments?: "none" | "view" | "log" };
+
+export function chatPartLines(vo: Voice, limits: ChatPartLimits | undefined): string {
+  if (!limits) return "";
+  const change = "an owner can change that in Settings → People & permissions";
+  const out: string[] = [];
+  if (limits.readsOnly) out.push(`The chat only reads for this person: look things up for them, but nothing they say here is logged or changed. If they ask to log or change something, say they can do it in the app, or ${change}.`);
+  if (limits.doctor === "none") out.push(`The questions for ${vo.name}'s doctor (and their answers) aren't shared with this person, so those tools aren't here and results leave them out. Never mention, list or add them, and don't answer about them from earlier messages; if asked, say ${change}.`);
+  else if (limits.doctor === "view") out.push(`The questions for ${vo.name}'s doctor are read only for this person: they can see them but not add, answer or change them. If they ask to, say ${change}.`);
+  if (limits.moments === "none") out.push(`${vo.Name}'s moments and photos aren't shared with this person, so those tools aren't here and results leave them out. If asked about them, say ${change}.`);
+  else if (limits.moments === "view") out.push(`${vo.Name}'s moments are read only for this person: they can see them but not add or change them. If they ask to save one, say ${change}.`);
+  return out.length ? `\n${out.join("\n")}` : "";
+}
+
 export const CHAT_ADDENDUM = chatAddendum(FAMILY_ONE_VOICE);
 export const CHAT_ADDENDUM_VIEWER = chatAddendumViewer(FAMILY_ONE_VOICE);
 export const CHAT_ADDENDUM_CARE_CLOSED = chatAddendumCareClosed(FAMILY_ONE_VOICE);
@@ -86,7 +107,7 @@ export const usesCacheBreakpoints = (model: string) => model.startsWith("anthrop
  * `page`: what an owner set for this person on it, when it isn't
  * everything: "view" (read only) or "hidden".
  */
-export function systemBlocks(opts: { viewer: boolean; care: boolean; page?: "view" | "hidden"; model: string; copy: ToolCopy; images?: boolean }): SystemModelMessage[] {
+export function systemBlocks(opts: { viewer: boolean; care: boolean; page?: "view" | "hidden"; limits?: ChatPartLimits; model: string; copy: ToolCopy; images?: boolean }): SystemModelMessage[] {
   const { copy } = opts;
   const addendum = opts.viewer
     ? chatAddendumViewer(copy.v)
@@ -97,7 +118,7 @@ export function systemBlocks(opts: { viewer: boolean; care: boolean; page?: "vie
         : opts.page === "view" ? chatAddendumCareView(copy.v) : chatAddendum(copy.v);
   return [
     { role: "system", content: mapleInstructions(copy, { entryNumbers: false, memories: "chat" }) },
-    { role: "system", content: addendum + (opts.images ? `\n${imageInstructions(copy.v)}` : ""), ...(usesCacheBreakpoints(opts.model) ? { providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } } } : {}) },
+    { role: "system", content: addendum + chatPartLines(copy.v, opts.limits) + (opts.images ? `\n${imageInstructions(copy.v)}` : ""), ...(usesCacheBreakpoints(opts.model) ? { providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } } } : {}) },
   ];
 }
 

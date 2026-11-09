@@ -9,7 +9,7 @@
  */
 import type { Assessment, MoodTag } from "./guidelines";
 import type { CareFoodItem } from "./care-nutrition-types";
-import type { CareLevel } from "./access";
+import type { CareLevel, Parts } from "./access";
 import type { SleepState } from "./sleep/types";
 
 export type Side = "L" | "R";
@@ -245,6 +245,8 @@ export type Member = {
   color: string | null;
   /** Her page, when an owner set it apart from the role's default (access.ts); absent otherwise. */
   care?: CareLevel;
+  /** The parts an owner turned down below the role's own (access.ts: questions for the doctor, moments, the chat); absent when none are. */
+  parts?: Parts;
 };
 
 export type Me = Member;

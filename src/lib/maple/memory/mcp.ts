@@ -4,7 +4,7 @@ import type { ShapeOutput, ZodRawShapeCompat } from "@modelcontextprotocol/sdk/s
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { captureServerException } from "@/lib/posthog-server";
 import { memberName } from "../insights";
-import { FAMILY_ONE_COPY, READ_ANN, ToolError, VIEWER_MESSAGE, WRITE_ANN, context, fail, ok, type Annotations, type Ctx, type Extra, type ToolCopy } from "../mcp-tools";
+import { FAMILY_ONE_COPY, READ_ANN, ToolError, WRITE_ANN, context, fail, ok, writeRefusal, type Annotations, type Ctx, type Extra, type ToolCopy } from "../mcp-tools";
 import { StoreUnavailable } from "../store";
 import { dayKey } from "../time";
 import { memoryStatusJson, recallMatches, recallRecord, type Names } from "./policy";
@@ -96,7 +96,11 @@ function addMemoryTool<S extends ZodRawShapeCompat>(
   const handler = async (args: ShapeOutput<S>, extra: Extra): Promise<CallToolResult> => {
     try {
       const ctx = await context(extra);
-      if (cfg.write && ctx.who.role === "viewer") throw new ToolError(VIEWER_MESSAGE);
+      if (cfg.write) {
+        // A viewer, or a chat an owner set to read only (access.ts parts).
+        const no = writeRefusal(ctx);
+        if (no) throw new ToolError(no);
+      }
       return await run(args, ctx);
     } catch (err) {
       return memoryToolError(name, err);

@@ -2,6 +2,7 @@ import { query } from "@/lib/db";
 import { captureServerException } from "@/lib/posthog-server";
 import { FAMILY_OPTIONAL_TABLES, FAMILY_TABLES } from "./family-tables";
 import { DEFAULT_TZ } from "./time";
+import { parseParts, type Parts } from "./access";
 import type { Role } from "./types";
 
 /**
@@ -37,6 +38,15 @@ export type FamilyCtx = FamilyScope & {
   member: string;
   role: Role;
   status: FamilyStatus;
+  /**
+   * The parts an owner turned down for this member below their role
+   * (access.ts: questions for the doctor, moments, the chat), read with the
+   * role on every request. The store leaves what's hidden out of every read
+   * made with this context and refuses writes beyond the level (store.ts
+   * unseenSql, PartForbidden). Absent: none are (and a bare family id or
+   * scope, as jobs use, reads everything).
+   */
+  parts?: Parts;
 };
 
 /** A positive integer id; BIGINT columns arrive as strings. */
@@ -108,13 +118,16 @@ export async function resolveFamily(id: string | null | undefined, fam: unknown)
   if (!id || familyId === null) return null;
   if (id === ADMIN_MEMBER_ID && familyId !== adminFamilyId()) return null;
   const rows = await query(
-    `SELECT ${SCOPE_COLS}, m.role
+    `SELECT ${SCOPE_COLS}, m.role, m.parts
      FROM maple_members m JOIN maple_families f ON f.id = m.family_id ${ACTIVE_BABY}
      WHERE m.family_id = $1 AND m.email = $2 AND f.status <> 'deleting' AND ${ACCEPTED_MEMBERSHIP("m")}`,
     [familyId, id]
   );
   if (!rows?.length) return null;
-  return { ...rowToScope(rows[0]), member: id, role: rowRole(rows[0].role), status: rowStatus(rows[0].status) };
+  const role = rowRole(rows[0].role);
+  // Owners have every part, whatever the row says.
+  const parts = role === "owner" ? null : parseParts(rows[0].parts);
+  return { ...rowToScope(rows[0]), member: id, role, status: rowStatus(rows[0].status), ...(parts ? { parts } : {}) };
 }
 
 /** Session cookie or native ticket body: `{ id, fam? }`. */

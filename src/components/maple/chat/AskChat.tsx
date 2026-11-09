@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { Icon } from "../icons";
 import { Button, cx, tone } from "../ui";
 import { useChatNav, type ChatPrompt } from "./ChatNav";
+import { useChatOn } from "../useAccess";
 
 export function AskChatButton({ prompt, label = "Ask about this", children, onOpened, className }: {
   prompt: string;
@@ -13,6 +14,9 @@ export function AskChatButton({ prompt, label = "Ask about this", children, onOp
   className?: string;
 }) {
   const { ask } = useChatNav();
+  const chatOn = useChatOn();
+  // An owner turned the chat off for this person (access.ts parts): no way in from here.
+  if (!chatOn) return null;
   return (
     <Button variant="ghost" size="sm" className={cx("text-left", className)} onClick={() => {
       if (ask({ prompt, label })) onOpened?.();
@@ -28,6 +32,8 @@ export function AskChatCard({ title, description, suggestions }: {
   description?: string;
   suggestions: ChatPrompt[];
 }) {
+  const chatOn = useChatOn();
+  if (!chatOn) return null;
   return (
     <section aria-label={title} className={cx(tone.inset, "px-4 py-3")}>
       <h3 className={cx(tone.heading, "text-[14px]")}>{title}</h3>

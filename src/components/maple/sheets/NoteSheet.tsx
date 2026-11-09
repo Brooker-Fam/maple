@@ -9,6 +9,7 @@ import { useCareNav } from "../care/CareNav";
 import { useCare } from "../care/useCare";
 import { Icon } from "../icons";
 import { useBabyWords } from "../familyWords";
+import { usePart } from "../useAccess";
 import { Chip, Segmented, Sheet, TextArea, WhenField, cx, tone } from "../ui";
 import type { SheetProps } from "./index";
 import { useSavedEntryConflict } from "./useSavedEntryConflict";
@@ -38,8 +39,12 @@ function NoteForm({ open, onClose, entry, preset }: SheetProps) {
   const care = useCare();
   const careNav = useCareNav();
   const d: Partial<NoteData> = e?.data ?? {};
+  // Questions for the doctor as an owner set them for this person (access.ts parts): someone who can only see them
+  // gets a question read only, and no way to make a note one.
+  const asksDoctor = usePart("doctor") === "log";
+  const lockedQuestion = !!e?.data.for_doctor && !asksDoctor;
 
-  const [doctor, setDoctor] = useState(() => d.for_doctor ?? pbool(preset, "for_doctor") ?? false);
+  const [doctor, setDoctor] = useState(() => d.for_doctor ?? (asksDoctor && pbool(preset, "for_doctor")) ?? false);
   const [tag, setTag] = useState<NoteTag | undefined>(() => d.tag ?? (NOTE_TAGS.includes(pstr(preset, "tag") as NoteTag) ? (pstr(preset, "tag") as NoteTag) : undefined));
   const [amount, setAmount] = useState<Amount | undefined>(d.amount);
   const [text, setText] = useState(e?.note ?? pstr(preset, "note") ?? "");
@@ -114,11 +119,12 @@ function NoteForm({ open, onClose, entry, preset }: SheetProps) {
             busy={busy}
             disabled={changed || timeInvalid || !canSave || (!!e && e.id < 0)}
             hint={!canSave ? (doctor ? "Type the question." : "Pick one or type a note.") : undefined}
+            viewOnly={lockedQuestion}
           />
         </fieldset>
       }
     >
-      <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
+      <fieldset disabled={busy || lockedQuestion} aria-busy={busy} className="min-w-0 space-y-5">
         {e && <LoggedBy entry={e} />}
         {notice}
 
@@ -204,7 +210,7 @@ function NoteForm({ open, onClose, entry, preset }: SheetProps) {
               <TextArea value={text} onChange={setText} rows={3} placeholder="What happened?" />
             </div>
             <WhenField value={when} onChange={setWhen} onInvalidChange={setTimeInvalid} tz={tz} />
-            {!e && (
+            {!e && asksDoctor && (
               <button
                 type="button"
                 onClick={() => setDoctor(true)}

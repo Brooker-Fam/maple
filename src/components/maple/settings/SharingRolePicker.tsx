@@ -1,5 +1,5 @@
 import { useId } from "react";
-import { roleCareLevel, type CareLevel } from "@/lib/maple/access";
+import { PART_LABEL, PART_LEVEL_LABEL, partChoices, partLevelOf, PARTS, roleCareLevel, type CareLevel, type Part, type PartLevel, type Parts } from "@/lib/maple/access";
 import type { Role } from "@/lib/maple/types";
 import { cx, Segmented } from "../ui";
 
@@ -83,6 +83,59 @@ export function CarePagePicker({ role, page, value, onChange, disabled = false }
       <legend className="mb-2 text-[13px] font-semibold text-mp-ink-2">{page}</legend>
       <Segmented aria-label={page} options={levels.map((level) => ({ value: level, label: PAGE_CHOICE[level] }))} value={value} onChange={onChange} />
       <p className="text-[13px] leading-relaxed text-mp-ink-2">{PAGE_NOTE[value]}</p>
+    </fieldset>
+  );
+}
+
+/** What each part's level gives, under its choice. */
+const PART_NOTE: Record<Part, Record<PartLevel, string>> = {
+  doctor: {
+    none: "They don't see the questions for the doctor or their answers, and the chat and their assistants leave them out.",
+    view: "They see the questions and answers, read only.",
+    log: "They see the questions and can add, answer and tick them off.",
+  },
+  moments: {
+    none: "No Moments tab, and the chat and their assistants leave moments out.",
+    view: "They see moments and photos, read only.",
+    log: "They see moments and can add photos and moments.",
+  },
+  chat: {
+    none: "No Chat tab for them.",
+    view: "The chat answers their questions but never logs or changes anything.",
+    log: "The chat can log for them, as far as the rest of their access goes.",
+  },
+};
+
+/** The parts a role leaves a choice on (access.ts partChoices): none for owners and photos-only guests. */
+export const pickableParts = (role: InviteRole): Part[] => PARTS.filter((part) => partChoices(role, part).length > 1);
+
+/**
+ * The parts an owner can turn down for one person below their role
+ * (access.ts): the questions for the doctor, moments, the chat. Each offers
+ * only the levels the role allows; nothing for photos-only guests.
+ * `value`: the levels as stored (a part left out is the role's own).
+ */
+export function PartsPicker({ role, value, onChange, disabled = false }: {
+  role: InviteRole;
+  value: Parts | null | undefined;
+  onChange: (part: Part, level: PartLevel) => void;
+  disabled?: boolean;
+}) {
+  const parts = pickableParts(role);
+  if (!parts.length) return null;
+  return (
+    <fieldset disabled={disabled} className={cx("space-y-4", disabled && "opacity-50")}>
+      <legend className="mb-2 text-[13px] font-semibold text-mp-ink-2">What else they can see and do</legend>
+      {parts.map((part) => {
+        const level = partLevelOf({ role, parts: value }, part);
+        return (
+          <div key={part} className="space-y-2">
+            <p className="text-[14px] font-medium text-mp-ink">{PART_LABEL[part]}</p>
+            <Segmented aria-label={PART_LABEL[part]} options={partChoices(role, part).map((l) => ({ value: l, label: PART_LEVEL_LABEL[part][l] }))} value={level} onChange={(l) => onChange(part, l)} />
+            <p className="text-[13px] leading-relaxed text-mp-ink-2">{PART_NOTE[part][level]}</p>
+          </div>
+        );
+      })}
     </fieldset>
   );
 }

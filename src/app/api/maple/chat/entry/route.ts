@@ -8,4 +8,4 @@ export const GET = withMember("GET /api/maple/chat/entry", async (request, membe
   const target = new URL(request.url).searchParams.get("target");
   if (target !== "baby" && target !== "care") throw new BadRequest("Choose a baby or care entry.");
   return json(await chatEntryStatus(fam, member, target, idParam(request)));
-});
+}, { part: ["chat", "view"] });

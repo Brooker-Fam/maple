@@ -2,7 +2,7 @@ import { jsonSchema, tool, zodSchema, type ToolSet } from "ai";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { careLevelOf, type CareLevel } from "../access";
+import { atLeast, careLevelOf, partLevelOf, type CareLevel, type Part, type PartLevel } from "../access";
 import { ADMIN_ID } from "../auth";
 import { registerCareTools } from "../care-mcp";
 import { context, FAMILY_ONE_COPY, logState, registerMapleTools, type Annotations, type Extra, type ToolCopy } from "../mcp-tools";
@@ -72,18 +72,42 @@ function tapShape(shape: z.ZodRawShape): z.ZodRawShape {
 }
 
 /**
+ * The tools that read or add a part an owner can turn down for someone
+ * (access.ts parts), with the level each needs. The tools refuse past the
+ * level themselves too (mcp-tools.ts requirePart); here they aren't sent.
+ */
+export const PART_TOOLS: Record<string, [Part, PartLevel]> = {
+  list_doctor_questions: ["doctor", "view"],
+  add_doctor_question: ["doctor", "log"],
+  get_moments: ["moments", "view"],
+  log_moment: ["moments", "log"],
+};
+
+/**
  * `care`: her page as this member's chat reaches it: "none" until she has let
  * the chat see it (chat_care), and otherwise the member's level on it
  * (careLevelOf), so "view" brings only her reads. `owner`: only owners get
- * the tools that change who's in the family.
+ * the tools that change who's in the family. `viewer`: reads only (a viewer,
+ * or a chat an owner set to read only). `parts`: this member's levels of the
+ * questions for the doctor and moments; left out, both are open.
  */
-export function allowed(r: Registration, opts: { viewer: boolean; born: boolean; care: CareLevel; mom: Set<string>; owner?: boolean }): boolean {
+export function allowed(r: Registration, opts: { viewer: boolean; born: boolean; care: CareLevel; mom: Set<string>; owner?: boolean; parts?: Partial<Record<Part, PartLevel>> }): boolean {
   if (EXCLUDED_TOOLS.has(r.name)) return false;
   if (r.name === "record_birth" && opts.born) return false;
   if (OWNER_TOOLS.has(r.name) && !opts.owner) return false;
   if (opts.mom.has(r.name) && (opts.care === "none" || (opts.care === "view" && !r.ann.readOnlyHint))) return false;
+  const needs = PART_TOOLS[r.name];
+  if (needs && !atLeast(opts.parts?.[needs[0]] ?? "log", needs[1])) return false;
   if (opts.viewer) return r.ann.readOnlyHint;
   return true;
+}
+
+/** What an owner set for this member's chat and the parts it reads (access.ts): reads only, and the doctor's questions and moments. */
+export function chatLimits(member: Pick<Member, "role" | "parts">): { readsOnly: boolean; parts: { doctor: PartLevel; moments: PartLevel } } {
+  return {
+    readsOnly: member.role === "viewer" || partLevelOf(member, "chat") === "view",
+    parts: { doctor: partLevelOf(member, "doctor"), moments: partLevelOf(member, "moments") },
+  };
 }
 
 /** Her page for this member's chat: closed until she lets the chat see it, and always to a viewer (chatCareOpen); then their level (her own account always logs). */
@@ -180,18 +204,19 @@ export async function chatLogState(member: Pick<Member, "email">, opts: { fam: n
 }
 
 /** `search`: the chat's model and the family's names for web_search (web-search.ts); without it there's no web search. */
-export function chatTools(member: Pick<Member, "email" | "role" | "care">, opts: { fam: number; born: boolean; care: boolean; self?: boolean; copy: ToolCopy; device?: string | null; submittedAt?: Date; memoryEpoch?: number | null; search?: SearchDeps }): ToolSet {
+export function chatTools(member: Pick<Member, "email" | "role" | "care" | "parts">, opts: { fam: number; born: boolean; care: boolean; self?: boolean; copy: ToolCopy; device?: string | null; submittedAt?: Date; memoryEpoch?: number | null; search?: SearchDeps }): ToolSet {
   const { all, mom } = registrations(opts.copy);
   const vo = opts.copy.v;
   const care = chatCareLevel(member, opts);
   const extra = chatExtra(member, { ...opts, care: care !== "none", submittedAt: undefined });
   const writeExtra = chatExtra(member, { ...opts, care: care !== "none" });
 
-  const viewer = member.role === "viewer";
+  // A viewer, or a chat an owner set to read only (access.ts parts), gets the reads alone.
+  const { readsOnly: viewer, parts } = chatLimits(member);
   const owner = member.role === "owner";
   const set: ToolSet = {};
   for (const r of all) {
-    if (!allowed(r, { viewer, born: opts.born, care, mom, owner })) continue;
+    if (!allowed(r, { viewer, born: opts.born, care, mom, owner, parts })) continue;
     const parser = z.object(TAP_CONFIRMED.has(r.name) ? tapShape(r.shape) : r.shape);
     const write = !r.ann.readOnlyHint;
     const isMom = mom.has(r.name);
@@ -232,7 +257,7 @@ export function chatTools(member: Pick<Member, "email" | "role" | "care">, opts:
   const summary = all.find((r) => r.name === "daily_summary");
   if (summary) set.show_chart = showChartTool(extra, () => summary.handler({ days: 14 }, extra));
   set.search_entries = searchEntriesTool(extra);
-  set.open_screen = openScreenTool({ viewer });
+  set.open_screen = openScreenTool({ viewer: member.role === "viewer", parts });
   Object.assign(set, settingsTools(extra));
   if (opts.search) set.web_search = webSearchTool(opts.search);
   return set;

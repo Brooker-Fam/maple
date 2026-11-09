@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CHAT_MAX_CHARS, type ChatConsent } from "@/lib/maple/chat/types";
+import { partLevelOf } from "@/lib/maple/access";
 import { useAppNav } from "../AppNav";
 import { useMaple } from "../useMaple";
 
@@ -52,6 +53,8 @@ export function ChatNavProvider({ children }: { children: ReactNode }) {
   const nextPrompt = useRef(0);
   const [pending, setPending] = useState<{ scope: string; value: PendingChatPrompt } | null>(null);
   const pendingPrompt = pending?.scope === scope ? pending.value : null;
+  // An owner turned the chat off for this person (access.ts parts), or they're a photos-only guest: nothing opens it.
+  const chatOn = !!state && state.me.role !== "photos" && partLevelOf(state.me, "chat") !== "none";
 
   useEffect(() => {
     setPending((current) => current?.scope === scope ? current : null);
@@ -60,11 +63,15 @@ export function ChatNavProvider({ children }: { children: ReactNode }) {
   const ask = useCallback((question: ChatPrompt) => {
     const prompt = question.prompt.trim();
     if (!me || !prompt || prompt.length > CHAT_MAX_CHARS) return false;
+    if (!chatOn) {
+      toast("The chat is off for you. Ask an owner of this log if you'd like it on.", { tone: "info" });
+      return false;
+    }
     if (tab === "chat" && !window.dispatchEvent(new CustomEvent("maple-before-navigate", { cancelable: true, detail: { tab: "chat" } }))) return false;
     if (!go("chat")) return false;
     setPending({ scope, value: { ...question, prompt, id: ++nextPrompt.current } });
     return true;
-  }, [go, me, scope, tab]);
+  }, [go, me, scope, tab, chatOn, toast]);
 
   const dismissPrompt = useCallback((id: number) => {
     setPending((current) => current?.value.id === id ? null : current);

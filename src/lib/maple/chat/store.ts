@@ -29,8 +29,16 @@ async function rows(sql: string, params: unknown[]): Promise<Record<string, unkn
   return r as Record<string, unknown>[];
 }
 
-/** `careOpen`: some turn in it, this one included, ran with her page open to the chat (`care_open`). */
-export type LockedThread = { id: string; title: string | null; userMessages: number; lastPrompt: number; careOpen: boolean; leaseId?: string };
+/**
+ * `careOpen`: some turn in it, this one included, ran with her page open to
+ * the chat (`care_open`). `doctorOpen` and `momentsOpen`: some turn in it
+ * could read the questions for the doctor, or moments (access.ts parts).
+ */
+export type LockedThread = { id: string; title: string | null; userMessages: number; lastPrompt: number; careOpen: boolean; doctorOpen?: boolean; momentsOpen?: boolean; leaseId?: string };
+
+/** Which parts an owner can hide are open to this turn (access.ts): the questions for the doctor, and moments. Left out, both are. */
+export type OpenParts = { doctor: boolean; moments: boolean };
+const ALL_OPEN: OpenParts = { doctor: true, moments: true };
 
 /**
  * Cost rows that count for family `fam`. One without a family (written by
@@ -46,7 +54,7 @@ const costOf = (fam: string, col = "family_id") =>
  * "missing" for another member's or another family's thread, said the same
  * as one that isn't there. `care`: this turn runs with her page open to the chat.
  */
-export async function lockThread(fam: Fam, id: string, member: string, model: string, viewer: boolean, care: boolean): Promise<LockedThread | "busy" | "missing"> {
+export async function lockThread(fam: Fam, id: string, member: string, model: string, viewer: boolean, care: boolean, open: OpenParts = ALL_OPEN): Promise<LockedThread | "busy" | "missing"> {
   // Serialize this member even when two freshly opened phones proposed different first-thread ids.
   const leaseId = randomUUID();
   const lease = await rows(`INSERT INTO maple_chat_member_locks (family_id, member, thread_id, lease_id, busy_until)
@@ -55,7 +63,7 @@ export async function lockThread(fam: Fam, id: string, member: string, model: st
       WHERE maple_chat_member_locks.busy_until < NOW() RETURNING lease_id`, [fam.familyId, member, id, leaseId]);
   if (!lease.length) return "busy";
   try {
-    const result = await lockOneThread(fam, id, member, model, viewer, care);
+    const result = await lockOneThread(fam, id, member, model, viewer, care, open);
     if (typeof result === "object") return { ...result, leaseId };
     await rows(`DELETE FROM maple_chat_member_locks WHERE family_id = $1 AND member = $2 AND lease_id = $3`, [fam.familyId, member, leaseId]);
     return result;
@@ -65,20 +73,21 @@ export async function lockThread(fam: Fam, id: string, member: string, model: st
   }
 }
 
-async function lockOneThread(fam: Fam, id: string, member: string, model: string, viewer: boolean, care: boolean): Promise<LockedThread | "busy" | "missing"> {
+async function lockOneThread(fam: Fam, id: string, member: string, model: string, viewer: boolean, care: boolean, open: OpenParts): Promise<LockedThread | "busy" | "missing"> {
   await rows(
-    `INSERT INTO maple_chat_threads (family_id, id, member, model, viewer_only, care_open) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING`,
-    [fam.familyId, id, member, model, viewer, care]
+    `INSERT INTO maple_chat_threads (family_id, id, member, model, viewer_only, care_open, doctor_open, moments_open) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (id) DO NOTHING`,
+    [fam.familyId, id, member, model, viewer, care, open.doctor, open.moments]
   );
   // last_prompt is the latest model step's; a web search's row ('web_search', SEARCH_FINISH in web-search.ts) isn't one.
   const r = await rows(
-    `UPDATE maple_chat_threads t SET busy_until = NOW() + INTERVAL '70 seconds', viewer_only = $4, care_open = t.care_open OR $5
+    `UPDATE maple_chat_threads t SET busy_until = NOW() + INTERVAL '70 seconds', viewer_only = $4, care_open = t.care_open OR $5,
+       doctor_open = t.doctor_open OR $6, moments_open = t.moments_open OR $7
      WHERE t.id = $1 AND t.family_id = $2 AND t.member = $3 AND (t.viewer_only OR NOT $4) AND (t.busy_until IS NULL OR t.busy_until < NOW())
-     RETURNING t.id, t.title, t.care_open,
+     RETURNING t.id, t.title, t.care_open, t.doctor_open, t.moments_open,
        (SELECT COUNT(*) FROM maple_chat_messages m WHERE m.thread_id = t.id AND m.family_id = t.family_id AND m.role = 'user') AS user_messages,
        (SELECT u.input_tokens + u.cache_read_tokens + u.cache_write_tokens FROM maple_ai_usage u
          WHERE u.thread_id = t.id AND ${costOf("t.family_id", "u.family_id")} AND u.finish_reason IS DISTINCT FROM 'web_search' ORDER BY u.id DESC LIMIT 1) AS last_prompt`,
-    [id, fam.familyId, member, viewer, care]
+    [id, fam.familyId, member, viewer, care, open.doctor, open.moments]
   );
   if (r.length) {
     return {
@@ -87,6 +96,8 @@ async function lockOneThread(fam: Fam, id: string, member: string, model: string
       userMessages: Number(r[0].user_messages ?? 0),
       lastPrompt: Number(r[0].last_prompt ?? 0),
       careOpen: r[0].care_open !== false,
+      doctorOpen: r[0].doctor_open !== false,
+      momentsOpen: r[0].moments_open !== false,
     };
   }
   const owner = await rows(`SELECT member, viewer_only FROM maple_chat_threads WHERE id = $1 AND family_id = $2`, [id, fam.familyId]);
@@ -213,7 +224,7 @@ export async function chatBudget(fam: Fam, now: Date, env: Record<string, string
 export function chatStore(fam: Fam) {
   return {
     usageSince: (member: string, day: string, dayStart: Date, monthStart: Date) => usageSince(fam, member, day, dayStart, monthStart),
-    lockThread: (id: string, member: string, model: string, viewer: boolean, care: boolean) => lockThread(fam, id, member, model, viewer, care),
+    lockThread: (id: string, member: string, model: string, viewer: boolean, care: boolean, open?: OpenParts) => lockThread(fam, id, member, model, viewer, care, open),
     releaseThread: (id: string, leaseId?: string) => releaseThread(fam, id, leaseId),
     loadMessages: (threadId: string) => loadRecentMessages(fam, threadId),
     saveMessage: (threadId: string, member: string, m: ChatMessage) => saveMessage(fam, threadId, member, m),

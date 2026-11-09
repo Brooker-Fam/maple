@@ -23,6 +23,7 @@ import { ActionRow, GROUP, Section } from "./settings/parts";
 import { useSectionFocus } from "./sectionFocus";
 import { cx, tone } from "./ui";
 import { useMaple } from "./useMaple";
+import { useChatOn } from "./useAccess";
 
 const PAGES = {
   people: "People & permissions",
@@ -98,6 +99,8 @@ export default function FamilyTab() {
     window.scrollTo({ top: 0 });
     heading.current?.focus({ preventScroll: true });
   }, [page]);
+  // Her switch for what the chat can read means nothing once an owner has turned her chat off (access.ts parts).
+  const chatOn = useChatOn();
 
   if (!state) return null;
 
@@ -105,7 +108,7 @@ export default function FamilyTab() {
   const allowed = (target: Page) => {
     if (photosOnly) return ["people", "appearance", "account", "about"].includes(target);
     if (target === "medical-records") return state.me.role === "owner";
-    if (target === "chat") return !!care?.self;
+    if (target === "chat") return !!care?.self && chatOn;
     return !readOnly || !["doctor", "today", "assistants"].includes(target);
   };
   const active = page && allowed(page) ? page : null;

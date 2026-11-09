@@ -1,5 +1,5 @@
 import { query, transaction } from "@/lib/db";
-import { careLevelOf } from "../access";
+import { careLevelOf, partLevelOf } from "../access";
 import type { FamilyScope } from "../family";
 import { StoreUnavailable } from "../store";
 import type { Member } from "../types";
@@ -25,14 +25,37 @@ type Fam = Pick<FamilyScope, "familyId">;
  * open (the chat never opens it to a viewer), whatever `care_open` says: older
  * threads all read as open. A bare boolean is the viewer flag alone.
  */
-export type ThreadAccess = { viewer: boolean; careHidden: boolean };
+export type ThreadAccess = {
+  viewer: boolean;
+  careHidden: boolean;
+  /**
+   * An owner hid the questions for the doctor, or moments, from this person
+   * (access.ts parts): only threads that never ran with that part open
+   * (doctor_open, moments_open; older threads all did), since those can quote it.
+   */
+  doctorHidden?: boolean;
+  momentsHidden?: boolean;
+};
 
-export const threadAccess = (member: Pick<Member, "role" | "care">): ThreadAccess => ({ viewer: member.role === "viewer", careHidden: careLevelOf(member) === "none" });
+export const threadAccess = (member: Pick<Member, "role" | "care" | "parts">): ThreadAccess => ({
+  viewer: member.role === "viewer",
+  careHidden: careLevelOf(member) === "none",
+  doctorHidden: partLevelOf(member, "doctor") === "none",
+  momentsHidden: partLevelOf(member, "moments") === "none",
+});
 
-export const asThreadAccess = (open: boolean | ThreadAccess): ThreadAccess => (typeof open === "boolean" ? { viewer: open, careHidden: false } : open);
+export const asThreadAccess = (open: boolean | ThreadAccess): Required<ThreadAccess> =>
+  typeof open === "boolean"
+    ? { viewer: open, careHidden: false, doctorHidden: false, momentsHidden: false }
+    : { doctorHidden: false, momentsHidden: false, ...open };
 
-/** The SQL test for a thread `t` this member can open: `v` is the viewer flag's parameter, `h` careHidden's. */
-export const openable = (t: string, v: string, h: string) => `(${t}.viewer_only OR NOT ${v}) AND (${t}.viewer_only OR NOT ${t}.care_open OR NOT ${h})`;
+/**
+ * The SQL test for a thread `t` this member can open: `v` is the viewer
+ * flag's parameter, `h` careHidden's, `d` and `m` doctorHidden's and
+ * momentsHidden's.
+ */
+export const openable = (t: string, v: string, h: string, d: string, m: string) =>
+  `(${t}.viewer_only OR NOT ${v}) AND (${t}.viewer_only OR NOT ${t}.care_open OR NOT ${h}) AND (NOT ${t}.doctor_open OR NOT ${d}) AND (NOT ${t}.moments_open OR NOT ${m})`;
 
 async function rows(sql: string, params: unknown[]): Promise<Record<string, unknown>[]> {
   const r = await query(sql, params);
@@ -64,15 +87,16 @@ export type ChatStream = {
 };
 
 export async function chatStream(fam: Fam, member: string, open: boolean | ThreadAccess, before: string | null, size = STREAM_PAGE): Promise<ChatStream> {
-  const { viewer, careHidden } = asThreadAccess(open);
-  const visible = `t.family_id = $1 AND t.member = $2 AND ${openable("t", "$3", "$4")}`;
+  const { viewer, careHidden, doctorHidden, momentsHidden } = asThreadAccess(open);
+  const visible = `t.family_id = $1 AND t.member = $2 AND ${openable("t", "$3", "$4", "$5", "$6")}`;
+  const access = [fam.familyId, member, viewer, careHidden, doctorHidden, momentsHidden];
   const [head, page] = await Promise.all([
-    rows(`SELECT t.id, COALESCE(t.busy_until > NOW(), FALSE) AS busy FROM maple_chat_threads t WHERE ${visible} ORDER BY busy DESC, t.updated_at DESC LIMIT 1`, [fam.familyId, member, viewer, careHidden]),
+    rows(`SELECT t.id, COALESCE(t.busy_until > NOW(), FALSE) AS busy FROM maple_chat_threads t WHERE ${visible} ORDER BY busy DESC, t.updated_at DESC LIMIT 1`, access),
     rows(
       `SELECT m.id, m.role, m.parts, m.thread_id FROM maple_chat_messages m JOIN maple_chat_threads t ON t.id = m.thread_id AND t.family_id = m.family_id
-       WHERE ${visible} AND ($5::text IS NULL OR (m.created_at, m.seq) < (SELECT c.created_at, c.seq FROM maple_chat_messages c WHERE c.id = $5 AND c.family_id = $1 AND c.member = $2))
-       ORDER BY m.created_at DESC, m.seq DESC LIMIT $6`,
-      [fam.familyId, member, viewer, careHidden, before, size + 1]
+       WHERE ${visible} AND ($7::text IS NULL OR (m.created_at, m.seq) < (SELECT c.created_at, c.seq FROM maple_chat_messages c WHERE c.id = $7 AND c.family_id = $1 AND c.member = $2))
+       ORDER BY m.created_at DESC, m.seq DESC LIMIT $8`,
+      [...access, before, size + 1]
     ),
   ]);
   const { items, more } = streamPage(
@@ -86,21 +110,21 @@ export async function chatStream(fam: Fam, member: string, open: boolean | Threa
 export async function deleteChats(fam: Fam, member: string, open: boolean | ThreadAccess): Promise<number> {
   // Keep only non-content delivery receipts so a lost acknowledgement cannot replay a write after deletion.
   // A running turn keeps its member lease until it finishes, even if its conversation is deleted.
-  const { viewer, careHidden } = asThreadAccess(open);
-  const params = [fam.familyId, member, viewer, careHidden];
+  const { viewer, careHidden, doctorHidden, momentsHidden } = asThreadAccess(open);
+  const params = [fam.familyId, member, viewer, careHidden, doctorHidden, momentsHidden];
   const result = await transaction([{
     sql: `INSERT INTO maple_chat_image_generations (family_id, member, generation) VALUES ($1, $2, 1)
       ON CONFLICT (family_id, member) DO UPDATE SET generation = maple_chat_image_generations.generation + 1`,
     params: params.slice(0, 2),
   }, { sql: `WITH removed AS (
-    DELETE FROM maple_chat_threads t WHERE t.family_id = $1 AND t.member = $2 AND ${openable("t", "$3", "$4")} RETURNING t.id
+    DELETE FROM maple_chat_threads t WHERE t.family_id = $1 AND t.member = $2 AND ${openable("t", "$3", "$4", "$5", "$6")} RETURNING t.id
   ), detached AS (
     UPDATE maple_chat_deliveries SET thread_id = NULL WHERE family_id = $1 AND member = $2 AND thread_id IN (SELECT id FROM removed)
   ), removed_images AS (
     DELETE FROM maple_chat_images i WHERE i.family_id = $1 AND i.member = $2 AND (i.viewer_only OR NOT $3)
     AND NOT EXISTS (
       SELECT 1 FROM maple_chat_messages m JOIN maple_chat_threads t ON t.id = m.thread_id AND t.family_id = m.family_id
-      WHERE m.family_id = i.family_id AND m.member = i.member AND NOT (${openable("t", "$3", "$4")})
+      WHERE m.family_id = i.family_id AND m.member = i.member AND NOT (${openable("t", "$3", "$4", "$5", "$6")})
       AND m.parts @> jsonb_build_array(jsonb_build_object('type', 'file', 'url', '/api/maple/chat/images?id=' || i.id))
     )
   ) SELECT id FROM removed`, params }]);

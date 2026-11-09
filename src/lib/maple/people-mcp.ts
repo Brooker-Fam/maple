@@ -3,7 +3,26 @@ import type { McpServer, ToolCallback } from "@modelcontextprotocol/sdk/server/m
 import type { ShapeOutput, ZodRawShapeCompat } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { captureServerException } from "@/lib/posthog-server";
-import { ACCESS_WORD, careLevelOf, careLevelProblem, matchPerson, ROLE_FROM_WORD, type AccessRole, type CareLevel } from "./access";
+import {
+  ACCESS_WORD,
+  applyPartsChange,
+  careLevelOf,
+  careLevelProblem,
+  matchPerson,
+  PART_LABEL,
+  PART_LEVEL_LABEL,
+  partLevelOf,
+  partLevelProblem,
+  PARTS,
+  rolePartLevel,
+  ROLE_FROM_WORD,
+  type AccessRole,
+  type CareLevel,
+  type Part,
+  type PartLevel,
+  type Parts,
+  type PartsChange,
+} from "./access";
 import { BadRequest, Forbidden } from "./api";
 import { ADMIN_ID, listInvites, normalizeEmail, type Invite } from "./auth";
 import { carePersonName, getCarePerson } from "./care-store";
@@ -19,8 +38,9 @@ import type { Member, Role } from "./types";
  * Who's in the family's log, as MCP tools (registered by registerMapleTools,
  * so Claude, ChatGPT and Maple's own chat all carry them): list_people for
  * anyone, and for owners invite_person (by email), change_access (a role on
- * the baby's log and a level on her page, access.ts), remove_person and
- * cancel_invite. The changes run through people.ts, the same as People
+ * the baby's log, a level on her page, and the parts turned down below the
+ * role: the questions for the doctor, moments, the chat; access.ts),
+ * remove_person and cancel_invite. The changes run through people.ts, the same as People
  * settings.
  *
  * Inviting, changing access and removing someone wait for the person's yes:
@@ -78,20 +98,56 @@ function findPerson(ctx: Ctx, query: string): Member {
   throw new ToolError(`Nobody in this family's log is "${query.trim()}". Call list_people for who's here.`);
 }
 
+/** The words the people tools use for each part (access.ts), as their arguments and results name them. */
+const PART_ARG: Record<Part, "doctor_questions" | "moments" | "chat"> = { doctor: "doctor_questions", moments: "moments", chat: "chat" };
+
+const PART_FROM_ARG: Record<(typeof PART_ARG)[Part], Part> = { doctor_questions: "doctor", moments: "moments", chat: "chat" };
+
+/** change_access's one part and its level, as a change (every other part stays as it is); both or neither. */
+function partsFrom(a: { part?: (typeof PART_ARG)[Part] | null; level?: PartLevel | null }): PartsChange {
+  if (!a.part && !a.level) return {};
+  if (!a.part || !a.level) throw new ToolError("Give part and level together: part doctor_questions, moments or chat, and level none, view or log.");
+  return { [PART_FROM_ARG[a.part]]: a.level };
+}
+
+/** Each part a change names, checked against the role it's for. */
+function checkPartArgs(role: AccessRole, change: PartsChange) {
+  for (const part of PARTS) {
+    const level = change[part];
+    const problem = level ? partLevelProblem(role, part, level) : null;
+    if (problem) throw new ToolError(problem);
+  }
+}
+
+/** The parts turned down below the role, read back: "questions for the doctor: hidden; chat: reads only". */
+function partsText(role: Role, parts: Parts | null | undefined): string | null {
+  if (role === "owner" || role === "photos" || !parts) return null;
+  const lines = PARTS.filter((part) => partLevelOf({ role, parts }, part) !== rolePartLevel(role, part)).map(
+    (part) => `${PART_LABEL[part].toLowerCase()}: ${PART_LEVEL_LABEL[part][partLevelOf({ role, parts }, part)].toLowerCase()}`
+  );
+  return lines.length ? lines.join("; ") : null;
+}
+
+/** Each part's level in force, as list_people and the results give it. */
+const partLevels = (m: { role: Role; parts?: Parts | null }) => Object.fromEntries(PARTS.map((part) => [PART_ARG[part], partLevelOf(m, part)])) as Record<(typeof PART_ARG)[Part], PartLevel>;
+
 /**
- * What a role and a level on her page give, read back: "can log June's log
- * and moments; Dana's page: hidden". `care` as stored (null: the role's
- * default); her page is left out where the family has none.
+ * What a role, a level on her page and the parts turned down give, read
+ * back: "can log June's log and moments; Dana's page: hidden; questions for
+ * the doctor: hidden". `care` as stored (null: the role's default); her page
+ * is left out where the family has none.
  */
-function accessText(role: Role, care: CareLevel | null | undefined, ctx: Ctx, page: Page): string {
+function accessText(role: Role, care: CareLevel | null | undefined, ctx: Ctx, page: Page, parts?: Parts | null): string {
   const mom = role === "owner" || role === "photos" ? null : pageText(careLevelOf({ role, care: care ?? null }), page.label);
-  return `${roleText(role, voiceOf(ctx).name)}${mom ? `; ${mom}` : ""}`;
+  const turned = partsText(role, parts);
+  return `${roleText(role, voiceOf(ctx).name)}${mom ? `; ${mom}` : ""}${turned ? `; ${turned}` : ""}`;
 }
 
 /** A member's own access, read back: her own account always has her page. */
 function memberAccess(m: Member, ctx: Ctx, page: Page): string {
-  if (page.person !== m.email) return accessText(m.role, m.care, ctx, page);
-  return `${roleText(m.role, voiceOf(ctx).name)}${page.label ? `; it's ${page.label.replace(/'s page$/, "")}'s own page` : ""}`;
+  if (page.person !== m.email) return accessText(m.role, m.care, ctx, page, m.parts);
+  const turned = partsText(m.role, m.parts);
+  return `${roleText(m.role, voiceOf(ctx).name)}${page.label ? `; it's ${page.label.replace(/'s page$/, "")}'s own page` : ""}${turned ? `; ${turned}` : ""}`;
 }
 
 /** One person's line: "Blake (blake@example.com): can log June's log and moments; Dana's page: hidden". */
@@ -105,7 +161,7 @@ function personLine(m: Member, ctx: Ctx, page: Page): string {
 function inviteLine(i: Invite, ctx: Ctx, page: Page): string {
   const who = i.email ?? (i.display_name ? `${i.display_name} (a one-time link)` : "a one-time link");
   const expires = formatDayLabel(dayKey(new Date(i.expires_at), ctx.tz), dayKey(ctx.now, ctx.tz));
-  return `i${i.id} ${who}: ${accessText(i.role, i.care, ctx, page)}; expires ${expires === "Today" ? "today" : expires}`;
+  return `i${i.id} ${who}: ${accessText(i.role, i.care, ctx, page, i.parts)}; expires ${expires === "Today" ? "today" : expires}`;
 }
 
 function addPeopleTool<S extends ZodRawShapeCompat>(
@@ -166,6 +222,12 @@ export function registerPeopleTools(server: McpServer, copy: ToolCopy = FAMILY_O
       .nullish()
       .describe(`${MOM}'s page (her medicines and doses, food and drinks, temperatures and questions for her OB): "log" sees and adds, "view" only sees (never her check-ins), "none" hides it. Leave it out for the default: "log" with access "log", otherwise "none". "view" needs access "log" or "view"; "log" needs access "log".`);
   const person = () => z.string().min(1).max(254).describe("Who: their id (email) from list_people, or their name when only one person has it.");
+  // One part an owner turns down below the access (access.ts), said in change_access's description. Kept short: the
+  // chat sends these definitions on every step that has the people tools, under tool-groups.ts TOOL_CEILING.
+  const partArgs = () => ({
+    part: z.enum(["doctor_questions", "moments", "chat"]).nullish(),
+    level: z.enum(["none", "view", "log"]).nullish(),
+  });
 
   addPeopleTool(
     server,
@@ -192,6 +254,7 @@ export function registerPeopleTools(server: McpServer, copy: ToolCopy = FAMILY_O
           access: ACCESS_WORD[m.role],
           ...(page.person ? { mom_page: pageLevel(m, page.person) } : {}),
           ...(page.person === m.email ? { her_page: true } : {}),
+          ...partLevels(m),
         })),
         ...(owner
           ? {
@@ -201,6 +264,7 @@ export function registerPeopleTools(server: McpServer, copy: ToolCopy = FAMILY_O
                 ...(i.display_name ? { name: i.display_name } : {}),
                 access: ACCESS_WORD[i.role],
                 ...(page.person ? { mom_page: careLevelOf({ role: i.role, care: i.care }) } : {}),
+                ...partLevels(i),
                 expires_at: i.expires_at,
               })),
             }
@@ -239,6 +303,7 @@ export function registerPeopleTools(server: McpServer, copy: ToolCopy = FAMILY_O
       if (already) {
         return ok(`${email} is already in the family log (${memberAccess(already, ctx, page)}). Nothing changed; change_access changes what they reach.`, { already: true });
       }
+      // The parts below what access gives (access.ts) are fine-tuned afterwards, with change_access or in People settings.
       const what = `invite ${email}${a.name ? ` as "${a.name}"` : ""}, ${accessText(role, care, ctx, page)}`;
       if (!confirmedBy(ctx, a.confirmed)) {
         return ok(`Nothing sent yet. Read this back to the user: ${what}. Only if they say yes, call invite_person again with confirmed: true.`, { confirm_needed: true, email, access: a.access, ...(page.person ? { mom_page: careLevelOf({ role, care }) } : {}) });
@@ -270,7 +335,7 @@ export function registerPeopleTools(server: McpServer, copy: ToolCopy = FAMILY_O
     "change_access",
     {
       title: "Change what someone can reach",
-      description: `Owners only. Changes one person's access to ${vo.name}'s log and moments ("access") and/or to ${MOM}'s page ("mom_page"); give at least one. Access "owner" makes someone already in the family an owner (what people often call an admin). Owners always have everything, and ${MOM} always has her own page. Use only when the user asked for this change, in their own words. E.g. "let Grandpa log diapers but not see ${MOM}'s medicines" → access "log", mom_page "none"; "make Sam an admin" → access "owner".`,
+      description: `Owners only. Changes one person's access to ${vo.name}'s log and moments ("access"), ${MOM}'s page ("mom_page"), and/or one part below access (part and level); give at least one. Access "owner" makes someone already in the family an owner (what people often call an admin). Owners always have everything, and ${MOM} always has her own page. Use only when the user asked for this change, in their own words. E.g. "let Grandpa log diapers but not see ${MOM}'s medicines" → access "log", mom_page "none"; "hide the doctor questions from Jamie" → part doctor_questions, level "none"; "make Sam an admin" → access "owner".`,
       inputSchema: {
         person: person(),
         access: z
@@ -278,6 +343,7 @@ export function registerPeopleTools(server: McpServer, copy: ToolCopy = FAMILY_O
           .nullish()
           .describe(`Their access to ${vo.name}'s log and moments: "log" adds and edits them, "view" only sees them, "photos" sees shared moments and photos only, "owner" has everything, ${MOM}'s page included, and invites, changes and removes people. Another owner can't change or remove an owner afterwards. Leave it out to change only mom_page.`),
         mom_page: momPage(),
+        ...partArgs(),
         confirmed: confirmed(),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -286,7 +352,8 @@ export function registerPeopleTools(server: McpServer, copy: ToolCopy = FAMILY_O
     },
     async (a, ctx) => {
       ownerOnly(ctx, "change what people can reach");
-      if (a.access == null && a.mom_page == null) throw new ToolError("Say what to change: access, mom_page, or both.");
+      const parts = partsFrom(a);
+      if (a.access == null && a.mom_page == null && !Object.keys(parts).length) throw new ToolError("Say what to change: access, mom_page, or a part with its level.");
       const target = findPerson(ctx, a.person);
       const name = memberName(target.email, ctx.members);
       if (target.email === ctx.who.id) throw new ToolError("You can't change your own access.");
@@ -294,6 +361,7 @@ export function registerPeopleTools(server: McpServer, copy: ToolCopy = FAMILY_O
       const page = await pageOf(ctx);
       if (a.access === "owner") {
         if (a.mom_page != null && a.mom_page !== "log") throw new ToolError(`Owners always have all of ${MOM}'s page. Leave mom_page out to make ${name} an owner.`);
+        if (PARTS.some((part) => parts[part] && parts[part] !== "log")) throw new ToolError(`Owners always have everything. Leave part and level out to make ${name} an owner.`);
         const everything = `everything${page.label ? `, ${page.label} included,` : ""} and inviting, changing and removing people`;
         if (!confirmedBy(ctx, a.confirmed)) {
           return ok(`Nothing changed yet. Read this back to the user: make ${name} an owner (now ${memberAccess(target, ctx, page)}), with ${everything}. Another owner can't change or remove them afterwards. Only if they say yes, call change_access again with confirmed: true.`, { confirm_needed: true });
@@ -306,15 +374,21 @@ export function registerPeopleTools(server: McpServer, copy: ToolCopy = FAMILY_O
       const problem = care ? careLevelProblem(role, care) : null;
       if (problem) throw new ToolError(problem);
       if (care && care !== "log" && page.person === target.email) throw new ToolError(`${name} is ${MOM}: it's her own page, so she always has it.`);
-      const what = `${name} from ${memberAccess(target, ctx, page)}, to ${accessText(role, care ?? target.care, ctx, page)}`;
+      checkPartArgs(role, parts);
+      const nextParts = Object.keys(parts).length ? applyPartsChange(role, target.parts, parts) : (target.parts ?? null);
+      const after = page.person === target.email
+        ? memberAccess({ ...target, role, parts: nextParts ?? undefined }, ctx, page)
+        : accessText(role, care ?? target.care, ctx, page, nextParts);
+      const what = `${name} from ${memberAccess(target, ctx, page)}, to ${after}`;
       if (!confirmedBy(ctx, a.confirmed)) {
         return ok(`Nothing changed yet. Read this back to the user: change ${what}. Only if they say yes, call change_access again with confirmed: true.`, { confirm_needed: true });
       }
-      const done = await changeAccess(ctx.fam, actor(ctx), target.email, { ...(a.access ? { role } : {}), ...(care ? { care } : {}) });
+      const done = await changeAccess(ctx.fam, actor(ctx), target.email, { ...(a.access ? { role } : {}), ...(care ? { care } : {}), ...(Object.keys(parts).length ? { parts } : {}) });
       return ok(`Changed ${name}'s access: ${memberAccess(done.after, ctx, page)}. It applies now, on every phone and assistant they use.`, {
         changed: true,
         access: ACCESS_WORD[done.after.role],
         ...(page.person ? { mom_page: pageLevel(done.after, page.person) } : {}),
+        ...partLevels(done.after),
       });
     }
   );

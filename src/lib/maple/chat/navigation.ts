@@ -15,6 +15,14 @@ export const DESTINATION_LABELS: Record<ChatDestination, string> = {
   add_photo: "Add a photo", help: "Help", people: "People & permissions", feeding_plan: "Feeding plan",
 };
 
-export function destinationAllowed(destination: ChatDestination, viewer: boolean): boolean {
+/**
+ * `parts`: this person's levels of the parts an owner can turn down
+ * (access.ts): no For the doctor where its questions are hidden, no Moments
+ * where moments are, and no Add a photo below adding them.
+ */
+export function destinationAllowed(destination: ChatDestination, viewer: boolean, parts: { doctor?: "none" | "view" | "log"; moments?: "none" | "view" | "log" } = {}): boolean {
+  if (destination === "doctor_questions" && parts.doctor === "none") return false;
+  if (destination === "moments" && parts.moments === "none") return false;
+  if (destination === "add_photo" && parts.moments !== undefined && parts.moments !== "log") return false;
   return !viewer || (destination !== "mom_medicines" && destination !== "add_photo");
 }

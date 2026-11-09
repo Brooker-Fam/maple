@@ -18,7 +18,7 @@ import type { ToolCopy } from "../mcp-tools";
 import { costMicro, stepTokens, type ModelPrice, type StepTokens } from "./prices";
 import { dashFilter } from "./dashes";
 import { outputShows } from "./display";
-import { contextText, markTailForCache, systemBlocks, usesCacheBreakpoints, withMemoryLines } from "./prompt";
+import { contextText, markTailForCache, systemBlocks, usesCacheBreakpoints, withMemoryLines, type ChatPartLimits } from "./prompt";
 import { TOOL_APPROVAL } from "./tools";
 import { definitionTokens, notLoadedOutput, TOOL_ORDER, toolDisclosure } from "./tool-groups";
 import { CHAT_FAILED, CHAT_NO_ANSWER, CHAT_OFF, type ChatData, type ChatMessage, type ChatToolOutput } from "./types";
@@ -141,6 +141,8 @@ export async function chatTurn(opts: {
   care: boolean;
   /** What an owner set for this person on her page, when it isn't everything (systemBlocks). */
   page?: "view" | "hidden";
+  /** What an owner turned down for this person (access.ts parts), when anything is: `tools` must match (chatLimits). */
+  partLimits?: ChatPartLimits;
   /** The family's words: the instructions must match the tools' (both from one ToolCopy). */
   copy: ToolCopy;
   messages: ChatMessage[];
@@ -169,7 +171,7 @@ export async function chatTurn(opts: {
   }
   const window = modelWindow(messages, opts.memories?.forgotten);
   const hasImages = window.some((message) => message.parts.some((part) => part.type === "file"));
-  const instructions = systemBlocks({ viewer: opts.viewer, care: opts.care, ...(opts.page ? { page: opts.page } : {}), model: opts.modelKey, copy: opts.copy, images: hasImages });
+  const instructions = systemBlocks({ viewer: opts.viewer, care: opts.care, ...(opts.page ? { page: opts.page } : {}), ...(opts.partLimits ? { limits: opts.partLimits } : {}), model: opts.modelKey, copy: opts.copy, images: hasImages });
   const breakpoints = usesCacheBreakpoints(opts.modelKey);
   const maxSteps = Math.max(1, CHAT_MAX_STEPS - stepsDone);
   // The person's tools plus load_tools: all of them for history, execution and the stream; each step sends its selection.

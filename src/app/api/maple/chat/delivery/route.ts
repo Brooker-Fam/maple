@@ -14,4 +14,4 @@ export const POST = withMember("POST /api/maple/chat/delivery", async (request, 
   const status = await cancelDelivery(fam, member.email, threadAccess(member), delivery);
   if (!status) return json({ error: "Too many messages were cancelled today. Check this message again later." }, 429);
   return json({ delivery: status });
-});
+}, { part: ["chat", "view"] });

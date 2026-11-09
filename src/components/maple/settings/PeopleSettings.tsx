@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { Member, Role } from "@/lib/maple/types";
-import { accessLine, CARE_LEVEL_LABEL, careLevelOf, type CareLevel } from "@/lib/maple/access";
+import { accessLine, applyPartsChange, CARE_LEVEL_LABEL, careLevelOf, PART_LABEL, PART_LEVEL_LABEL, partLines, type CareLevel, type Parts } from "@/lib/maple/access";
 import { MAPLE_HOST } from "@/lib/maple/origin";
 import { useCare } from "../care/useCare";
 import { useBabyWords } from "../familyWords";
@@ -11,13 +11,15 @@ import { Avatar, Button, Field, MEMBER_PALETTE, Sheet, cx, memberColor, tone } f
 import { useMaple } from "../useMaple";
 import { ActionRow, CopyButton, DANGER_TEXT, EmojiPicker, GROUP, Section } from "./parts";
 import { useSettingsDraft } from "./DraftContext";
-import SharingRolePicker, { CarePagePicker, defaultPageLevel, roleDescription, SHARING_ROLES, type InviteRole } from "./SharingRolePicker";
+import SharingRolePicker, { CarePagePicker, defaultPageLevel, PartsPicker, roleDescription, SHARING_ROLES, type InviteRole } from "./SharingRolePicker";
 
 type Invite = {
   id: number;
   role: Role;
   /** Her page for whoever takes it up, when set apart from the role's default. */
   care?: CareLevel;
+  /** The parts turned down for whoever takes it up, below the role's own (access.ts). */
+  parts?: Parts;
   /** A pending invite for one email address (outside family 1). */
   email?: string | null;
   display_name: string | null;
@@ -158,7 +160,7 @@ function MemberRow({ m, me, owner }: { m: Member; me: Member; owner: boolean }) 
 
   const who = m.email === "admin" ? "Site admin login" : m.email.startsWith("invite:") ? "Joined with an invite link" : m.email;
   useSettingsDraft(`member:${m.email}`, editing && (name !== (m.display_name ?? "") || emoji !== (m.emoji ?? "")));
-  const line = accessLine(herself ? { role: m.role } : m, page);
+  const line = accessLine(herself ? { role: m.role, parts: m.parts } : m, page);
   const sub = owner && !isMe ? `${line} · ${who}` : line;
 
   const patch = async (body: Record<string, unknown>, done: string) => {
@@ -289,6 +291,14 @@ function MemberRow({ m, me, owner }: { m: Member; me: Member; owner: boolean }) 
               onChange={(level) => void patch({ email: m.email, care: level }, `Access updated: ${page}: ${CARE_LEVEL_LABEL[level].toLowerCase()}`)}
             />
           )}
+          {m.role !== "owner" && (
+            <PartsPicker
+              role={m.role}
+              value={m.parts}
+              disabled={busy}
+              onChange={(part, level) => void patch({ email: m.email, parts: { [part]: level } }, `Access updated: ${PART_LABEL[part].toLowerCase()}: ${PART_LEVEL_LABEL[part][level].toLowerCase()}`)}
+            />
+          )}
           {!confirmOwner ? (
             <Button variant="soft" size="sm" className="w-full" onClick={() => setConfirmOwner(true)}>
               Make owner
@@ -335,6 +345,8 @@ function InviteByEmail({ onInvited }: { onInvited: () => void }) {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<InviteRole>("photos");
   const [level, setLevel] = useState<CareLevel>(defaultPageLevel("photos"));
+  // The parts turned down below the role (access.ts); a new role starts from its own.
+  const [parts, setParts] = useState<Parts>({});
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<{ email: string; url: string; emailed: boolean } | null>(null);
   const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
@@ -344,7 +356,8 @@ function InviteByEmail({ onInvited }: { onInvited: () => void }) {
     if (!valid || busy) return;
     setBusy(true);
     try {
-      const r = await api<{ url?: string; emailed?: boolean }>("/api/maple/members", { method: "POST", body: JSON.stringify({ email: email.trim(), role, ...(page && role !== "photos" ? { care: level } : {}) }) });
+      const turned = applyPartsChange(role, null, parts);
+      const r = await api<{ url?: string; emailed?: boolean }>("/api/maple/members", { method: "POST", body: JSON.stringify({ email: email.trim(), role, ...(page && role !== "photos" ? { care: level } : {}), ...(turned ? { parts: turned } : {}) }) });
       await refresh();
       // Outside the Brookers' log an address only gets an invite: they join by its link, signed in as that address.
       if (r.url) {
@@ -386,10 +399,12 @@ function InviteByEmail({ onInvited }: { onInvited: () => void }) {
         onChange={(next) => {
           setRole(next);
           setLevel(defaultPageLevel(next));
+          setParts({});
         }}
         disabled={busy}
       />
       {page && <CarePagePicker role={role} page={page} value={level} onChange={setLevel} disabled={busy} />}
+      <PartsPicker role={role} value={parts} onChange={(part, next) => setParts((cur) => ({ ...cur, [part]: next }))} disabled={busy} />
       <Button type="submit" className="w-full" disabled={!valid || busy}>
         {busy ? "Inviting…" : "Invite by email"}
       </Button>
@@ -424,8 +439,9 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
   const [emoji, setEmoji] = useState("");
   const [role, setRole] = useState<InviteRole>("photos");
   const [level, setLevel] = useState<CareLevel>(defaultPageLevel("photos"));
+  const [parts, setParts] = useState<Parts>({});
   const [busy, setBusy] = useState(false);
-  const [created, setCreated] = useState<{ url: string; name: string; role: InviteRole; care: CareLevel | null } | null>(null);
+  const [created, setCreated] = useState<{ url: string; name: string; role: InviteRole; care: CareLevel | null; parts: Parts | null } | null>(null);
   const url = created?.url;
   const [canShare, setCanShare] = useState(false);
 
@@ -440,18 +456,19 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
       setEmoji("");
       setRole("photos");
       setLevel(defaultPageLevel("photos"));
+      setParts({});
       setCreated(null);
     }
   }, [open]);
 
   const create = async () => {
     if (!name.trim() || busy) return;
-    const submitted = { name: name.trim(), role, care: page && role !== "photos" ? level : null };
+    const submitted = { name: name.trim(), role, care: page && role !== "photos" ? level : null, parts: applyPartsChange(role, null, parts) };
     setBusy(true);
     try {
       const r = await api<{ url: string }>("/api/maple/invites", {
         method: "POST",
-        body: JSON.stringify({ display_name: submitted.name, emoji, role: submitted.role, ...(submitted.care ? { care: submitted.care } : {}) }),
+        body: JSON.stringify({ display_name: submitted.name, emoji, role: submitted.role, ...(submitted.care ? { care: submitted.care } : {}), ...(submitted.parts ? { parts: submitted.parts } : {}) }),
       });
       setCreated({ ...submitted, url: r.url });
       onCreated();
@@ -479,7 +496,7 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
     <Sheet
       open={open}
       locked={busy}
-      dirty={!url && (!!name.trim() || !!emoji || role !== "photos" || level !== defaultPageLevel(role))}
+      dirty={!url && (!!name.trim() || !!emoji || role !== "photos" || level !== defaultPageLevel(role) || !!applyPartsChange(role, null, parts))}
       onClose={onClose}
       title={url ? "Link ready" : "Invite with a link"}
       footer={
@@ -515,10 +532,12 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
             onChange={(next) => {
               setRole(next);
               setLevel(defaultPageLevel(next));
+              setParts({});
             }}
             disabled={busy}
           />
           {page && <CarePagePicker role={role} page={page} value={level} onChange={setLevel} disabled={busy} />}
+          <PartsPicker role={role} value={parts} onChange={(part, next) => setParts((cur) => ({ ...cur, [part]: next }))} disabled={busy} />
         </fieldset>
       ) : (
         <>
@@ -536,6 +555,9 @@ function InviteLinkSheet({ open, onClose, onCreated }: { open: boolean; onClose:
                 {page}: {CARE_LEVEL_LABEL[created.care].toLowerCase()}
               </p>
             )}
+            {partLines({ role: created.role, parts: created.parts }).map((line) => (
+              <p key={line} className={cx(tone.muted, "text-[13px] leading-snug")}>{line}</p>
+            ))}
           </div>
           <div className={cx(tone.inset, "p-3")}>
             <p className="font-mono text-[13px] leading-relaxed break-all text-mp-ink select-all">{url}</p>

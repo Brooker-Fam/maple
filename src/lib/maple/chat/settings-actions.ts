@@ -1,5 +1,6 @@
 import { query } from "@/lib/db";
 import { chatConsent, CONSENT_VERSION } from "../consent";
+import { partForbiddenCopy, partLevelOf } from "../access";
 import type { FamilyCtx } from "../family";
 import { StoreUnavailable } from "../store";
 import type { Member } from "../types";
@@ -17,7 +18,7 @@ async function rows(sql: string, params: unknown[]) {
 }
 
 /** Resolve authority from the stored tool result, never a client-supplied patch or previous value. */
-export async function applyChatSetting(fam: Pick<FamilyCtx, "familyId">, member: Pick<Member, "email" | "role">, raw: unknown, device: string | null): Promise<SettingActionResult> {
+export async function applyChatSetting(fam: Pick<FamilyCtx, "familyId" | "parts">, member: Pick<Member, "email" | "role">, raw: unknown, device: string | null): Promise<SettingActionResult> {
   const parsed = settingActionSchema.safeParse(raw);
   if (!parsed.success) throw new SettingActionError("That setting action is incomplete.", 400);
   const action = parsed.data;
@@ -41,6 +42,8 @@ export async function applyChatSetting(fam: Pick<FamilyCtx, "familyId">, member:
   if (!output || output.ok !== true || !proposal.success) throw new SettingActionError("That setting card is no longer available.", 404);
   const setting = proposal.data;
   if (setting.scope === "family" && member.role === "viewer") throw new SettingActionError("View-only members cannot change family settings.", 403);
+  // A chat an owner set to read only for this person (access.ts parts) changes nothing of the family's, even by a card.
+  if (setting.scope === "family" && partLevelOf({ role: member.role, parts: fam.parts }, "chat") === "view") throw new SettingActionError(partForbiddenCopy("chat", "view"), 403);
   if (setting.scope === "phone" && (!device || device !== setting.phoneDevice)) throw new SettingActionError("This card belongs to another phone. Open Family to change this phone's preferences.", 409);
   if (setting.scope === "family" && action.phonePrevious !== undefined) throw new SettingActionError("This setting does not use a phone preference.", 400);
   // Lost-response retries return the durable receipt without replaying a write.

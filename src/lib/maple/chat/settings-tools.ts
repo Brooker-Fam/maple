@@ -2,6 +2,7 @@ import { tool, zodSchema } from "ai";
 import { z } from "zod";
 import { familyName } from "../api";
 import { context, type Extra } from "../mcp-tools";
+import { partForbiddenCopy } from "../access";
 import { parseAnswer } from "../onboarding/steps";
 import type { ChatToolOutput } from "./types";
 import { currentSetting, FAMILY_SETTING_KEYS, isPhoneSetting, SETTING_KEYS, SETTING_LABELS, settingInputSchema, settingProposalSchema, settingResultText, settingValueLabel, type SettingInput, type SettingProposal, type SettingsSnapshot, type SettingValue } from "./settings";
@@ -49,6 +50,7 @@ export function settingsTools(extra: Extra) {
           const input = validateSetting(settingInputSchema.parse(raw), ctx.fam.familyId);
           const phone = isPhoneSetting(input.key);
           if (!phone && ctx.who.role === "viewer") return { ok: false, write: false, text: "You have view-only access, so family settings cannot be changed. An owner can make you a member in Family." };
+          if (!phone && ctx.chatReadsOnly) return { ok: false, write: false, text: partForbiddenCopy("chat", "view") };
           if (phone && !ctx.device) return { ok: false, write: false, text: "Open Family to change this phone's preferences." };
           const setting = settingProposalSchema.parse({ v: 1, scope: phone ? "phone" : "family", key: input.key, label: SETTING_LABELS[input.key], previous: phone ? null : currentSetting(ctx.baby, input.key), value: input.value, status: "proposed", ...(phone ? { phoneDevice: ctx.device } : { babyId: ctx.baby.id }) });
           return { ok: true, write: false, setting, text: settingResultText(setting) };

@@ -47,7 +47,7 @@ import {
   type Range,
   type StepView,
 } from "./feeding-plan";
-import { context, fail, FAMILY_ONE_COPY, ok, READ_ANN, ToolError, VIEWER_MESSAGE, voiceOf, WRITE_ANN, type Annotations, type Ctx, type Extra, type ToolCopy } from "./mcp-tools";
+import { context, fail, FAMILY_ONE_COPY, ok, READ_ANN, ToolError, voiceOf, WRITE_ANN, writeRefusal, type Annotations, type Ctx, type Extra, type ToolCopy } from "./mcp-tools";
 import { readBackMatches, readBackToken, READ_BACK_HOURS, rereadWhy } from "./sleep/mcp";
 import { listEntries, SettingsChanged, storedPlanRev, StoreUnavailable, updateBaby } from "./store";
 import { formatTime, formatTimeNear } from "./time";
@@ -907,7 +907,11 @@ function addPlanTool<S extends ZodRawShapeCompat>(
   const handler = async (args: ShapeOutput<S>, extra: Extra): Promise<CallToolResult> => {
     try {
       const ctx = await context(extra);
-      if (cfg.write && ctx.who.role === "viewer") throw new ToolError(VIEWER_MESSAGE);
+      if (cfg.write) {
+        // A viewer, or a chat an owner set to read only (access.ts parts).
+        const no = writeRefusal(ctx);
+        if (no) throw new ToolError(no);
+      }
       return await run(args, ctx);
     } catch (err) {
       return planToolError(name, err);

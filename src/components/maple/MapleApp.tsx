@@ -27,6 +27,7 @@ import { SleepSheetHost } from "./sleep/SleepSheets";
 import { SleepProvider, type SleepApi } from "./sleep/useSleep";
 import { ToastHost, cx, tone } from "./ui";
 import { MapleProvider, useMaple } from "./useMaple";
+import { usePart } from "./useAccess";
 import AppAnalytics from "./AppAnalytics";
 
 /**
@@ -114,8 +115,11 @@ function Screens() {
   const { tab, go } = useAppNav();
   const photosOnly = state?.me.role === "photos";
   const hasCare = !!care;
+  // What an owner turned off for this person (access.ts parts): the Chat tab, and the Moments tab.
+  const chatOn = usePart("chat") !== "none" && !photosOnly;
+  const momentsOn = usePart("moments") !== "none";
   const [chatSeen, setChatSeen] = useState(false);
-  if (tab === "chat" && !photosOnly && !chatSeen) setChatSeen(true);
+  if (tab === "chat" && chatOn && !chatSeen) setChatSeen(true);
 
   // Her tab without access (demoted to a viewer, the page deleted elsewhere, or a saved tab from before): back to
   // Today, saying so only when her page was showing here.
@@ -125,6 +129,11 @@ function Screens() {
     if (!loaded) return;
     if (photosOnly) {
       if (tab !== "moments" && tab !== "family") go("moments");
+      return;
+    }
+    // A tab an owner has since turned off for this person (or a saved one): back to Today.
+    if ((tab === "chat" && !chatOn) || (tab === "moments" && !momentsOn)) {
+      go("today");
       return;
     }
     if (tab !== "care") {
@@ -138,7 +147,7 @@ function Screens() {
     if (shown.current) toast("That page isn't available anymore.", { tone: "info" });
     shown.current = false;
     go("today");
-  }, [loaded, tab, hasCare, go, toast, photosOnly]);
+  }, [loaded, tab, hasCare, go, toast, photosOnly, chatOn, momentsOn]);
 
   if (status === "loading") return <Splash />;
   if (status === "signedOut") return <SignIn />;
@@ -153,10 +162,11 @@ function Screens() {
     );
   }
 
-  const showing: TabId = photosOnly && tab !== "family" ? "moments" : tab === "care" && !care ? "today" : tab;
+  const off = (t: TabId) => (t === "chat" && !chatOn) || (t === "moments" && !momentsOn);
+  const showing: TabId = photosOnly && tab !== "family" ? "moments" : (tab === "care" && !care) || off(tab) ? "today" : tab;
   const tabs = photosOnly
     ? TABS.filter((t) => t.id === "moments")
-    : TABS.flatMap((t) => (t.id !== "care" ? [t] : care ? [{ ...t, label: care.name.split(" ")[0] || care.name }] : []));
+    : TABS.flatMap((t) => (off(t.id) ? [] : t.id !== "care" ? [t] : care ? [{ ...t, label: care.name.split(" ")[0] || care.name }] : []));
 
   return (
     <div key={`${state.family?.id ?? 1}:${state.me.email}:${state.me.role}`} className="maple-app relative mx-auto min-h-[100dvh] w-full max-w-lg pb-[calc(80px+env(safe-area-inset-bottom))]">
@@ -176,7 +186,7 @@ function Screens() {
           {showing === "family" && <FamilyTab />}
         </motion.div>
       </AnimatePresence>
-      {!photosOnly && chatSeen && <ChatTab key={`${state.family?.id ?? 1}:${state.me.email}`} active={showing === "chat"} />}
+      {chatOn && chatSeen && <ChatTab key={`${state.family?.id ?? 1}:${state.me.email}`} active={showing === "chat"} />}
       <TabBar tabs={tabs} tab={showing} onChange={go} />
       <ToastHost />
       {!photosOnly && <WelcomeHost />}

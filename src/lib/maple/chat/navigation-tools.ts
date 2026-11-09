@@ -2,13 +2,14 @@ import { tool, zodSchema } from "ai";
 import { DESTINATION_LABELS, destinationAllowed, navigationInputSchema } from "./navigation";
 import type { ChatToolOutput } from "./types";
 
-export function openScreenTool(opts: { viewer: boolean }) {
+/** `parts`: this person's levels of the parts an owner can turn down (access.ts), so a hidden one has no button. */
+export function openScreenTool(opts: { viewer: boolean; parts?: { doctor?: "none" | "view" | "log"; moments?: "none" | "view" | "log" } }) {
   return tool({
     description: "Show a button opening an existing app screen: today, history, moments, family_settings, phone_preferences, baby_profile, pediatrician (doctor contacts), notifications, doctor_questions, mom_medicines (her medicine list), add_photo (the moment/photo editor), help, people (People & permissions: who's in the family, and one-time invite links), or feeding_plan (the care team's feeding plan, to see it or change it by hand). Use this for settings or actions that need their existing form. The person taps the button; this does not navigate automatically, save anything, turn on notifications, schedule reminders, or grant access. Never claim the screen is already open.",
     inputSchema: zodSchema(navigationInputSchema),
-    execute: async ({ destination }): Promise<ChatToolOutput> => destinationAllowed(destination, opts.viewer)
+    execute: async ({ destination }): Promise<ChatToolOutput> => destinationAllowed(destination, opts.viewer, opts.parts)
       ? { ok: true, write: false, text: `A button to open ${DESTINATION_LABELS[destination]} is shown. Nothing changes until the person opens the screen and uses its controls.`, navigation: { v: 1, destination } }
-      : { ok: false, write: false, text: "That screen isn't available with view-only access." },
+      : { ok: false, write: false, text: opts.viewer ? "That screen isn't available with view-only access." : "That screen isn't part of this person's access. An owner can change it in Settings → People & permissions." },
     toModelOutput: ({ output }) => ({ type: output.ok ? "text" as const : "error-text" as const, value: output.text }),
   });
 }
