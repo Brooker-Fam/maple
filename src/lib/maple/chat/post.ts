@@ -8,7 +8,7 @@ import { mentionsCrisis } from "./crisis";
 import { ChatInputError, denyPending, mergeApprovals, readIncoming, roughText, stepsTaken, titleFrom, userMessage, withCrisisHelp, type Incoming } from "./messages";
 import type { ToolCopy } from "../mcp-tools";
 import { chatCareOpen } from "../consent";
-import { careLevelOf, partLevelOf, rolePartLevel } from "../access";
+import { careLevelOf, partLevelIn, partLevelOf, rolePartLevel, type Parts } from "../access";
 import type { ModelPrice } from "./prices";
 import { contextLine, stateLines } from "./prompt";
 import type { LockedThread, OpenParts, UsageRow } from "./store";
@@ -20,6 +20,7 @@ import { matchesDeliveryFingerprint, type DeliveryReceipt } from "./delivery-sto
 import { CHAT_FAILED } from "./types";
 import type { ChatImage } from "./images";
 import type { SearchNames } from "./web-search";
+import { sharedAccess, type ThreadFlags } from "./shared";
 
 /**
  * One POST to the chat, from the raw body to a streamed answer or a refusal.
@@ -38,6 +39,14 @@ export type ChatStore = {
   setTitle: (id: string, title: string) => Promise<void>;
   countMessage: (member: string, day: string) => Promise<void>;
   recordUsage: (u: UsageRow) => Promise<void>;
+  /**
+   * A thread's shared facts (shared.ts): whether it's a shared chat, its
+   * people and what it ever had open; null when there's no such thread yet.
+   * Older callers can omit it: every thread then reads as a person's own.
+   */
+  shared?: (threadId: string) => Promise<{ shared: boolean; people: string[]; flags: ThreadFlags } | null>;
+  /** Who sent a thread's newest message: in a shared chat only they answer its cards. */
+  lastSender?: (threadId: string) => Promise<string | null>;
   /** Older callers can omit this, but a request using delivery ids fails closed without it. */
   deliveries?: {
     find: (member: string, requestId: string) => Promise<DeliveryReceipt | null>;
@@ -64,7 +73,7 @@ export type PostDeps = {
    * `self`: the member is her. `memoryEpoch`: the memories' epoch this turn started with.
    * `names`: the family's names, which web searches never carry (web-search.ts).
    */
-  tools: (opts: { born: boolean; care: boolean; self?: boolean; copy: ToolCopy; submittedAt?: Date; memoryEpoch?: number | null; names: SearchNames }) => ToolSet;
+  tools: (opts: { born: boolean; care: boolean; self?: boolean; copy: ToolCopy; submittedAt?: Date; memoryEpoch?: number | null; names: SearchNames; narrow?: Parts }) => ToolSet;
   /**
    * The family's memories for this turn (memory/chat.ts): the prompt block, the
    * epoch its memory writes need, and this thread's messages from before the
@@ -72,8 +81,8 @@ export type PostDeps = {
    * (and the turn's memory writes refused), as the log's lines are.
    */
   memories?: (opts: { threadId: string; viewer: boolean; members: Member[] }) => Promise<ChatMemories>;
-  /** The log as it stands (logState in mcp-tools.ts), for the new user message's [App] lines; `care` as for `tools`. */
-  state: (opts: { care: boolean }) => Promise<string[]>;
+  /** The log as it stands (logState in mcp-tools.ts), for the new user message's [App] lines; `care` and `narrow` as for `tools`. */
+  state: (opts: { care: boolean; narrow?: Parts }) => Promise<string[]>;
   /** The family's chat budget, read only once the request is worth answering. */
   budget: () => Promise<{ day: bigint; month: bigint }>;
   now: Date;
@@ -92,6 +101,9 @@ export const CARE_CLOSED = "Her page is closed to the chat now, so a new chat st
 /** An owner hid the questions for the doctor, or moments, from this person (access.ts parts) since this chat began. */
 export const PART_CLOSED = "Some of the log isn't shared with you anymore, so a new chat starts here.";
 export const STALE = "That question has moved on. Ask again if you still want it.";
+/** A shared chat that once read something not everyone in it can see now (her page, after she closed it to the chat): it can't go on. */
+export const SHARED_CLOSED = "Something this chat already talked about isn't shared with everyone in it anymore, so it can't go on here. Start a new shared chat.";
+export const SHARED_NO_PHOTOS = "Photos can't be sent in a shared chat yet. Send it in your own chat instead.";
 
 const newMessageId = createIdGenerator({ prefix: "msg", size: 16 });
 
@@ -116,9 +128,9 @@ function failure(error: unknown, report: (e: unknown) => void): Response {
 }
 
 /** No lines when reading them fails, since the tools can still read the log; the log being down still turns the message away. */
-async function logStateOrNone(deps: Pick<PostDeps, "state"> & { report: (e: unknown) => void }, care: boolean): Promise<string[]> {
+async function logStateOrNone(deps: Pick<PostDeps, "state"> & { report: (e: unknown) => void }, care: boolean, narrow?: Parts): Promise<string[]> {
   try {
-    return await deps.state({ care });
+    return await deps.state({ care, ...(narrow ? { narrow } : {}) });
   } catch (e) {
     if (e instanceof StoreUnavailable) throw e;
     deps.report(e);
@@ -178,7 +190,12 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
 
   const consent = await store.consent(member);
   if (!consent.terms) return refuse({ error: CHAT_TERMS_NEEDED, code: "terms" }, 403);
-  const care = chatCareOpen(member, consent);
+  // A shared chat (shared.ts): only its people post in it, never with photos (a chat image is its uploader's alone).
+  const sharedFacts = store.shared ? await store.shared(body.threadId) : null;
+  const shared = sharedFacts?.shared === true ? sharedFacts : null;
+  if (shared && !shared.people.includes(member.email)) return reply({ error: "Not found" }, 404);
+  if (shared && incoming.kind === "user" && incoming.images?.length) return reply({ error: SHARED_NO_PHOTOS }, 400);
+  const ownCare = chatCareOpen(member, consent);
   // What an owner set for this person on her page, for the prompt (her own account always has all of it).
   const level = consent.self ? "log" : careLevelOf(member);
   const page = level === "view" ? "view" as const : level === "none" ? "hidden" as const : undefined;
@@ -212,6 +229,18 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
   }
 
   const { familyId, baby, members, copy } = await deps.household();
+  // In a shared chat a turn reads only what everyone in it can see: a part hidden from anyone is hidden here, and her
+  // page opens only when she let the chat see it and each of them could read it in their own chat (sharedAccess).
+  const access = shared
+    ? sharedAccess(member, shared.people.flatMap((id) => members.filter((m) => m.email === id)), shared.flags, { herConsent: consent.care, carePerson: consent.self ? member.email : null })
+    : null;
+  const care = access ? access.care : ownCare;
+  const narrow = access && Object.keys(access.narrow).length ? access.narrow : undefined;
+  // Its cards wait for whoever's turn made them: only they answer a question or tap Delete.
+  if (shared && incoming.kind !== "user" && store.lastSender) {
+    const by = await store.lastSender(body.threadId);
+    if (by && by !== member.email) return refuse({ error: `Only ${memberName(by, members)} can answer that.`, code: "not_yours" }, 409);
+  }
   const tz = baby.timezone || DEFAULT_TZ;
   const today = dayKey(deps.now, tz);
   const usage = await store.usageSince(member.email, today, dayBounds(today, tz)[0], startOfDay(`${today.slice(0, 8)}01`, tz));
@@ -221,8 +250,8 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
   const viewer = member.role === "viewer";
   // The parts an owner can hide from this person that this turn may read (access.ts): a thread that ever had one open
   // can quote it, so once it's hidden that thread stays where it is and a new one starts.
-  const doctor = partLevelOf(member, "doctor");
-  const moments = partLevelOf(member, "moments");
+  const doctor = partLevelIn(member, "doctor", narrow);
+  const moments = partLevelIn(member, "moments", narrow);
   const open = { doctor: doctor !== "none", moments: moments !== "none" };
   // What the prompt says of those limits, matching the tools (chatLimits): a viewer's own addendum already says the chat only reads.
   const readsOnly = !viewer && partLevelOf(member, "chat") === "view";
@@ -246,8 +275,9 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
   let failedResponseId: string | null = null;
   try {
     // Its history can quote her page (results and the replies that repeat them), which she has since closed to the chat.
-    if (thread.careOpen && !care) return refuse({ error: CARE_CLOSED, code: "new_chat" }, 409);
-    if ((thread.doctorOpen && !open.doctor) || (thread.momentsOpen && !open.moments)) return refuse({ error: PART_CLOSED, code: "new_chat" }, 409);
+    // A shared chat has no new chat to move to: it can't go on, and its people start another.
+    if (thread.careOpen && !care) return refuse(shared ? { error: SHARED_CLOSED, code: "shared_closed" } : { error: CARE_CLOSED, code: "new_chat" }, 409);
+    if ((thread.doctorOpen && !open.doctor) || (thread.momentsOpen && !open.moments)) return refuse(shared ? { error: SHARED_CLOSED, code: "shared_closed" } : { error: PART_CLOSED, code: "new_chat" }, 409);
     const duplicate = await alreadyReceived();
     if (duplicate) return duplicate;
     const history = await store.loadMessages(thread.id);
@@ -258,7 +288,7 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
     let submittedAt: Date | undefined;
     if (incoming.kind === "user") {
       const line = contextLine({ now: deps.now, baby, name: memberName(member.email, members), role: member.role, familyId });
-      const state = stateLines(await logStateOrNone(deps, care));
+      const state = stateLines(await logStateOrNone(deps, care, narrow));
       if (delivery) {
         submittedAt = new Date(Math.min(Date.parse(delivery.submittedAt), deps.now.getTime()));
         state.unshift(`Submitted at ${delivery.submittedAt}. The log and Now line are current; times relative to this message (now or minutes ago) refer to its submitted time.`);
@@ -275,7 +305,8 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
         await store.saveMessage(thread.id, member.email, stored);
       }
       for (const m of prior.changed) await store.saveMessage(thread.id, member.email, m);
-      if (!thread.title) await store.setTitle(thread.id, titleFrom(incoming.text) || "Photo");
+      // A shared chat keeps the name it was given, or its people's names; only a person's own chat is named from its first message.
+      if (!thread.title && !shared) await store.setTitle(thread.id, titleFrom(incoming.text) || "Photo");
       messages = [...prior.messages, stored];
     } else {
       const original = history.findLast((message) => message.role === "user")?.parts.find((p) => p.type === "data-delivery");
@@ -307,11 +338,13 @@ async function postTurn(body: PostBody, member: Member, crisis: boolean, deps: O
       model: deps.model,
       modelKey: deps.modelKey,
       price,
-      tools: deps.tools({ born: !!baby.born_at, care, ...(consent.self ? { self: true } : {}), copy, ...(submittedAt ? { submittedAt } : {}), memoryEpoch: memories?.epoch ?? null, names: familyNames(baby, members, copy) }),
+      tools: deps.tools({ born: !!baby.born_at, care, ...(consent.self ? { self: true } : {}), copy, ...(submittedAt ? { submittedAt } : {}), memoryEpoch: memories?.epoch ?? null, names: familyNames(baby, members, copy), ...(narrow ? { narrow } : {}) }),
       viewer,
       care,
       ...(page ? { page } : {}),
       ...(partLimits ? { partLimits } : {}),
+      // Who's in a shared chat, for its prompt lines: everyone reads every message and every reply.
+      ...(access ? { shared: { people: access.people.map((p) => memberName(p.email, members)), herConsent: consent.care } } : {}),
       copy,
       messages,
       responseId,

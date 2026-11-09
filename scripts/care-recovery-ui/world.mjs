@@ -48,6 +48,8 @@ export async function apiRoute(route, controls) {
   if (url.pathname === "/api/maple/state") return json(state);
   if (url.pathname === "/api/maple/entries") return json({ entries: [], next_cursor: null, truncated: false });
   if (url.pathname === "/api/maple/chat/consent") return json({ terms: true, care: false, self: true });
+  // Shared chats (chat/shared.ts): none in these synthetic families.
+  if (url.pathname === "/api/maple/chat/shared") return json(method === "GET" ? { chats: [] } : { error: "Synthetic families share no chats." }, method === "GET" ? 200 : 400);
   if (url.pathname === "/api/maple/onboarding") return json({ needed: false });
   if (url.pathname === "/api/maple/push") return json({ publicKey: null, sub: null, health: { needs_resubscribe: false }, reminders: [] });
   if (url.pathname === "/api/maple/diagnostics") return route.fulfill({ status: 204, body: "" });

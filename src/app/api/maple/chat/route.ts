@@ -10,14 +10,18 @@ import { chatStream, deleteChats, threadAccess } from "@/lib/maple/chat/history"
 import { CHAT_REQUEST_ID_RE } from "@/lib/maple/chat/delivery";
 import { deliveryStatus } from "@/lib/maple/chat/delivery-store";
 import { forgetChatWords } from "@/lib/maple/memory/store";
+import { SharedChatError, sharedStream } from "@/lib/maple/chat/shared";
+import { THREAD_ID_RE } from "@/lib/maple/chat/types";
 import { captureServerException } from "@/lib/posthog-server";
 
 /**
  * The in-app chat: Maple's MCP tools, run by the model as the signed-in
  * member ("via Maple chat"), in the family their session names. POST streams
- * one turn; GET reads this member's one chat in this family a page at a time,
- * newest first (`before`: the oldest message shown); DELETE removes all of it
- * for good. Another family's threads read as none at all.
+ * one turn; GET reads this member's own chat in this family a page at a time,
+ * newest first (`before`: the oldest message shown), or with `thread` one
+ * shared chat they're in (chat/shared.ts), each message with who sent it;
+ * DELETE removes all of their own chat for good (never a shared one).
+ * Another family's threads read as none at all.
  *
  * Privacy: message text never reaches logs or PostHog. A POST's errors, in
  * the stream or before it, are logged and reported as their class name and
@@ -42,6 +46,20 @@ export const GET = withMember("GET /api/maple/chat", async (request, member, fam
   if (before != null && !MESSAGE_ID_RE.test(before)) throw new BadRequest("before is not a message");
   if (requestId != null && !CHAT_REQUEST_ID_RE.test(requestId)) throw new BadRequest("requestId is not a delivery reference");
   const open = threadAccess(member);
+  const shared = params.get("thread");
+  if (shared != null) {
+    if (!THREAD_ID_RE.test(shared)) throw new BadRequest("thread is not a chat");
+    try {
+      const [stream, delivery] = await Promise.all([
+        sharedStream(fam, shared, member, before),
+        requestId ? deliveryStatus(fam, member.email, open, requestId) : null,
+      ]);
+      return json({ ...stream, ...(delivery ? { delivery } : {}) });
+    } catch (error) {
+      if (error instanceof SharedChatError) return json({ error: error.message }, error.status);
+      throw error;
+    }
+  }
   const [stream, delivery] = await Promise.all([
     chatStream(fam, member.email, open, before),
     requestId ? deliveryStatus(fam, member.email, open, requestId) : null,

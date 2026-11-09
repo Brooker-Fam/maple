@@ -47,6 +47,13 @@ export type FamilyCtx = FamilyScope & {
    * scope, as jobs use, reads everything).
    */
   parts?: Parts;
+  /**
+   * One conversation's narrowing, on top of `parts` and the role, owners
+   * included (access.ts partLevelIn): a shared chat's turn reads only what
+   * everyone in it can see (chat/shared.ts sharedAccess). Never set from a
+   * carrier; only the chat's own tool calls bring it.
+   */
+  narrow?: Parts;
 };
 
 /** A positive integer id; BIGINT columns arrive as strings. */

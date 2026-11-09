@@ -9,7 +9,8 @@ import ChatImages from "./ChatImages";
 import type { useChatThread } from "./useChatThread";
 import { useChatImageUpload } from "./useChatImageUpload";
 
-export default function ChatComposer({ t, onSend, disabled, imagesAllowed, offline }: { t: ReturnType<typeof useChatThread>; onSend: (text: string) => void; disabled: boolean; imagesAllowed: boolean; offline: boolean }) {
+/** `photos`: false in a shared chat (chat/shared.ts), where photos aren't sent: no photo button at all. */
+export default function ChatComposer({ t, onSend, disabled, imagesAllowed, offline, photos: photosHere = true }: { t: ReturnType<typeof useChatThread>; onSend: (text: string) => void; disabled: boolean; imagesAllowed: boolean; offline: boolean; photos?: boolean }) {
   const area = useRef<HTMLTextAreaElement>(null);
   const photos = useRef<HTMLInputElement>(null);
   const camera = useRef<HTMLInputElement>(null);
@@ -63,7 +64,7 @@ export default function ChatComposer({ t, onSend, disabled, imagesAllowed, offli
         <Button variant="soft" size="sm" disabled={!canAttach} onClick={() => camera.current?.click()}><Icon name="camera" size={17} /> Take photo</Button>
       </div>}
       <div className="flex items-end gap-2">
-        <button type="button" aria-label="Add photo" aria-expanded={showPicker} onClick={() => setShowPicker((open) => !open)} disabled={!canAttach} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-mp-surface text-mp-accent-fg disabled:opacity-40"><Icon name="image-plus" size={22} /></button>
+        {photosHere && <button type="button" aria-label="Add photo" aria-expanded={showPicker} onClick={() => setShowPicker((open) => !open)} disabled={!canAttach} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-mp-surface text-mp-accent-fg disabled:opacity-40"><Icon name="image-plus" size={22} /></button>}
         <textarea ref={area} value={t.draft} rows={1} maxLength={CHAT_MAX_CHARS} onChange={(e) => { t.setDraft(e.target.value); if (t.problem) t.clearProblem(); }} onKeyDown={onKey}
           placeholder={offline ? "Message · saved until you're online" : images.length ? "Add a message (optional)" : "Message"} aria-label="Message" disabled={disabled}
           className={cx(tone.input, "min-h-[44px] min-w-0 flex-1 resize-none rounded-[22px] py-2.5 leading-snug disabled:opacity-60")} />

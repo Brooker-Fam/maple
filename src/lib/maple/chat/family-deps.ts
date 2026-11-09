@@ -45,7 +45,8 @@ export function familyPostDeps(
     // Web search runs on the chat's own model, so it's priced and routed as the chat is (a model with no price row never answers).
     tools: ({ names, ...t }) => chatTools(member, { ...t, fam: fam.familyId, device: opts.device, ...(price ? { search: { model: opts.model, modelKey: opts.modelKey, price, names } } : {}) }),
     memories: (m) => chatMemories(fam, { threadId: m.threadId, viewer: m.viewer, members: m.members, now: opts.now, tz: fam.tz }),
-    state: ({ care }) => chatLogState(member, { fam: fam.familyId, care, now: opts.now }),
+    // `narrow`: a shared chat's (shared.ts), so the log's lines leave out what not everyone in it can see, as the tools do.
+    state: ({ care, narrow }) => chatLogState(member, { fam: fam.familyId, care, now: opts.now, narrow }),
     budget: () => chatBudget(fam, opts.now),
     now: opts.now,
     report: opts.report,

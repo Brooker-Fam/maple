@@ -21,10 +21,11 @@ export function hasQuestionAnswer({ messages }: { messages: ChatMessage[] }): bo
 export const TAKING_LONGER = "Taking longer than usual…";
 
 /** One truthful status for the whole turn, including invisible reasoning and read results. `slow`: no news for a while. */
-export function chatActivity(messages: ChatMessage[], state: { busy: boolean; recovering: boolean; recoveryPaused: boolean; checkingDelivery?: boolean; cancellingDelivery?: boolean; slow?: boolean }): string | null {
+/** `shared`: a shared chat (chat/shared.ts), where the reply still coming can be someone else's. */
+export function chatActivity(messages: ChatMessage[], state: { busy: boolean; recovering: boolean; recoveryPaused: boolean; checkingDelivery?: boolean; cancellingDelivery?: boolean; slow?: boolean; shared?: boolean }): string | null {
   if (state.cancellingDelivery) return "Checking whether the message can be cancelled…";
   if (state.checkingDelivery) return state.recoveryPaused ? "Waiting to reconnect…" : "Checking whether your message was received…";
-  if (state.recovering) return state.recoveryPaused ? "Waiting to reconnect…" : "Finishing your previous reply…";
+  if (state.recovering) return state.recoveryPaused ? "Waiting to reconnect…" : state.shared ? "A reply is on its way…" : "Finishing your previous reply…";
   if (!state.busy) return null;
   const last = messages.at(-1);
   const waitingWord = (word: string) => (state.slow ? TAKING_LONGER : word);

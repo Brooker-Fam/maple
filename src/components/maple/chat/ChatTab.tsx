@@ -3,6 +3,7 @@
 import AccountMenu from "../AccountMenu";
 
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { CHAT_MAX_CHARS } from "@/lib/maple/chat/types";
 import { useCareNav } from "../care/CareNav";
 import { useBabyWords } from "../familyWords";
@@ -19,9 +20,11 @@ import { NEAR_BOTTOM, TAB_BAR, usePageHold, useVisibleArea } from "./page";
 import { useChatThread } from "./useChatThread";
 import { chatActivity, visibleRevision } from "./progress";
 import { safeToSendAgain, type QueuedMessage } from "./queue";
+import { ChatListSheet, ChatSwitcher, NewSharedChatSheet, SharedPeopleSheet, sharedChatName, useSharedChats, type SharedChat } from "./SharedChats";
 
 /**
- * Chat: this member's one conversation with Maple, a tab like the others.
+ * Chat: this member's own conversation with Maple, or one of the chats they
+ * share with people they picked (SharedChats.tsx), a tab like the others.
  * The page fills what the phone can see (visualViewport, so the iPhone
  * keyboard never covers the composer); messages scroll between the header and
  * the composer, which sits on the tab bar, or on the keyboard while it's up.
@@ -31,11 +34,35 @@ import { safeToSendAgain, type QueuedMessage } from "./queue";
  */
 
 export default function ChatTab({ active }: { active: boolean }) {
-  const { readOnly, online } = useMaple();
+  const { readOnly, online, state, memberName, toast } = useMaple();
   const w = useBabyWords();
   const nav = useCareNav();
   const { consent, loadConsent } = useChatNav();
-  const t = useChatThread(active);
+  const me = state?.me.email ?? "";
+  // Which conversation shows: their own (null), or a shared chat they're in.
+  const [chat, setChat] = useState<SharedChat | null>(null);
+  const [sheet, setSheet] = useState<"list" | "new" | "people" | null>(null);
+  const shared = useSharedChats(active);
+  const t = useChatThread(active, chat ? { id: chat.id } : null);
+  // The shared chat's latest people and name; one they're no longer in (left, or it closed to them) goes back to their own.
+  useEffect(() => {
+    if (!chat || !shared.loaded) return;
+    const fresh = shared.chats.find((c) => c.id === chat.id);
+    if (!fresh) {
+      setChat(null);
+      toast("That shared chat isn't open to you anymore.", { tone: "info" });
+    } else if (fresh !== chat && (fresh.name !== chat.name || fresh.people.join() !== chat.people.join())) setChat(fresh);
+  }, [shared.chats, shared.loaded, chat, toast]);
+  const pick = (next: SharedChat | null) => {
+    setSheet(null);
+    if ((next?.id ?? null) === (chat?.id ?? null)) return;
+    setConfirmDelete(false);
+    setChat(next);
+  };
+  const turnOwner = (id: string) => {
+    const by = chat ? t.authorOf(id) : null;
+    return by && by !== me ? memberName(by) : null;
+  };
   const area = useVisibleArea(active);
   const scroller = useRef<HTMLDivElement>(null);
   const composer = useRef<HTMLDivElement>(null);
@@ -144,6 +171,16 @@ export default function ChatTab({ active }: { active: boolean }) {
           <AccountMenu />
         </div>
       </header>
+      <ChatSwitcher chat={chat} shared={shared} disabled={t.busy || !!t.queue.length} onOpenList={() => { void shared.reload(); setSheet("list"); }} onOpenPeople={() => setSheet("people")} />
+      {/* On the page itself, as the app's other sheets are: this tab is its own layer, moved with the keyboard. */}
+      {typeof document !== "undefined" && createPortal(
+        <>
+          <ChatListSheet open={sheet === "list"} onClose={() => setSheet(null)} current={chat} shared={shared} onPick={pick} onNew={() => setSheet("new")} />
+          <NewSharedChatSheet open={sheet === "new"} onClose={() => setSheet(null)} shared={shared} onCreated={(c) => pick(c)} />
+          <SharedPeopleSheet open={sheet === "people"} onClose={() => setSheet(null)} chat={chat} shared={shared} onLeft={() => pick(null)} />
+        </>,
+        document.body
+      )}
 
       <div
         ref={scroller}
@@ -173,7 +210,7 @@ export default function ChatTab({ active }: { active: boolean }) {
                   {t.loadingEarlier ? "Loading…" : "Show earlier"}
                 </button>
               )}
-              {!empty && !t.busy && !t.queue.length && !needsTerms && (confirmDelete ? (
+              {!empty && !t.busy && !t.queue.length && !needsTerms && !chat && (confirmDelete ? (
                 <span className="flex items-center gap-2">
                   <span className={cx(tone.muted, "text-[14px]")}>Delete your whole chat for good?</span>
                   <Button size="sm" variant="soft" onClick={() => setConfirmDelete(false)}>
@@ -200,7 +237,9 @@ export default function ChatTab({ active }: { active: boolean }) {
           {empty && !needsTerms && t.ready && (
             <div className="space-y-4 px-1">
               <p className={cx(tone.body, "text-[16px] leading-relaxed")}>
-                {readOnly ? `Ask how ${w.name}'s doing, in your own words.` : `Tell it what happened, or ask how ${w.name}'s doing, in your own words.`}
+                {chat
+                  ? `This is your chat with ${sharedChatName({ name: null, people: chat.people }, me, memberName)}. Ask Maple anything here, together.`
+                  : readOnly ? `Ask how ${w.name}'s doing, in your own words.` : `Tell it what happened, or ask how ${w.name}'s doing, in your own words.`}
               </p>
               <div className="flex flex-wrap gap-2">
                 {suggestions.map((s) => (
@@ -209,16 +248,28 @@ export default function ChatTab({ active }: { active: boolean }) {
                   </Chip>
                 ))}
               </div>
-              <CareNote consent={consent} />
+              {!chat && <CareNote consent={consent} />}
               <p className={cx(tone.faint, "text-[13px] leading-snug")}>
-                Answers come from an AI and can be wrong; it never gives medical advice. Only you can see your chat. Each saved entry shows here with Undo.
+                {chat
+                  ? "Answers come from an AI and can be wrong; it never gives medical advice. Everyone in this chat reads every message and every answer, and Maple only uses what all of you can see."
+                  : "Answers come from an AI and can be wrong; it never gives medical advice. Only you can see your chat. Each saved entry shows here with Undo."}
               </p>
             </div>
           )}
           {items.map(({ thread, message }, i) => (
             <Fragment key={message.id}>
               {i > 0 && items[i - 1].thread !== thread && <hr aria-hidden className="mx-8 border-mp-line" />}
-              <MessageView threadId={thread} message={message} last={i === items.length - 1 && i >= t.earlier.length} busy={t.busy} onApprove={t.approve} onAnswerQuestion={t.answerQuestion} onAsk={send} />
+              <MessageView
+                threadId={thread}
+                message={message}
+                last={i === items.length - 1 && i >= t.earlier.length}
+                busy={t.busy}
+                onApprove={t.approve}
+                onAnswerQuestion={t.answerQuestion}
+                onAsk={send}
+                author={message.role === "user" ? turnOwner(message.id) : null}
+                waitingFor={message.role === "assistant" ? turnOwner(message.id) : null}
+              />
               {again && i === items.length - 1 && (
                 <div className="-mt-1 pr-10">
                   <Button size="sm" variant="soft" disabled={!online} onClick={() => { pinned.current = true; setShowLatest(false); t.sendAgain(again); }}>
@@ -280,7 +331,7 @@ export default function ChatTab({ active }: { active: boolean }) {
               ))}
             </div>
           )}
-          <Composer key={t.scope} t={t} onSend={(text) => send(text, true)} disabled={needsTerms} imagesAllowed={consent?.terms === true} offline={!online} />
+          <Composer key={t.scope} t={t} onSend={(text) => send(text, true)} disabled={needsTerms} imagesAllowed={consent?.terms === true && !chat} photos={!chat} offline={!online} />
         </div>
       </div>
     </section>

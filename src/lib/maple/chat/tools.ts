@@ -2,7 +2,7 @@ import { jsonSchema, tool, zodSchema, type ToolSet } from "ai";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { atLeast, careLevelOf, partLevelOf, type CareLevel, type Part, type PartLevel } from "../access";
+import { atLeast, careLevelOf, partLevelIn, partLevelOf, type CareLevel, type Part, type PartLevel, type Parts } from "../access";
 import { ADMIN_ID } from "../auth";
 import { registerCareTools } from "../care-mcp";
 import { context, FAMILY_ONE_COPY, logState, registerMapleTools, type Annotations, type Extra, type ToolCopy } from "../mcp-tools";
@@ -102,11 +102,15 @@ export function allowed(r: Registration, opts: { viewer: boolean; born: boolean;
   return true;
 }
 
-/** What an owner set for this member's chat and the parts it reads (access.ts): reads only, and the doctor's questions and moments. */
-export function chatLimits(member: Pick<Member, "role" | "parts">): { readsOnly: boolean; parts: { doctor: PartLevel; moments: PartLevel } } {
+/**
+ * What an owner set for this member's chat and the parts it reads (access.ts):
+ * reads only, and the doctor's questions and moments, with a shared chat's
+ * narrowing on top (`narrow`, chat/shared.ts).
+ */
+export function chatLimits(member: Pick<Member, "role" | "parts">, narrow?: Parts | null): { readsOnly: boolean; parts: { doctor: PartLevel; moments: PartLevel } } {
   return {
     readsOnly: member.role === "viewer" || partLevelOf(member, "chat") === "view",
-    parts: { doctor: partLevelOf(member, "doctor"), moments: partLevelOf(member, "moments") },
+    parts: { doctor: partLevelIn(member, "doctor", narrow), moments: partLevelIn(member, "moments", narrow) },
   };
 }
 
@@ -180,7 +184,7 @@ const HELP_TEXT = "The help card is showing under your reply.";
  * family memories' epoch this turn started with, which its memory writes
  * need (null when they couldn't be read, so those writes are refused).
  */
-function chatExtra(member: Pick<Member, "email">, opts: { fam: number; care: boolean; device?: string | null; submittedAt?: Date; memoryEpoch?: number | null }): Extra {
+function chatExtra(member: Pick<Member, "email">, opts: { fam: number; care: boolean; device?: string | null; submittedAt?: Date; memoryEpoch?: number | null; narrow?: Parts | null }): Extra {
   const sub = member.email === ADMIN_ID ? ADMIN_ID : `maple:${member.email}`;
   return {
     signal: new AbortController().signal,
@@ -189,7 +193,12 @@ function chatExtra(member: Pick<Member, "email">, opts: { fam: number; care: boo
       token: "maple-chat",
       clientId: "maple-chat",
       scopes: ["maple"],
-      extra: { sub, fam: opts.fam, via: "chat", device: opts.device ?? null, care: opts.care, memoryEpoch: opts.memoryEpoch ?? null, ...(opts.submittedAt ? { requestAt: opts.submittedAt.toISOString() } : {}) },
+      extra: {
+        sub, fam: opts.fam, via: "chat", device: opts.device ?? null, care: opts.care, memoryEpoch: opts.memoryEpoch ?? null,
+        ...(opts.submittedAt ? { requestAt: opts.submittedAt.toISOString() } : {}),
+        // A shared chat's narrowing (chat/shared.ts), which context() puts on every store call of the turn.
+        ...(opts.narrow && Object.keys(opts.narrow).length ? { narrow: opts.narrow } : {}),
+      },
     },
     sendNotification: async () => {},
     sendRequest: async () => {
@@ -199,13 +208,14 @@ function chatExtra(member: Pick<Member, "email">, opts: { fam: number; care: boo
 }
 
 /** The log as the chat's tools would read it for this member at `now` (logState): the user message's [App] state lines. */
-export async function chatLogState(member: Pick<Member, "email">, opts: { fam: number; care: boolean; now: Date }): Promise<string[]> {
-  const ctx = await context(chatExtra(member, { fam: opts.fam, care: opts.care }));
+export async function chatLogState(member: Pick<Member, "email">, opts: { fam: number; care: boolean; now: Date; narrow?: Parts | null }): Promise<string[]> {
+  const ctx = await context(chatExtra(member, { fam: opts.fam, care: opts.care, narrow: opts.narrow }));
   return logState({ ...ctx, now: opts.now });
 }
 
 /** `search`: the chat's model and the family's names for web_search (web-search.ts); without it there's no web search. */
-export function chatTools(member: Pick<Member, "email" | "role" | "care" | "parts">, opts: { fam: number; born: boolean; care: boolean; self?: boolean; copy: ToolCopy; device?: string | null; submittedAt?: Date; memoryEpoch?: number | null; search?: SearchDeps }): ToolSet {
+/** `narrow`: a shared chat's narrowing (chat/shared.ts), on the tools sent and on every call they make. */
+export function chatTools(member: Pick<Member, "email" | "role" | "care" | "parts">, opts: { fam: number; born: boolean; care: boolean; self?: boolean; copy: ToolCopy; device?: string | null; submittedAt?: Date; memoryEpoch?: number | null; search?: SearchDeps; narrow?: Parts | null }): ToolSet {
   const { all, mom } = registrations(opts.copy);
   const vo = opts.copy.v;
   const care = chatCareLevel(member, opts);
@@ -213,7 +223,7 @@ export function chatTools(member: Pick<Member, "email" | "role" | "care" | "part
   const writeExtra = chatExtra(member, { ...opts, care: care !== "none" });
 
   // A viewer, or a chat an owner set to read only (access.ts parts), gets the reads alone.
-  const { readsOnly: viewer, parts } = chatLimits(member);
+  const { readsOnly: viewer, parts } = chatLimits(member, opts.narrow);
   const owner = member.role === "owner";
   const set: ToolSet = {};
   for (const r of all) {

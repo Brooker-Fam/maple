@@ -46,10 +46,26 @@ type Part = ChatMessage["parts"][number];
 type ToolPart = Extract<Part, { toolCallId: string }>;
 
 /** `last`: the newest message, the only one whose approval card can still be answered; `busy`: an answer is coming. */
-export function MessageView({ message, threadId, last, busy, onApprove, onAnswerQuestion, onAsk }: { message: ChatMessage; threadId?: string; last: boolean; busy: boolean; onApprove: (id: string, approved: boolean) => void; onAnswerQuestion: AnswerQuestion; onAsk?: (text: string) => void }) {
+/**
+ * One message. In a shared chat (chat/shared.ts), `author` names someone
+ * else's message (theirs sit on the left, with their name), and `waitingFor`
+ * names whoever's turn made this reply's cards: only they answer them.
+ */
+export function MessageView({ message, threadId, last, busy, onApprove, onAnswerQuestion, onAsk, author, waitingFor }: { message: ChatMessage; threadId?: string; last: boolean; busy: boolean; onApprove: (id: string, approved: boolean) => void; onAnswerQuestion: AnswerQuestion; onAsk?: (text: string) => void; author?: string | null; waitingFor?: string | null }) {
   if (message.role === "user") {
     const text = message.parts.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n");
     const images = message.parts.filter(isChatImage);
+    if (author) {
+      return (
+        <div className="flex flex-col items-start pr-10">
+          <span className={cx(tone.muted, "mb-1 px-1 text-[12px] font-semibold")}>{author}</span>
+          <div className="min-w-0 space-y-2 rounded-[18px] rounded-bl-[6px] bg-mp-sunken px-3.5 py-2.5 text-mp-ink">
+            <ChatImages images={images} />
+            {text && <p className="text-[16px] leading-snug whitespace-pre-wrap wrap-anywhere">{text}</p>}
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="flex justify-end pl-10">
         <div className="min-w-0 space-y-2 rounded-[18px] rounded-br-[6px] bg-mp-accent px-3.5 py-2.5 text-mp-on-accent">
@@ -72,7 +88,7 @@ export function MessageView({ message, threadId, last, busy, onApprove, onAnswer
             </div>
           ) : null;
         }
-        if (isToolUIPart(p)) return <ToolView key={p.toolCallId} part={p as ToolPart} threadId={threadId ?? ""} messageId={message.id} last={last} busy={busy} onApprove={onApprove} onAnswerQuestion={onAnswerQuestion} onAsk={onAsk} />;
+        if (isToolUIPart(p)) return <ToolView key={p.toolCallId} part={p as ToolPart} threadId={threadId ?? ""} messageId={message.id} last={last} busy={busy} onApprove={onApprove} onAnswerQuestion={onAnswerQuestion} onAsk={onAsk} waitingFor={waitingFor ?? null} />;
         return null;
       })}
       {alerts.map((a) => (
@@ -101,10 +117,12 @@ const Muted = ({ icon, children }: { icon?: "clock-3" | "circle-alert" | "info" 
   </p>
 );
 
-function ToolView({ part, threadId, messageId, last, busy, onApprove, onAnswerQuestion, onAsk }: { part: ToolPart; threadId: string; messageId: string; last: boolean; busy: boolean; onApprove: (id: string, approved: boolean) => void; onAnswerQuestion: AnswerQuestion; onAsk?: (text: string) => void }) {
+function ToolView({ part, threadId, messageId, last, busy, onApprove, onAnswerQuestion, onAsk, waitingFor }: { part: ToolPart; threadId: string; messageId: string; last: boolean; busy: boolean; onApprove: (id: string, approved: boolean) => void; onAnswerQuestion: AnswerQuestion; onAsk?: (text: string) => void; waitingFor: string | null }) {
   const name = getToolName(part as Parameters<typeof getToolName>[0]);
   if (name === "ask_user") {
     if (part.state === "input-streaming") return null;
+    // Someone else's question in a shared chat: theirs to answer.
+    if (waitingFor && last && part.state === "input-available") return <Muted icon="clock-3">Waiting for {waitingFor} to answer.</Muted>;
     return <ChatQuestion key={part.state} input={part.input} output={"output" in part ? part.output : undefined} toolState={part.state} active={last} busy={busy} onAnswer={(answer) => onAnswerQuestion(part.toolCallId, answer)} />;
   }
   const words = approvalWords(name);
@@ -116,6 +134,7 @@ function ToolView({ part, threadId, messageId, last, busy, onApprove, onAnswerQu
     case "approval-requested":
       if (!last || part.approval.isAutomatic) return <Muted icon="info">{words.idle}</Muted>;
       if (busy) return null;
+      if (waitingFor) return <Muted icon="clock-3">Waiting for {waitingFor} to answer.</Muted>;
       if (PEOPLE_APPROVALS.has(name)) return <PeopleApproval name={name} input={part.input} onAnswer={(ok) => onApprove(part.approval.id, ok)} />;
       return <ApprovalCard name={name} input={part.input} onAnswer={(ok) => onApprove(part.approval.id, ok)} />;
     case "approval-responded":
@@ -126,7 +145,8 @@ function ToolView({ part, threadId, messageId, last, busy, onApprove, onAnswerQu
     case "output-error":
       return <Muted icon="circle-alert">That step didn&apos;t finish. Check the log before trying again.</Muted>;
     case "output-available":
-      return <OutputView output={part.output as ChatToolOutput} busy={busy} onAsk={onAsk} threadId={threadId} messageId={messageId} toolCallId={part.toolCallId} />;
+      // A setting card applies only for whoever asked for it (settings-actions.ts), so it's held for everyone else.
+      return <OutputView output={part.output as ChatToolOutput} busy={busy || !!waitingFor} onAsk={onAsk} threadId={threadId} messageId={messageId} toolCallId={part.toolCallId} />;
   }
   return null;
 }

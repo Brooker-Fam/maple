@@ -435,8 +435,29 @@ export async function migrate() {
   await migrateEpic();
   await migrateMemories();
   await migrateSleep();
+  await migrateSharedChats();
 
   console.log("Migrations complete.");
+}
+
+/**
+ * Shared chats (src/lib/maple/chat/shared.ts): a thread several people of one
+ * family read and post in, apart from each person's own chat. `shared` marks
+ * the thread, and maple_chat_people is who's in it, the only thing that opens
+ * it (never the thread's `member`, which stays its maker). Code from before it
+ * reads a shared thread as its maker's own, and opens it to nobody else.
+ */
+async function migrateSharedChats(): Promise<void> {
+  await addColumn("maple_chat_threads", "shared", "BOOLEAN NOT NULL DEFAULT FALSE");
+  await sql`CREATE TABLE IF NOT EXISTS maple_chat_people (
+    family_id BIGINT NOT NULL REFERENCES maple_families(id) ON DELETE CASCADE,
+    thread_id TEXT NOT NULL REFERENCES maple_chat_threads(id) ON DELETE CASCADE,
+    member TEXT NOT NULL,
+    added_by TEXT,
+    added_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (thread_id, member)
+  )`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_maple_chat_people_member ON maple_chat_people (family_id, member)`;
 }
 
 async function migrateChatImages(): Promise<void> {

@@ -7,6 +7,7 @@ import { loadRecentMessages } from "./history";
 import type { StepTokens } from "./prices";
 import type { ChatMessage } from "./types";
 import { acceptDelivery, completeDelivery, findDelivery } from "./delivery-store";
+import { lastSender, sharedPerson, sharedThread } from "./shared";
 import type { ChatDelivery } from "./delivery";
 
 /**
@@ -79,10 +80,13 @@ async function lockOneThread(fam: Fam, id: string, member: string, model: string
     [fam.familyId, id, member, model, viewer, care, open.doctor, open.moments]
   );
   // last_prompt is the latest model step's; a web search's row ('web_search', SEARCH_FINISH in web-search.ts) isn't one.
+  // A shared thread (shared.ts) is locked by any of its people, and keeps no viewer_only (its turns read what everyone in it can see).
   const r = await rows(
-    `UPDATE maple_chat_threads t SET busy_until = NOW() + INTERVAL '70 seconds', viewer_only = $4, care_open = t.care_open OR $5,
-       doctor_open = t.doctor_open OR $6, moments_open = t.moments_open OR $7
-     WHERE t.id = $1 AND t.family_id = $2 AND t.member = $3 AND (t.viewer_only OR NOT $4) AND (t.busy_until IS NULL OR t.busy_until < NOW())
+    `UPDATE maple_chat_threads t SET busy_until = NOW() + INTERVAL '70 seconds', viewer_only = CASE WHEN t.shared THEN t.viewer_only ELSE $4 END,
+       care_open = t.care_open OR $5, doctor_open = t.doctor_open OR $6, moments_open = t.moments_open OR $7
+     WHERE t.id = $1 AND t.family_id = $2
+       AND ((NOT t.shared AND t.member = $3 AND (t.viewer_only OR NOT $4)) OR (t.shared AND ${sharedPerson("t", "$3")}))
+       AND (t.busy_until IS NULL OR t.busy_until < NOW())
      RETURNING t.id, t.title, t.care_open, t.doctor_open, t.moments_open,
        (SELECT COUNT(*) FROM maple_chat_messages m WHERE m.thread_id = t.id AND m.family_id = t.family_id AND m.role = 'user') AS user_messages,
        (SELECT u.input_tokens + u.cache_read_tokens + u.cache_write_tokens FROM maple_ai_usage u
@@ -100,8 +104,10 @@ async function lockOneThread(fam: Fam, id: string, member: string, model: string
       momentsOpen: r[0].moments_open !== false,
     };
   }
-  const owner = await rows(`SELECT member, viewer_only FROM maple_chat_threads WHERE id = $1 AND family_id = $2`, [id, fam.familyId]);
-  return owner.length && owner[0].member === member && (owner[0].viewer_only === true || !viewer) ? "busy" : "missing";
+  const owner = await rows(`SELECT t.member, t.viewer_only, t.shared, ${sharedPerson("t", "$3")} AS person FROM maple_chat_threads t WHERE t.id = $1 AND t.family_id = $2`, [id, fam.familyId, member]);
+  if (!owner.length) return "missing";
+  if (owner[0].shared === true) return owner[0].person === true ? "busy" : "missing";
+  return owner[0].member === member && (owner[0].viewer_only === true || !viewer) ? "busy" : "missing";
 }
 
 export async function releaseThread(fam: Fam, id: string, leaseId?: string): Promise<void> {
@@ -231,6 +237,8 @@ export function chatStore(fam: Fam) {
     setTitle: (id: string, title: string) => setTitle(fam, id, title),
     countMessage: (member: string, day: string) => countMessage(fam, member, day),
     recordUsage: (u: UsageRow) => recordUsage(fam, u),
+    shared: (threadId: string) => sharedThread(fam, threadId),
+    lastSender: (threadId: string) => lastSender(fam, threadId),
     deliveries: {
       find: (member: string, requestId: string) => findDelivery(fam, member, requestId),
       accept: (member: string, threadId: string, delivery: ChatDelivery, text: string, message: ChatMessage, day: string) => acceptDelivery(fam, member, threadId, delivery, text, message, day),

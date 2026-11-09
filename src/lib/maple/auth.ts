@@ -8,6 +8,7 @@ import { verifyAdminCreds } from "@/lib/mcp/auth";
 import type { Member, Role } from "./types";
 import { parseCareLevel, parseParts, type AccessRole, type CareLevel, type Parts } from "./access";
 import { LEGACY_ORIGIN, MAPLE_ORIGIN } from "./origin";
+import { dropFromSharedChats } from "./chat/shared";
 import { NotFound, StoreUnavailable } from "./store";
 import { adminFamilyId, carrierFamily, familyForSession, FAMILY_ONE, homeFamilyOf, parseFamilyId, signupMode, type FamilyCtx, type FamilyScope } from "./family";
 
@@ -388,6 +389,8 @@ export async function removeMember(fam: Fam, email: string, by: string): Promise
     `UPDATE maple_care_people SET shared_with = shared_with - $2::text, updated_at = NOW() WHERE family_id = $1 AND shared_with ? $2::text`,
     [familyId, email]
   );
+  // Nor in a shared chat: it no longer counts them, and one nobody's left in goes (chat/shared.ts).
+  await dropFromSharedChats(fam, email);
   return true;
 }
 
@@ -411,7 +414,9 @@ export async function leaveFamily(fam: Fam, email: string): Promise<LeaveRefusal
   if (!rows.length) return (await memberFor(fam, email)) ? "last_owner" : "not_member";
   await q(`UPDATE maple_tokens SET revoked_at = NOW() WHERE family_id = $1 AND member = $2 AND revoked_at IS NULL`, [familyId, email]);
   await q(`DELETE FROM maple_push_subs WHERE family_id = $1 AND member = $2`, [familyId, email]);
-  await q(`DELETE FROM maple_chat_threads WHERE family_id = $1 AND member = $2`, [familyId, email]);
+  // Their own chat goes; in shared chats (chat/shared.ts) they're taken out, and what they wrote stays for the others.
+  await q(`DELETE FROM maple_chat_threads WHERE family_id = $1 AND member = $2 AND NOT shared`, [familyId, email]);
+  await dropFromSharedChats(fam, email);
   await q(
     `UPDATE maple_care_people SET shared_with = shared_with - $2::text, updated_at = NOW() WHERE family_id = $1 AND shared_with ? $2::text`,
     [familyId, email]

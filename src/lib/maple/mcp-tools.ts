@@ -107,7 +107,7 @@ import {
   updateEntry,
   type SwitchResponse,
 } from "./store";
-import { atLeast, PartForbidden, partForbiddenCopy, partLevelOf, type Part as AccessPart, type PartLevel } from "./access";
+import { atLeast, PartForbidden, partForbiddenCopy, partLevelIn, partLevelOf, parseParts, type Part as AccessPart, type PartLevel } from "./access";
 import {
   addDays,
   babyAge,
@@ -403,7 +403,7 @@ export const careOpen = (auth: { via?: unknown; care?: unknown }): boolean => au
 export const NOT_MEMBER_MESSAGE = "You're not a member of this family's log anymore, so nothing was read or saved. Reconnect the connector and sign in again.";
 
 export async function context(extra: Extra): Promise<Ctx> {
-  const auth = (extra.authInfo?.extra ?? {}) as { sub?: unknown; fam?: unknown; via?: unknown; device?: unknown; care?: unknown; requestAt?: unknown; memoryEpoch?: unknown };
+  const auth = (extra.authInfo?.extra ?? {}) as { sub?: unknown; fam?: unknown; via?: unknown; device?: unknown; care?: unknown; requestAt?: unknown; memoryEpoch?: unknown; narrow?: unknown };
   const sub = typeof auth.sub === "string" ? auth.sub : "";
   if (!sub) throw new ToolError("You're not signed in to Maple's Log. Reconnect the connector and sign in again.");
   const signedIn = memberIdFromSub(sub);
@@ -429,6 +429,9 @@ export async function context(extra: Extra): Promise<Ctx> {
   // The in-app chat as an owner set it for this person (access.ts parts): off reads and saves nothing; "view" only reads.
   const chatLevel = via === "chat" ? partLevelOf(fam, "chat") : "log";
   if (chatLevel === "none") throw new ToolError(partForbiddenCopy("chat", "none"));
+  // A shared chat's turn reads only what everyone in it can see (chat/shared.ts): its narrowing rides on every store call.
+  const narrow = via === "chat" ? parseParts(auth.narrow) : null;
+  if (narrow) fam = { ...fam, narrow };
   const [baby, members] = await Promise.all([getBaby(fam), listMembers(fam)]);
   const id = viaAdmin ? (adminActsAs(baby, members)?.email ?? signedIn) : signedIn;
   const me = members.find((m) => m.email === id);
@@ -468,7 +471,7 @@ function requireWriter(ctx: Ctx) {
 }
 
 /** This caller's level of a part an owner can turn down (access.ts): the questions for the doctor, moments. */
-export const partOf = (ctx: Pick<Ctx, "fam">, part: AccessPart): PartLevel => partLevelOf(ctx.fam, part);
+export const partOf = (ctx: Pick<Ctx, "fam">, part: AccessPart): PartLevel => partLevelIn(ctx.fam, part, ctx.fam.narrow);
 
 /** Refuses, in the part's own words, a read (`view`) or a write (`log`) beyond this caller's level of it. */
 export function requirePart(ctx: Pick<Ctx, "fam">, part: AccessPart, need: PartLevel): void {

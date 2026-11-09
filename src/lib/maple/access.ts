@@ -111,6 +111,18 @@ export function partLevelOf(m: { role: Role; parts?: Parts | null }, part: Part)
   return RANK[want] < RANK[min] ? min : want;
 }
 
+/**
+ * A part's level for one conversation: the person's own, lowered to
+ * `narrow` where that's less. A shared chat narrows each turn to the least
+ * anyone in it has (chat/shared.ts), owners included, since everyone in it
+ * reads the answer.
+ */
+export function partLevelIn(m: { role: Role; parts?: Parts | null }, part: Part, narrow?: Parts | null): PartLevel {
+  const own = partLevelOf(m, part);
+  const cap = narrow?.[part];
+  return cap && RANK[cap] < RANK[own] ? cap : own;
+}
+
 /** `level` reaches at least `need` (none < view < log). */
 export const atLeast = (level: PartLevel, need: PartLevel): boolean => RANK[level] >= RANK[need];
 

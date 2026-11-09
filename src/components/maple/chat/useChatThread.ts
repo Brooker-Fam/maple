@@ -27,9 +27,13 @@ const STALL_MS = 90_000;
 /** An answer with no news for this long says it's taking longer (TAKING_LONGER); the server may be asking the model again. */
 const SLOW_MS = 15_000;
 type Delivery = { requestId: string; state: "missing" | "received" | "completed" | "cancelled"; threadId: string | null; busy: boolean };
-type Stream = { current: { id: string; busy: boolean } | null; items: StreamItem[]; more: boolean; delivery?: Delivery };
+/** A shared chat's items say who sent each message (`by`, a member id); a person's own chat's don't. */
+type Stream = { current: { id: string; busy: boolean } | null; items: (StreamItem & { by?: string })[]; more: boolean; delivery?: Delivery };
+/** How often an open shared chat looks for what the others said, while nothing of this phone's is on its way. */
+const SHARED_POLL_MS = 8_000;
 
 const newThreadId = () => crypto.randomUUID();
+const withParam = (url: string, key: string, value: string) => `${url}${url.includes("?") ? "&" : "?"}${key}=${encodeURIComponent(value)}`;
 
 const transport = new DefaultChatTransport<ChatMessage>({
   api: "/api/maple/chat",
@@ -49,11 +53,14 @@ function splitAt(items: StreamItem[], id: string): number {
 }
 
 /**
- * This member's one chat: `earlier` is everything above the thread new
- * messages go to (older pages, and threads before her page closed to the
- * chat), read-only; `messages` is that thread, live.
+ * This member's own chat, or with `shared` one shared chat they're in
+ * (chat/shared.ts): `earlier` is everything above the thread new messages go
+ * to (older pages, and threads before her page closed to the chat),
+ * read-only; `messages` is that thread, live. A shared chat is one thread of
+ * its own, with its own drafts and queue (its scope), who sent each message
+ * (`authorOf`), and a look every few seconds for what the others said.
  */
-export function useChatThread(active: boolean) {
+export function useChatThread(active: boolean, shared: { id: string } | null = null) {
   const { api, refresh, online, state } = useMaple();
   const { termsNeeded } = useChatNav();
   const babyName = state?.baby.name;
@@ -71,7 +78,12 @@ export function useChatThread(active: boolean) {
   const [problem, setProblem] = useState<string | null>(null);
   const [help, setHelp] = useState(false);
   const helpArrived = useRef(false);
-  const scope = queueScope(state?.family?.id ?? 1, state?.me?.email ?? "");
+  const sharedId = shared?.id ?? null;
+  const sharedRef = useRef(sharedId);
+  sharedRef.current = sharedId;
+  // Each conversation keeps its own draft and queue; a shared chat's sit beside the person's own (sign-out clears them all).
+  const scope = queueScope(state?.family?.id ?? 1, state?.me?.email ?? "") + (sharedId ? `~${encodeURIComponent(sharedId)}` : "");
+  const [authors, setAuthors] = useState<Map<string, string>>(() => new Map());
   const [outbox, setOutbox] = useState<ChatQueue>(() => readChatQueue(scope));
   const outboxRef = useRef(outbox);
   const loadedScope = useRef(scope);
@@ -137,7 +149,7 @@ export function useChatThread(active: boolean) {
     },
     onError: (err) => {
       const refusal = refusalOf(err.message);
-      if (refusal?.code === "new_chat" && thread) {
+      if (refusal?.code === "new_chat" && thread && !sharedRef.current) {
         setResponding(false);
         // Her page closed to the chat: this thread stays on screen above, and the message that was turned away goes to a new one.
         const ms = chat.messages;
@@ -229,15 +241,25 @@ export function useChatThread(active: boolean) {
     return () => window.removeEventListener("maple:chat-drafts-cleared", clear);
   }, []);
 
-  const historyUrl = () => {
+  /** The conversation's history: the person's own chat, or one shared chat (`thread`). Both read refs only. */
+  const baseUrl = useCallback(() => (sharedRef.current ? `/api/maple/chat?thread=${encodeURIComponent(sharedRef.current)}` : "/api/maple/chat"), []);
+  const historyUrl = useCallback(() => {
     const uncertain = outboxRef.current.items.find((item) => item.state === "uncertain" || item.state === "sending");
-    return uncertain ? `/api/maple/chat?requestId=${encodeURIComponent(uncertain.requestId)}` : "/api/maple/chat";
-  };
+    return uncertain ? withParam(baseUrl(), "requestId", uncertain.requestId) : baseUrl();
+  }, [baseUrl]);
 
   /** The newest page as the server has it: the current thread live, the rest above it. */
   const apply = useCallback(
     (s: Stream) => {
-      const id = s.current?.id ?? newThreadId();
+      // A shared chat is always its own one thread.
+      const id = s.current?.id ?? sharedRef.current ?? newThreadId();
+      if (s.items.some((i) => i.by)) {
+        setAuthors((known) => {
+          const next = new Map(known);
+          for (const i of s.items) if (i.by) next.set(i.message.id, i.by);
+          return next;
+        });
+      }
       const at = splitAt(s.items, id);
       const mine = s.items.slice(at).map((i) => i.message);
       const same = s.current?.id === shown.current.id;
@@ -320,7 +342,7 @@ export function useChatThread(active: boolean) {
         setHistoryProblem("Your previous reply is taking longer than expected. Check again before sending another message.");
       }
     },
-    [api, apply, refresh, names]
+    [api, apply, refresh, names, historyUrl]
   );
 
   // Opening, reconnecting or explicitly retrying reads only; it never repeats a write.
@@ -366,6 +388,28 @@ export function useChatThread(active: boolean) {
     return () => document.removeEventListener("visibilitychange", check);
   }, [active]);
 
+  // An open shared chat looks for what the others said every few seconds, quietly (no loading state), while nothing of
+  // this phone's is on its way. A turn someone else is running shows as the reply coming, and is read once it's saved.
+  const idle = useRef(false);
+  const newest = useRef<string | null>(null);
+  useEffect(() => {
+    if (!active || !sharedId || !online) return;
+    const look = window.setInterval(() => {
+      if (document.visibilityState !== "visible" || !idle.current || shown.current.busy) return;
+      api<Stream>(historyUrl())
+        .then((s) => {
+          if (sharedRef.current !== sharedId || !idle.current || shown.current.busy) return;
+          if ((s.items.at(-1)?.message.id ?? null) === newest.current && !s.current?.busy) return;
+          const running = apply(s);
+          if (running) void resync(running);
+        })
+        .catch(() => {
+          // the next look tries again
+        });
+    }, SHARED_POLL_MS);
+    return () => window.clearInterval(look);
+  }, [active, sharedId, online, api, apply, resync, historyUrl]);
+
   const send = useCallback(
     /** `images` and `submittedAt`: a message sent again as it was (sendAgain), with its photos and the time it was first sent. */
     (raw: string, options: { clearDraft?: boolean; images?: ChatImage[]; submittedAt?: string } = {}) => {
@@ -407,6 +451,8 @@ export function useChatThread(active: boolean) {
   );
 
   const awaitingAnswer = waitingForAnswer(chat.messages);
+  idle.current = !busy && !outbox.items.length;
+  newest.current = chat.messages.at(-1)?.id ?? null;
   // One request leaves the queue at a time. Paused/reloaded/uncertain work is
   // never retried here; a person must explicitly resume or retry it.
   useEffect(() => {
@@ -488,7 +534,8 @@ export function useChatThread(active: boolean) {
     if (!oldest || loadingEarlier) return false;
     setLoadingEarlier(true);
     try {
-      const s = await api<Stream>(`/api/maple/chat?before=${encodeURIComponent(oldest)}`);
+      const s = await api<Stream>(withParam(baseUrl(), "before", oldest));
+      if (s.items.some((i) => i.by)) setAuthors((known) => new Map([...known, ...s.items.flatMap((i): [string, string][] => (i.by ? [[i.message.id, i.by]] : []))]));
       setEarlier((e) => [...s.items, ...e]);
       setMore(s.more);
       return true;
@@ -498,7 +545,7 @@ export function useChatThread(active: boolean) {
     } finally {
       setLoadingEarlier(false);
     }
-  }, [api, chat.messages, earlier, loadingEarlier]);
+  }, [api, chat.messages, earlier, loadingEarlier, baseUrl]);
 
   const remove = useCallback(async () => {
     if (busy) return;
@@ -553,6 +600,9 @@ export function useChatThread(active: boolean) {
   return {
     ready: !!thread,
     threadId: thread?.id ?? null,
+    /** A shared chat's: who sent a message (member id), null when it's this person's own or unknown. */
+    authorOf: (id: string) => authors.get(id) ?? null,
+    shared: !!sharedId,
     earlier,
     more,
     loadingEarlier,

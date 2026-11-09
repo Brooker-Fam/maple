@@ -182,6 +182,14 @@ export default function Privacy() {
         length and cost, without its words, to keep within its limits.
       </p>
       <p>
+        You can also start a shared chat with people you pick in your family. Everyone in it reads every message and every
+        answer there, with who wrote each one, and anyone in it can add people, who then read everything said in it so far.
+        Maple&rsquo;s answers in a shared chat only use what all of its people can see: something hidden from one of them, such as
+        mom&rsquo;s recovery page or the questions for the doctor, stays out of it. Photos can&rsquo;t be sent in a shared chat.
+        Leaving one removes it from your chats, but what you wrote there stays for the people still in it; it&rsquo;s deleted for
+        good when the last person leaves. Deleting your chat history deletes your own chat, not the shared ones you&rsquo;re in.
+      </p>
+      <p>
         Answers you choose or type into a question card are part of that conversation. Charts in the chat keep a dated snapshot
         of the log values they showed, so an earlier answer stays understandable when the log changes. Search results and settings
         cards keep the values they showed, proposed changes and the outcome of your taps. These are removed with your chat history.

@@ -52,10 +52,16 @@ export const asThreadAccess = (open: boolean | ThreadAccess): Required<ThreadAcc
 /**
  * The SQL test for a thread `t` this member can open: `v` is the viewer
  * flag's parameter, `h` careHidden's, `d` and `m` doctorHidden's and
- * momentsHidden's.
+ * momentsHidden's. A shared thread (chat/shared.ts) has no viewer_only: what
+ * it reads is what everyone in it can see, so a viewer opens one as anyone
+ * does, and one that ever had her page open only reaches someone her page
+ * reaches in their own chat (never a viewer). Being one of its people is
+ * checked apart (sharedPerson).
  */
 export const openable = (t: string, v: string, h: string, d: string, m: string) =>
-  `(${t}.viewer_only OR NOT ${v}) AND (${t}.viewer_only OR NOT ${t}.care_open OR NOT ${h}) AND (NOT ${t}.doctor_open OR NOT ${d}) AND (NOT ${t}.moments_open OR NOT ${m})`;
+  `(${t}.shared OR ${t}.viewer_only OR NOT ${v})` +
+  ` AND ((NOT ${t}.shared AND (${t}.viewer_only OR NOT ${t}.care_open OR NOT ${h})) OR (${t}.shared AND (NOT ${t}.care_open OR NOT (${h} OR ${v}))))` +
+  ` AND (NOT ${t}.doctor_open OR NOT ${d}) AND (NOT ${t}.moments_open OR NOT ${m})`;
 
 async function rows(sql: string, params: unknown[]): Promise<Record<string, unknown>[]> {
   const r = await query(sql, params);
@@ -88,7 +94,8 @@ export type ChatStream = {
 
 export async function chatStream(fam: Fam, member: string, open: boolean | ThreadAccess, before: string | null, size = STREAM_PAGE): Promise<ChatStream> {
   const { viewer, careHidden, doctorHidden, momentsHidden } = asThreadAccess(open);
-  const visible = `t.family_id = $1 AND t.member = $2 AND ${openable("t", "$3", "$4", "$5", "$6")}`;
+  // Their own chat: shared chats (chat/shared.ts) are each a conversation of their own, read apart.
+  const visible = `t.family_id = $1 AND t.member = $2 AND NOT t.shared AND ${openable("t", "$3", "$4", "$5", "$6")}`;
   const access = [fam.familyId, member, viewer, careHidden, doctorHidden, momentsHidden];
   const [head, page] = await Promise.all([
     rows(`SELECT t.id, COALESCE(t.busy_until > NOW(), FALSE) AS busy FROM maple_chat_threads t WHERE ${visible} ORDER BY busy DESC, t.updated_at DESC LIMIT 1`, access),
@@ -106,7 +113,7 @@ export async function chatStream(fam: Fam, member: string, open: boolean | Threa
   return { current: head.length ? { id: String(head[0].id), busy: head[0].busy === true } : null, items, more };
 }
 
-/** Deletes every thread this member can open in this family, for good. Usage rows and the day's count stay. */
+/** Deletes every thread of their own chat this member can open in this family, for good (never a shared chat: leaving one is apart). Usage rows and the day's count stay. */
 export async function deleteChats(fam: Fam, member: string, open: boolean | ThreadAccess): Promise<number> {
   // Keep only non-content delivery receipts so a lost acknowledgement cannot replay a write after deletion.
   // A running turn keeps its member lease until it finishes, even if its conversation is deleted.
@@ -117,7 +124,7 @@ export async function deleteChats(fam: Fam, member: string, open: boolean | Thre
       ON CONFLICT (family_id, member) DO UPDATE SET generation = maple_chat_image_generations.generation + 1`,
     params: params.slice(0, 2),
   }, { sql: `WITH removed AS (
-    DELETE FROM maple_chat_threads t WHERE t.family_id = $1 AND t.member = $2 AND ${openable("t", "$3", "$4", "$5", "$6")} RETURNING t.id
+    DELETE FROM maple_chat_threads t WHERE t.family_id = $1 AND t.member = $2 AND NOT t.shared AND ${openable("t", "$3", "$4", "$5", "$6")} RETURNING t.id
   ), detached AS (
     UPDATE maple_chat_deliveries SET thread_id = NULL WHERE family_id = $1 AND member = $2 AND thread_id IN (SELECT id FROM removed)
   ), removed_images AS (

@@ -6,6 +6,14 @@ import { StoreUnavailable } from "../store";
 import type { Member } from "../types";
 import { settingActionSchema, settingInputSchema, settingProposalSchema, settingResultText, type SettingAction, type SettingActionResult, type SettingProposal } from "./settings";
 import { validateSetting } from "./settings-tools";
+import { sharedPerson } from "./shared";
+
+/**
+ * The card's thread is this member's: their own chat, or a shared chat
+ * they're in (shared.ts). The card itself is always their own turn's
+ * (m.member), so in a shared chat only whoever asked for it can apply it.
+ */
+const THEIRS = `((NOT t.shared AND t.member = $2) OR (t.shared AND ${sharedPerson("t", "$2")}))`;
 
 export class SettingActionError extends Error {
   constructor(message: string, public status: 400 | 403 | 404 | 409) { super(message); }
@@ -27,9 +35,9 @@ export async function applyChatSetting(fam: Pick<FamilyCtx, "familyId" | "parts"
   const found = await rows(
     `SELECT m.parts, COALESCE(t.busy_until > NOW(), FALSE) AS busy
        FROM maple_chat_messages m JOIN maple_chat_threads t ON t.id = m.thread_id AND t.family_id = m.family_id
-       JOIN maple_members u ON u.family_id = t.family_id AND u.email = t.member
-       WHERE t.family_id = $1 AND t.member = $2 AND t.id = $3 AND m.id = $4 AND m.member = $2 AND m.role = 'assistant'
-         AND (t.viewer_only OR u.role <> 'viewer') AND (u.accepted_at IS NOT NULL OR u.family_id = 1)`,
+       JOIN maple_members u ON u.family_id = t.family_id AND u.email = $2
+       WHERE t.family_id = $1 AND ${THEIRS} AND t.id = $3 AND m.id = $4 AND m.member = $2 AND m.role = 'assistant'
+         AND (t.shared OR t.viewer_only OR u.role <> 'viewer') AND (u.accepted_at IS NOT NULL OR u.family_id = 1)`,
     [fam.familyId, member.email, action.threadId, action.messageId],
   );
   if (!found.length) throw new SettingActionError("That setting card is no longer available.", 404);
@@ -57,10 +65,10 @@ export async function applyChatSetting(fam: Pick<FamilyCtx, "familyId" | "parts"
   // history deletion, or a receipt update cannot slip between the write and receipt.
   const locked = `locked AS MATERIALIZED (
     SELECT m.id FROM maple_chat_messages m JOIN maple_chat_threads t ON t.id = m.thread_id AND t.family_id = m.family_id
-    JOIN maple_members u ON u.family_id = t.family_id AND u.email = t.member
-    WHERE t.family_id = $1 AND t.member = $2 AND t.id = $3 AND m.id = $4 AND m.member = $2
+    JOIN maple_members u ON u.family_id = t.family_id AND u.email = $2
+    WHERE t.family_id = $1 AND ${THEIRS} AND t.id = $3 AND m.id = $4 AND m.member = $2
       AND m.parts = $5::jsonb AND (t.busy_until IS NULL OR t.busy_until < NOW())
-      AND (t.viewer_only OR u.role <> 'viewer') AND (NOT $8::boolean OR u.role <> 'viewer')
+      AND (t.shared OR t.viewer_only OR u.role <> 'viewer') AND (NOT $8::boolean OR u.role <> 'viewer')
       AND (u.accepted_at IS NOT NULL OR u.family_id = 1)
       AND EXISTS (SELECT 1 FROM maple_consents c WHERE c.family_id = $1 AND c.member = $2 AND c.kind = 'chat' AND c.version = $7)
     FOR UPDATE OF t, m

@@ -23,7 +23,7 @@ import {
   type TapFeedData,
 } from "./feed";
 import { cleanData } from "./validate";
-import { entryPart, PartForbidden, partLevelOf, type Parts } from "./access";
+import { entryPart, PartForbidden, partLevelIn, type Parts } from "./access";
 import { clientMomentPhoto, prepareMomentPhotos, writeMomentPhotos } from "./moment-photos";
 import { QUOTA_MESSAGE } from "./upload-quota";
 import type {
@@ -82,11 +82,15 @@ export class NotFound extends Error {}
  * role and the parts an owner turned down (access.ts). A bare family id or
  * scope (jobs, the push tick) is nobody's, and reads everything.
  */
-function readerOf(fam: FamilyRef): { role: Role; parts?: Parts } | null {
+function readerOf(fam: FamilyRef): { role: Role; parts?: Parts; narrow?: Parts } | null {
   if (typeof fam !== "object" || fam === null) return null;
   const role = (fam as { role?: unknown }).role;
-  return role === "owner" || role === "member" || role === "viewer" || role === "photos" ? { role, parts: (fam as { parts?: Parts }).parts } : null;
+  const { parts, narrow } = fam as { parts?: Parts; narrow?: Parts };
+  return role === "owner" || role === "member" || role === "viewer" || role === "photos" ? { role, parts, narrow } : null;
 }
+
+/** A reader's level of a part, with a shared chat's narrowing (FamilyCtx.narrow) on top, owners included. */
+const levelOf = (r: { role: Role; parts?: Parts; narrow?: Parts }, part: "doctor" | "moments") => partLevelIn(r, part, r.narrow);
 
 /** The test for a question for the doctor, a NULL-safe one (a note without the flag isn't one). */
 const doctorRow = (t: string) => `(${t}kind = 'note' AND ${t}data->>'for_doctor' IS NOT DISTINCT FROM 'true')`;
@@ -101,21 +105,21 @@ const doctorRow = (t: string) => `(${t}kind = 'note' AND ${t}data->>'for_doctor'
  */
 export function unseenSql(fam: FamilyRef, alias?: string): string {
   const r = readerOf(fam);
-  if (!r || r.role === "owner") return "";
+  if (!r || (r.role === "owner" && !r.narrow)) return "";
   const t = alias ? `${alias}.` : "";
   let out = "";
-  if (partLevelOf(r, "doctor") === "none") out += ` AND NOT ${doctorRow(t)}`;
-  if (partLevelOf(r, "moments") === "none") out += ` AND ${t}kind <> 'moment'`;
+  if (levelOf(r, "doctor") === "none") out += ` AND NOT ${doctorRow(t)}`;
+  if (levelOf(r, "moments") === "none") out += ` AND ${t}kind <> 'moment'`;
   return out;
 }
 
 /** What this reader can't change (a part below "log"), as conditions for a write's WHERE; empty when they can change every part. */
 function unwritableSql(fam: FamilyRef): string {
   const r = readerOf(fam);
-  if (!r || r.role === "owner") return "";
+  if (!r || (r.role === "owner" && !r.narrow)) return "";
   let out = "";
-  if (partLevelOf(r, "doctor") !== "log") out += ` AND NOT ${doctorRow("")}`;
-  if (partLevelOf(r, "moments") !== "log") out += " AND kind <> 'moment'";
+  if (levelOf(r, "doctor") !== "log") out += ` AND NOT ${doctorRow("")}`;
+  if (levelOf(r, "moments") !== "log") out += " AND kind <> 'moment'";
   return out;
 }
 
@@ -123,8 +127,8 @@ function unwritableSql(fam: FamilyRef): string {
 export function mayWriteEntry(fam: FamilyRef, e: { kind: string; data?: unknown }): void {
   const r = readerOf(fam);
   const part = r ? entryPart(e) : null;
-  if (!r || !part) return;
-  const level = partLevelOf(r, part);
+  if (!r || !part || part === "chat") return;
+  const level = levelOf(r, part);
   if (level !== "log") throw new PartForbidden(part, level);
 }
 

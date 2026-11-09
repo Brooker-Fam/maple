@@ -98,7 +98,8 @@ export type ChatMessage = UIMessage<unknown, ChatData>;
 export type ChatThread = { id: string; title: string | null; updated_at: string; busy?: boolean };
 
 /** A refused POST: `code` says what the Chat tab should do about it; `help` that the message mentioned a crisis, so the help card shows anyway. */
-export type ChatRefusal = { error: string; code?: "busy" | "new_chat" | "stale" | "limit" | "off" | "terms" | "received" | "cancelled"; help?: "crisis"; requestId?: string; threadId?: string };
+/** `shared_closed`: a shared chat that can't go on; `not_yours`: a card in a shared chat only its turn's sender answers. */
+export type ChatRefusal = { error: string; code?: "busy" | "new_chat" | "stale" | "limit" | "off" | "terms" | "received" | "cancelled" | "shared_closed" | "not_yours"; help?: "crisis"; requestId?: string; threadId?: string };
 
 export const CHAT_TERMS_NEEDED = "Accept the chat's terms first. Logging works as usual.";
 

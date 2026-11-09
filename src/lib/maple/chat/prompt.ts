@@ -91,6 +91,25 @@ export function chatPartLines(vo: Voice, limits: ChatPartLimits | undefined): st
   return out.length ? `\n${out.join("\n")}` : "";
 }
 
+/**
+ * A shared chat's lines (chat/shared.ts), after the addendum: who's in it,
+ * that everyone reads everything, and that only what all of them can see is
+ * open. Names are quoted, as data. Fixed per chat and its people, so the
+ * cached prefix holds between its turns.
+ */
+export function sharedChatLines(vo: Voice, s: { people: string[]; care: boolean; herConsent: boolean }): string {
+  const MOM = vo.mom;
+  const people = s.people.map((n) => JSON.stringify(n)).join(", ");
+  const lines = [
+    `This is a shared chat. The people in it (${people}) each read every message and every reply. Each message's "Now:" line names who wrote it: answer whoever wrote the newest message, and say whose request you acted on when it helps. What you log is credited to that person.`,
+    `Only what everyone here can see is open to you, and the tools already leave the rest out. Never bring up anything from someone's own chat, and if someone asks for something not shared with everyone here, say so and suggest they ask in their own chat.`,
+  ];
+  if (vo.hasMom && !s.care) {
+    lines.push(`${MOM}'s page (her food, drinks, medicines, temperatures and questions for her OB) isn't open in this chat${s.herConsent ? ", because not everyone here can see it" : ""}, so none of the mom tools are here and results leave her out. Don't answer about her from earlier messages. Before logging any medicine other than vitamin D, ask "${vo.Name}'s or ${MOM}'s?" unless the person already said whose it was; if it's ${MOM}'s, say to log it on her page in the app.`);
+  }
+  return `\n${lines.join("\n")}`;
+}
+
 export const CHAT_ADDENDUM = chatAddendum(FAMILY_ONE_VOICE);
 export const CHAT_ADDENDUM_VIEWER = chatAddendumViewer(FAMILY_ONE_VOICE);
 export const CHAT_ADDENDUM_CARE_CLOSED = chatAddendumCareClosed(FAMILY_ONE_VOICE);
@@ -107,15 +126,19 @@ export const usesCacheBreakpoints = (model: string) => model.startsWith("anthrop
  * `page`: what an owner set for this person on it, when it isn't
  * everything: "view" (read only) or "hidden".
  */
-export function systemBlocks(opts: { viewer: boolean; care: boolean; page?: "view" | "hidden"; limits?: ChatPartLimits; model: string; copy: ToolCopy; images?: boolean }): SystemModelMessage[] {
+export function systemBlocks(opts: { viewer: boolean; care: boolean; page?: "view" | "hidden"; limits?: ChatPartLimits; shared?: { people: string[]; herConsent: boolean }; model: string; copy: ToolCopy; images?: boolean }): SystemModelMessage[] {
   const { copy } = opts;
-  const addendum = opts.viewer
-    ? chatAddendumViewer(copy.v)
-    : opts.page === "hidden"
-      ? chatAddendumCareHidden(copy.v)
-      : !opts.care
-        ? chatAddendumCareClosed(copy.v)
-        : opts.page === "view" ? chatAddendumCareView(copy.v) : chatAddendum(copy.v);
+  // A shared chat says why her page is closed itself (sharedChatLines): not everyone in it may see it.
+  const addendum = opts.shared
+    ? (opts.viewer ? chatAddendumViewer(copy.v) : opts.care && opts.page === "view" ? chatAddendumCareView(copy.v) : chatAddendum(copy.v)) +
+      sharedChatLines(copy.v, { people: opts.shared.people, care: opts.care, herConsent: opts.shared.herConsent })
+    : opts.viewer
+      ? chatAddendumViewer(copy.v)
+      : opts.page === "hidden"
+        ? chatAddendumCareHidden(copy.v)
+        : !opts.care
+          ? chatAddendumCareClosed(copy.v)
+          : opts.page === "view" ? chatAddendumCareView(copy.v) : chatAddendum(copy.v);
   return [
     { role: "system", content: mapleInstructions(copy, { entryNumbers: false, memories: "chat" }) },
     { role: "system", content: addendum + chatPartLines(copy.v, opts.limits) + (opts.images ? `\n${imageInstructions(copy.v)}` : ""), ...(usesCacheBreakpoints(opts.model) ? { providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } } } : {}) },
