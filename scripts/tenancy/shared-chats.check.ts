@@ -212,6 +212,22 @@ async function main() {
     eq([res.status, body.code, /Only Avery can answer that/.test(body.error)], [409, "not_yours", true], "the owner's turn was last, so the member can't answer its card");
   });
 
+  await test("before a rollback, the docs' SQL hands shared chats to nobody: an older release never reads one as its maker's, and this one still opens it for its people", async () => {
+    const chat = (await create(owner, { people: [alpha.member] })).body.chat as { id: string };
+    eq((await turn(member, chat.id, "Anything new?")).status, 200, "a turn in it");
+    // Releases from before shared chats take a person's own chat to be every thread with them as its member
+    // (history.ts chatStream and Delete chat history, auth.ts leaveFamily).
+    const theirs = async (who: string) => (await sql(`SELECT id FROM maple_chat_threads WHERE family_id = $1 AND member = $2`, [A, who])).map((r) => String(r.id));
+    ok((await theirs(alpha.owner)).includes(chat.id), "without it, an older release reads it as the owner's own");
+    // docs/maple.md → Shared chats, Rollback.
+    await sql(`UPDATE maple_chat_threads SET member = 'shared:' || id WHERE shared`);
+    ok(!(await theirs(alpha.owner)).includes(chat.id), "with it, not the owner's");
+    eq((await sql(`SELECT COUNT(*)::int AS n FROM maple_chat_threads t JOIN maple_members m ON m.family_id = t.family_id AND m.email = t.member WHERE t.shared`))[0].n, 0, "nor anyone's");
+    ok((await list(owner)).some((c) => c.id === chat.id) && (await list(member)).some((c) => c.id === chat.id), "this release still lists it for both");
+    eq((await turn(owner, chat.id, "Still here?")).status, 200, "and its turns go on");
+    eq(((await call(routes.chat.GET, `/api/maple/chat?thread=${chat.id}`, member)).body.items as unknown[]).length, 4, "with every message");
+  });
+
   await test("leaving: gone for them, kept for the others; the last one out deletes it, and removal and leaving the family take people out", async () => {
     const chat = (await create(owner, { people: [alpha.member, alpha.viewer] })).body.chat as { id: string };
     await turn(viewer, chat.id, "Morning!");

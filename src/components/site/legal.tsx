@@ -2,8 +2,8 @@ import Link from "next/link";
 import SiteFooter from "./SiteFooter";
 import SiteHeader from "./SiteHeader";
 
-export const LEGAL_UPDATED = "2026-11-09";
-export const LEGAL_UPDATED_TEXT = "November 9, 2026";
+export const LEGAL_UPDATED = "2026-11-10";
+export const LEGAL_UPDATED_TEXT = "November 10, 2026";
 export const LEGAL_VERSION = "1.35";
 export const CONTACT_EMAIL = "hello@maplebaby.app";
 
