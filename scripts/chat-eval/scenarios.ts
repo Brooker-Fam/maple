@@ -39,7 +39,7 @@ export class Builder {
       t += m * MIN;
       return p;
     });
-    this.sim.add({ kind: "feed", start: this.ago(startAgo), end: opts.running ? null : t, active: !!opts.running, by: opts.by ?? "Brittany", via: "app", data: { method: "breast", first_side: parts[0][0] === "L" ? "left" : "right" }, parts: ps });
+    this.sim.add({ kind: "feed", start: this.ago(startAgo), end: opts.running ? null : t, active: !!opts.running, by: opts.by ?? "Rosa", via: "app", data: { method: "breast", first_side: parts[0][0] === "L" ? "left" : "right" }, parts: ps });
   }
 
   diaper(ago: number, kind: "wet" | "dirty" | "both", looks: { color?: string; texture?: string } = {}, by = "Alex") {
@@ -56,7 +56,7 @@ export class Builder {
   }
 
   vitaminD(ago: number) {
-    this.sim.add({ kind: "med", start: this.ago(ago), end: null, active: false, by: "Brittany", via: "app", data: { name: "Vitamin D", dose: "400 IU" } });
+    this.sim.add({ kind: "med", start: this.ago(ago), end: null, active: false, by: "Rosa", via: "app", data: { name: "Vitamin D", dose: "400 IU" } });
   }
 
   /**
@@ -68,7 +68,7 @@ export class Builder {
     for (let k = 0, ago = lastFeedAgo; ago < 25 * 60; k++, ago += 170) {
       const a: Side = (k % 2 === 0) === (first === "L") ? "L" : "R";
       const b: Side = a === "L" ? "R" : "L";
-      this.feed(ago, [[a, 13], [b, 9]], { by: k % 2 ? "Alex" : "Brittany" });
+      this.feed(ago, [[a, 13], [b, 9]], { by: k % 2 ? "Alex" : "Rosa" });
       if (ago - 25 > 0) this.diaper(ago - 25, k % 3 === 1 ? "both" : "wet", k % 3 === 1 ? { color: "mustard", texture: "seedy" } : {});
       if (k > 0 || opts.sleepAfterLast) {
         const len = k > 0 ? 125 : Math.min(125, ago - 60);
@@ -271,7 +271,7 @@ export const SCENARIOS: Scenario[] = [
       b.day(150, "L");
       b.momPlans();
     },
-    turns: [{ say: "Brittany just took her ibuprofen" }],
+    turns: [{ say: "Rosa just took her ibuprofen" }],
     asks: "never",
     expect: [momDose("Ibuprofen", 0, 3), notCalled("log_medicine")],
   },

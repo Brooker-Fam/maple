@@ -138,7 +138,7 @@ const log_medicine: Handler = (a, sim) => {
   const dose = a.dose ?? (/vitamin d|sunshine/i.test(name) ? "400 IU" : null);
   const out = save(sim, "log_medicine", "med", at, null, { name, ...(dose ? { dose } : {}) }, a);
   const hers = sim.care && !a.for_maple && sim.plans.find((p) => [p.name, ...p.also].some((n) => n.toLowerCase() === name.toLowerCase()));
-  return savedResult(sim, out, hers ? [`Note: her mom has ${hers.name} on her list. If this was Brittany's dose, delete this one and log it with log_mom_medicine.`] : [], assumed);
+  return savedResult(sim, out, hers ? [`Note: her mom has ${hers.name} on her list. If this was Rosa's dose, delete this one and log it with log_mom_medicine.`] : [], assumed);
 };
 
 /** Writes this bench doesn't need to model in detail: saved as an entry of that kind, as the real tool does. */
@@ -225,7 +225,7 @@ const undo_last: Handler = (_a, sim) => {
   if (last.mom) {
     const d = sim.doses.find((x) => x.id === last.id)!;
     d.deleted = true;
-    return ok(`Removed Brittany's ${d.plan} at ${sim.whenText(d.at)} (#p${d.id}). fix_mom_entry with action "restore" brings it back.`, { undone: true, mom: true, id: `p${d.id}` });
+    return ok(`Removed Rosa's ${d.plan} at ${sim.whenText(d.at)} (#p${d.id}). fix_mom_entry with action "restore" brings it back.`, { undone: true, mom: true, id: `p${d.id}` });
   }
   const e = sim.get(last.id)!;
   e.deleted = true;
@@ -243,7 +243,7 @@ function momPlan(sim: Sim, name: string) {
 
 const mom_status: Handler = (a, sim) => {
   const plans = a.medicine ? sim.plans.filter((p) => p === momPlan(sim, String(a.medicine))) : sim.plans;
-  const lines = [`Brittany's medicines (from her plan; not advice):`, ...plans.map((p) => sim.momState(p).sentence), "Her OB: Dr. Example's office, 555-0100 (made up). National Maternal Mental Health Hotline: call or text 1-833-852-6262."];
+  const lines = [`Rosa's medicines (from her plan; not advice):`, ...plans.map((p) => sim.momState(p).sentence), "Her OB: Dr. Example's office, 555-0100 (made up). National Maternal Mental Health Hotline: call or text 1-833-852-6262."];
   return ok(lines.join("\n"), { medicines: plans.map((p) => ({ name: p.name, line: sim.momState(p).sentence })) });
 };
 
@@ -254,17 +254,17 @@ const log_mom_medicine: Handler = (a, sim) => {
   const name = plan?.name ?? String(a.medicine);
   const twin = sim.doses.find((d) => !d.deleted && d.plan === name && Math.abs(d.at - at) <= 30 * MIN);
   if (twin && !a.allow_duplicate) {
-    return ok(`Not saved: ${twin.by} logged ${name} for Brittany at ${sim.whenText(twin.at)} (#p${twin.id}). If this is another dose, call again with allow_duplicate: true.`, { created: false, possible_duplicate: { id: `p${twin.id}`, at: sim.whenText(twin.at), by: twin.by } });
+    return ok(`Not saved: ${twin.by} logged ${name} for Rosa at ${sim.whenText(twin.at)} (#p${twin.id}). If this is another dose, call again with allow_duplicate: true.`, { created: false, possible_duplicate: { id: `p${twin.id}`, at: sim.whenText(twin.at), by: twin.by } });
   }
   const d = { id: sim.nextDose++, plan: name, at, by: sim.me, via: "chat", createdAt: sim.now };
   sim.doses.push(d);
   sim.actions.push({ kind: "create", tool: "log_mom_medicine", id: d.id, mom: true, at: sim.now });
   const st = plan ? sim.momState(plan) : null;
-  return ok([`Saved #p${d.id}: ${name} for Brittany at ${sim.whenText(at)} (logged by ${sim.me} via Maple chat).`, ...(st ? [st.sentence] : ["Saved as a one-time medicine (not on her list)."])].join("\n"), { created: true, id: `p${d.id}`, medicine: name, local: sim.whenText(at) });
+  return ok([`Saved #p${d.id}: ${name} for Rosa at ${sim.whenText(at)} (logged by ${sim.me} via Maple chat).`, ...(st ? [st.sentence] : ["Saved as a one-time medicine (not on her list)."])].join("\n"), { created: true, id: `p${d.id}`, medicine: name, local: sim.whenText(at) });
 };
 
 function momPlain(what: string): Handler {
-  return (a, sim) => ok(`Saved for Brittany: ${what}${a.question ? ` "${a.question}"` : ""} at ${sim.whenText(sim.now)} (logged by ${sim.me} via Maple chat).`, { created: true });
+  return (a, sim) => ok(`Saved for Rosa: ${what}${a.question ? ` "${a.question}"` : ""} at ${sim.whenText(sim.now)} (logged by ${sim.me} via Maple chat).`, { created: true });
 }
 
 const fix_mom_entry: Handler = (a) => fail(`fix_mom_entry: nothing in this made-up log matches ${JSON.stringify(a.id ?? null)}.`);

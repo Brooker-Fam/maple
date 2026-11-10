@@ -293,13 +293,13 @@ export class Sim {
   logState(care: boolean): string[] {
     const lines = [...this.running().map((e) => this.timerLine(e)), this.lastFeedLine(), this.nextLine(), this.diaperLine(), this.lastSleepLine(), this.todayLine()].filter((l): l is string => !!l);
     const top = care && this.plans[0];
-    if (top) lines.push(`Brittany's next medicine: ${top.name} ${this.momState(top).short}.`);
+    if (top) lines.push(`Rosa's next medicine: ${top.name} ${this.momState(top).short}.`);
     return lines;
   }
 
   momLine(): string | null {
     if (!this.care || !this.plans.length) return null;
-    return `Brittany's medicines: ${this.plans.map((p) => `${p.name} ${this.momState(p).short}`).join("; ")}.`;
+    return `Rosa's medicines: ${this.plans.map((p) => `${p.name} ${this.momState(p).short}`).join("; ")}.`;
   }
 
   momState(p: MomPlan): { short: string; sentence: string; count24: number; last: MomDose | null } {

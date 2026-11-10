@@ -21,7 +21,7 @@ import { runHandler } from "./stubs";
  */
 
 export const ME: Member = { email: "alex@example.com", role: "owner", display_name: "Alex", emoji: null, color: null };
-const MOM: Member = { email: "brittany@example.com", role: "member", display_name: "Brittany", emoji: null, color: null };
+const MOM: Member = { email: "rosa@example.com", role: "member", display_name: "Rosa", emoji: null, color: null };
 
 export type Call = { turn: number; name: string; input: unknown; ok: boolean; write: boolean; text: string; stubbed: boolean };
 

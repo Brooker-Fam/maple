@@ -133,7 +133,7 @@ export const firstTurnUndone: Check = {
 
 export function momDose(plan: string, minutesAgo: number, tol = 3): Check {
   return {
-    name: `Brittany's ${plan} logged ~${minutesAgo} min ago`,
+    name: `Rosa's ${plan} logged ~${minutesAgo} min ago`,
     run: (v) => {
       const made = v.after.doses.filter((d) => !d.deleted && !v.before.doses.some((b) => b.id === d.id));
       if (made.length !== 1) return `${made.length} new doses for her`;
