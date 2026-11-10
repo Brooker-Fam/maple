@@ -27,6 +27,7 @@ import {
   nursingRuns,
   openSegment,
   other,
+  ownFeed,
   partTotals,
   sideMinutesText,
   spanText,
@@ -271,7 +272,7 @@ Health alerts: when a result includes alerts, tell the user each one word for wo
 
 Duplicates: if a write returns created:false with possible_duplicate, nothing was saved. Ask the user whether it's the same event; only if it's a different one, call again with allow_duplicate: true. A result with deduped:true means it was already saved, so don't retry. If you didn't get a "Saved #…" line back, say it didn't save.
 
-Feeds: log_feed is for a feed that already finished; start_timer, switch_side, pause_nursing and stop_timer track one happening now (reopen_timer undoes a mistaken stop; update_entry with at fixes when a running one started). Sides are "left"/"right". When ${v.they}${v.verb("'s")} going back and forth between sides, switch_side {to:"both"} (or start_timer with back_and_forth and the side ${v.they} started on) stops tracking sides, so nothing needs calling at each change; "left" or "right" later tracks sides again, and log_feed takes both_minutes. Which side next: say maple_status's next_side (on a break mid-feed, back_on_side is the side to go back on now). The guidance behind it: "${NEXT_SIDE_NOTE}" The app takes "last time" as the side the last feed started on, or, within 30 minutes of a feed ending, the side ${v.they} finished on; after going back and forth it adds "or whichever side feels fuller". Stopping and starting again within 10 minutes counts as one feed, like a pause, and 3 or more feeds close together are a cluster (maple_status describes it). switch_side, pause_nursing and stop_timer take minutes_ago for when it really happened; fix_nursing_time moves one recorded moment of a feed (its start, a switch, a pause, going back on, the end), fixes which side a part was, or undoes the latest tap; nothing else moves. Its reply includes an undo.
+Feeds: log_feed is for a feed that already finished; start_timer, switch_side, pause_nursing and stop_timer track one happening now (reopen_timer undoes a mistaken stop; update_entry with at fixes when a running one started). Sides are "left"/"right". When ${v.they}${v.verb("'s")} going back and forth between sides, switch_side {to:"both"} (or start_timer with back_and_forth and the side ${v.they} started on) stops tracking sides, so nothing needs calling at each change; "left" or "right" later tracks sides again, and log_feed takes both_minutes. Which side next: say maple_status's next_side (on a break mid-feed, back_on_side is the side to go back on now). The guidance behind it: "${NEXT_SIDE_NOTE}" The app takes "last time" as the side the last feed started on, or, within 30 minutes of a feed ending, the side ${v.they} finished on; after going back and forth it adds "or whichever side feels fuller". Stopping and starting again within 10 minutes counts as one feed, like a pause, and 3 or more feeds close together are a cluster (maple_status describes it). switch_side, pause_nursing and stop_timer take minutes_ago for when it really happened; fix_nursing_time moves one recorded moment of a feed (its start, a switch, a pause, going back on, the end), fixes which side a part was, or undoes the latest tap; nothing else moves. Its reply includes an undo. A bottle given with nursing counts as part of that feed (an SNS logged up to 3 hours after it too), and the reply says so; when they say it was a feed of its own, update_entry it with details {own_feed: true} (log_feed takes own_feed), and tell them what the reply says it counts as now.
 
 Feeding plan: when the family shares their care team's feeding plan (a photo of the plan sheet, or in their own words), build it with set_feeding_plan. Copy only what's written, never fill in a number that isn't there, and ask about anything unclear first (which feeds take turns, when night starts and ends). Shorthand is the family's or their consultant's (s&s, EBM, q3h): when it could mean two things (s&s: a shield and syringe, or an SNS; q3h or 8-11-2-5: by the clock, or start to start as the plan counts), ask; never pick. ${planCare}. Read its read-back to them as it says (for a change, what changes) and save only on a clear yes. Once saved, the plan is the source, not a memory: if a memory holds their feeding plan, offer to turn it into the plan (then archive the memory). For "what do we do next?", "which feed?" or "when?", say the words of feeding_plan${memories === "chat" ? " or the [App] lines' Feeding plan line" : " or maple_status's feeding_plan"}, never a schedule of your own, and never suggest changing the plan: that's for their care team. The feeds or milk logged in the last 24 hours beside the plan's are context: say them as they are, never as behind or short. A phone's Today card may show a feed picked on that phone instead: when they say which one they're doing, go by that. When they say a feed going on or just logged is another of its feeds, update_entry its nursing entry with details {plan: that feed} (and shield if they say so), so Today and every phone read it so; never answer only in words. Starting one of its feeds: start_timer with plan. Doing another of its feeds next changes nothing in the plan: start_timer with plan when it begins (log_feed with plan once it's over), and the turns go on from it. Milk the plan gives by cup, spoon or finger is logged as a bottle with no via. A top-up or milk at the breast given late for an earlier feed: log_feed with top_up_of${memories === "chat" ? ", the feed's [entry #…] in the Feeding plan line when it says a step wasn't logged" : " (feeding_plan's or maple_status's top_up_of)"}.
 
@@ -653,9 +654,11 @@ function resolveSpan(a: TimeArgs, durationMin: number | null, ctx: Ctx, assumed:
 /** "wet + dirty diaper (mustard & seedy, big)", "breastfeed (L 12m, R 8m, started left)". */
 function phrase(e: Entry, ctx: Pick<Ctx, "now" | "fam" | "baby">): string {
   const { title, detail: said } = describeEntry(e, { now: ctx.now, words: wordsOf(ctx) });
-  // A nursing feed with the nipple shield says so, unless the log's own words already do.
+  // A nursing feed with the nipple shield says so, unless the log's own words already do; a bottle said to be a feed of
+  // its own says that (so an edit that makes it one reads as one: "now SNS (1.52 oz, formula, a feed of its own)").
   const shield = e.kind === "feed" && e.data.method === "breast" && e.data.shield && !/shield/i.test(said);
-  const detail = shield ? [said, "with the nipple shield"].filter(Boolean).join(" · ") : said;
+  const own = e.kind === "feed" && ownFeed(e.data);
+  const detail = shield ? [said, "with the nipple shield"].filter(Boolean).join(" · ") : own ? [said, "a feed of its own"].filter(Boolean).join(" · ") : said;
   const d = detail ? ` (${detail.replace(/ · /g, ", ")})` : "";
   if (e.active) return `${TIMER_LABEL[e.kind as TimerKind] ?? e.kind} timer${d}`;
   switch (e.kind) {
@@ -1669,6 +1672,8 @@ type FeedArgs = TimeArgs & {
   plan?: string | null;
   /** Bottle: a nursing entry of the feed it tops up, given late (feed.ts TOP_UP_LINK_MS). */
   top_up_of?: number | null;
+  /** Bottle: a feed of its own, as they said: never counted with the feed before it (feed.ts ownFeed). */
+  own_feed?: boolean | null;
   note?: string | null;
 };
 
@@ -1750,12 +1755,58 @@ function retagLine(e: FeedEntry, planFeed: PlanFeed | null, shield: boolean | nu
   return ` ${what}, update_entry ${e.id} with details {${details}}${also}.`;
 }
 
-function topUpLine(run: NursingRun, ctx: Ctx, e: Entry, part: OwedPart["part"] | null = null, at: number | null = null): string {
+function topUpLine(run: NursingRun, ctx: Ctx, e: Entry, part: OwedPart["part"] | null = null, at: number | null = null, hint = true): string {
   const when = whenText(new Date(at ?? run.start), ctx);
-  if (e.kind === "feed" && atBreast(e as FeedEntry)) return `Counted with the feed that began at ${when}: milk at the breast, part of that feed, not a feed of its own.`;
+  // The way out, every time (unless the plan's line after it says it): a bottle the time rules put with a feed stays
+  // there until it's said to be a feed of its own (an SNS logged after a feed is the usual one: a feed at the breast
+  // with only the SNS logged).
+  const own = hint ? ` If they say it was a feed of its own, update_entry #${e.id} with details {own_feed: true}.` : "";
+  if (e.kind === "feed" && atBreast(e as FeedEntry)) return `Counted with the feed that began at ${when}: milk at the breast, part of that feed, not a feed of its own.${own}`;
   // The milk at the breast the plan owed, or the feed's bottle after the breast offered only if she wants it: never a top-up.
-  if (part === "milk at the breast" || part === "bottle") return `Counted with the feed that began at ${when}: part of that feed, not a feed of its own.`;
-  return `Counted as a top-up to the feed that began at ${when}: part of that feed, not a feed of its own.`;
+  if (part === "milk at the breast" || part === "bottle") return `Counted with the feed that began at ${when}: part of that feed, not a feed of its own.${own}`;
+  return `Counted as a top-up to the feed that began at ${when}: part of that feed, not a feed of its own.${own}`;
+}
+
+/** The feed a saved bottle counts with: the nursing feed it's part of, or the bottle feed it's more of; null for a feed of its own. */
+type CountedWith = { run: NursingRun; start: number } | { run: null; start: number; bottle: FeedEntry };
+
+async function countedWith(ctx: Ctx, e: Entry): Promise<CountedWith | null> {
+  if (e.kind !== "feed" || e.data.method !== "bottle") return null;
+  const fed = await toppedUpFeed(ctx, e);
+  if (fed) return { run: fed, start: fed.start };
+  const same = await sameBottleFeed(ctx, e);
+  return same ? { run: null, start: same.start, bottle: same.bottle } : null;
+}
+
+/**
+ * How a saved bottle counts, for update_entry's reply: with the nursing feed it's part of (topUpLine), with the bottle
+ * feed it's more of, or as a feed of its own; null for anything that isn't a bottle. `before`: what it counted with
+ * before the change, so a bottle that no longer goes with a feed says so, and one that still does says that plainly
+ * (never "done" in words while the log still counts it with that feed).
+ */
+async function bottleCount(ctx: Ctx, e: Entry, before: CountedWith | null): Promise<{ line: string; json: Record<string, unknown> } | null> {
+  if (e.kind !== "feed" || e.data.method !== "bottle") return null;
+  const now = await countedWith(ctx, e);
+  if (now) {
+    const id = now.run ? now.run.entries[0].id : now.bottle.id;
+    const json = { counted_with: { id, started_local: localWhen(new Date(now.start), ctx) } };
+    if (now.run) return { line: topUpLine(now.run, ctx, e), json };
+    return {
+      line: `Counted with the bottle feed that began at ${whenText(new Date(now.start), ctx)}: more of that feed, not a feed of its own. If they say it was a feed of its own, update_entry #${e.id} with details {own_feed: true, plan: null}.`,
+      json,
+    };
+  }
+  const json = { feed_of_its_own: true };
+  if (before) return { line: `A feed of its own now, no longer part of the feed that began at ${whenText(new Date(before.start), ctx)}: it counts as a feed.`, json };
+  return { line: ownFeed(e.data) ? "A feed of its own, as they said: it counts as a feed." : "It counts as a feed of its own.", json };
+}
+
+/** Its stored fields in one string (times, data, note; keys in order), so an edit that changed nothing can say so. */
+function storedKey(e: Entry): string {
+  const sorted = (v: unknown): unknown =>
+    Array.isArray(v) ? v.map(sorted) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, x]) => [k, sorted(x)])) : v;
+  const at = (t: string | null) => (t ? Date.parse(t) : null);
+  return JSON.stringify([at(e.started_at), at(e.ended_at), e.note ?? null, sorted(e.data)]);
 }
 
 async function doFeed(a: FeedArgs, ctx: Ctx, w: WriteOpts): Promise<Saved> {
@@ -1785,6 +1836,11 @@ async function doFeed(a: FeedArgs, ctx: Ctx, w: WriteOpts): Promise<Saved> {
       throw new ToolError(`breastmilk_amount and formula_amount split a mixed bottle, but milk is ${a.milk}. Give milk "mixed" (or leave it out), or drop the split.`);
     }
     const milk = split ? "mixed" : a.milk ?? undefined;
+    // A feed of its own, as they said: it names no feed, and the plan takes it as no feed's part.
+    const own = a.own_feed === true;
+    if (own && a.top_up_of != null) {
+      throw new ToolError("own_feed (a feed of its own) and top_up_of (part of that feed) say opposite things: give one or the other. Nothing was saved.");
+    }
     const named = await topUpTarget(a.top_up_of, ctx);
     const { start } = resolveSpan({ at: a.at, minutes_ago: a.minutes_ago, ended_at: a.ended_at, ended_minutes_ago: a.ended_minutes_ago }, null, ctx, assumed);
     const bottle = { method: "bottle", amount_ml, milk, via: a.via ?? undefined, breastmilk_ml, formula_ml };
@@ -1793,7 +1849,7 @@ async function doFeed(a: FeedArgs, ctx: Ctx, w: WriteOpts): Promise<Saved> {
     // before still owes (top_up_of), else a bottle-led feed's bottle still to give or short (the night's pump, then its
     // bottle, and formula to finish: plan). Read without this bottle's own earlier save, so a retry gets the same link.
     const link =
-      named == null && feedingPlanOf(ctx.baby.settings)
+      !own && named == null && feedingPlanOf(ctx.baby.settings)
         ? await planBottleFor(ctx, start, { atBreast: a.via === "syringe" || a.via === "sns", tag: planFeed?.id, data: bottle, skip: await bottleTwins(ctx, start, w) })
         : { owed: null, led: null };
     const { owed, led } = link;
@@ -1807,6 +1863,7 @@ async function doFeed(a: FeedArgs, ctx: Ctx, w: WriteOpts): Promise<Saved> {
         ...bottle,
         ...(planId ? { plan: planId } : {}),
         ...(topUpOf != null ? { top_up_of: topUpOf } : {}),
+        ...(own ? { own_feed: true } : {}),
       },
       note: a.note,
       ...w,
@@ -1818,10 +1875,12 @@ async function doFeed(a: FeedArgs, ctx: Ctx, w: WriteOpts): Promise<Saved> {
     // A bottle-led plan feed's: more of the bottle feed begun before it by the log's count (its formula to finish), or its first bottle.
     const same = led && !fed && core.status !== "duplicate" ? await sameBottleFeed(ctx, core.entry) : null;
     const lines = fed
-      ? [topUpLine(fed, ctx, core.entry, linked ? owed!.part : null, linked ? namedAt(owed!.view) : null), ...(linked ? [owedPartLine(owed!, ctx.tz)] : [])]
+      ? [topUpLine(fed, ctx, core.entry, linked ? owed!.part : null, linked ? namedAt(owed!.view) : null, !linked), ...(linked ? [owedPartLine(owed!, ctx.tz)] : [])]
       : led && core.status !== "duplicate"
         ? [ledBottleLine(led, !!same, ctx.tz)]
-        : [];
+        : own && core.status !== "duplicate"
+          ? ["A feed of its own, as they said: it counts as a feed."]
+          : [];
     return finish(ctx, core, assumed, {
       lines,
       extra: {
@@ -1829,12 +1888,13 @@ async function doFeed(a: FeedArgs, ctx: Ctx, w: WriteOpts): Promise<Saved> {
         ...(fed ? { top_up_of: { id: fed.entries[0].id, started_local: localWhen(new Date(fed.start), ctx) } } : {}),
         ...(led && core.status !== "duplicate" ? { plan_feed: { id: led.feed.id, name: led.feed.name } } : {}),
         ...(same ? { same_feed_as: { id: same.bottle.id, started_local: localWhen(new Date(same.start), ctx) } } : {}),
+        ...(own && core.status !== "duplicate" ? { own_feed: true } : {}),
       },
     });
   }
 
-  if (a.amount != null || a.milk || a.via || a.breastmilk_amount != null || a.formula_amount != null || a.top_up_of != null) {
-    throw new ToolError("amount, milk, the split, via and top_up_of are for bottles (an SNS or syringe amount is a bottle with via \"sns\" or \"syringe\"). For breastfeeding give left_minutes, right_minutes and/or both_minutes.");
+  if (a.amount != null || a.milk || a.via || a.breastmilk_amount != null || a.formula_amount != null || a.top_up_of != null || a.own_feed) {
+    throw new ToolError("amount, milk, the split, via, top_up_of and own_feed are for bottles (an SNS or syringe amount is a bottle with via \"sns\" or \"syringe\"). For breastfeeding give left_minutes, right_minutes and/or both_minutes.");
   }
   const shield = a.shield ?? planShield(planFeed);
   const left = a.left_minutes ?? 0;
@@ -3738,6 +3798,10 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
     shield: z.boolean().nullish().describe("Breast: with a nipple shield (a plan feed's own comes with plan)."),
     plan: z.string().max(60).nullish().describe("The feeding plan's feed, by id or name."),
     top_up_of: z.number().int().positive().nullish().describe("Bottle: a late top-up's nursing feed id (feeding_plan's top_up_of)."),
+    own_feed: z
+      .boolean()
+      .nullish()
+      .describe("Bottle: true when they say it was a feed of its own."),
     at: fields.at("When the feed STARTED"),
     minutes_ago: fields.minutesAgo("How many minutes ago the feed STARTED"),
     ended_minutes_ago: fields.endedMinutesAgo(),
@@ -4892,7 +4956,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
   // ── fixing things ─────────────────────────────────────────────────────
 
   const DETAIL_KEYS: Record<EntryKind, string[]> = {
-    feed: ["method", "left_sec", "right_sec", "both_sec", "first_side", "last_side", "amount_ml", "milk", "breastmilk_ml", "formula_ml", "via", "shield", "plan", "top_up_of"],
+    feed: ["method", "left_sec", "right_sec", "both_sec", "first_side", "last_side", "amount_ml", "milk", "breastmilk_ml", "formula_ml", "via", "shield", "plan", "top_up_of", "own_feed"],
     pump: ["left_ml", "right_ml", "total_ml"],
     diaper: ["pee", "poop", "color", "texture", "size", "rash"],
     sleep: ["place"],
@@ -4912,7 +4976,7 @@ export function registerMapleTools(server: McpServer, copy: ToolCopy = FAMILY_ON
     {
       title: "Fix a logged entry",
       description: `Use this to fix an entry by id (from a log result or list_entries): its time (at / minutes_ago), end (ended_at / ended_minutes_ago / duration_minutes), note, or details. details holds kind-specific fields in STORAGE units; set a field to null to remove it:
-feed: method (breast|bottle), left_sec, right_sec, both_sec (seconds; both = going back and forth, sides not tracked), first_side/last_side ("left"|"right"), amount_ml, milk (breastmilk|formula|mixed), breastmilk_ml/formula_ml (mixed split), via (bottle|paced|sns|syringe), shield (nursing: a nipple shield), plan (its feeding plan feed), top_up_of (a late top-up's nursing feed id)
+feed: method (breast|bottle), left_sec, right_sec, both_sec (seconds; both = going back and forth, sides not tracked), first_side/last_side ("left"|"right"), amount_ml, milk (breastmilk|formula|mixed), breastmilk_ml/formula_ml (mixed split), via (bottle|paced|sns|syringe), shield (nursing: a nipple shield), plan (its feeding plan feed), top_up_of (a late top-up's nursing feed id), own_feed (bottle: true = a feed of its own)
 diaper: pee, poop (true/false), color (${STOOL_COLORS.join("|")}), texture, size, rash
 sleep: place · growth: weight_g, length_cm, head_cm, at (home|doctor) · temperature: temp_c (°C), method
 vitals: heart_bpm, resp_rate, spo2, jaundice · medicine: name, dose · pump: left_ml, right_ml, total_ml
@@ -4968,10 +5032,20 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
         // The feeding plan's feed by its id or name, and a late top-up's feed, checked as log_feed checks them (null removes).
         if (cur.kind === "feed" && typeof data.plan === "string") data.plan = planFeedArg(ctx, data.plan)?.id ?? null;
         if (cur.kind === "feed" && data.top_up_of != null) data.top_up_of = (await topUpTarget(Number(data.top_up_of), ctx)) ?? null;
+        // A feed of its own: a bottle's, only ever true (false or null puts it back to the usual rules), naming no feed.
+        if (cur.kind === "feed" && "own_feed" in data) {
+          const on = data.own_feed === true || data.own_feed === "true";
+          if (on && (data.method ?? cur.data.method) !== "bottle") throw new ToolError(`#${cur.id} is nursing: own_feed is for a bottle (an SNS or syringe too). Nothing was changed.`);
+          if (on && data.top_up_of != null) throw new ToolError("own_feed (a feed of its own) and top_up_of (part of that feed) say opposite things: give one or the other. Nothing was changed.");
+          data.own_feed = on ? true : null;
+          if (on) data.top_up_of = null;
+        } else if (cur.kind === "feed" && data.top_up_of != null) data.own_feed = null;
       }
       const note = a.note === undefined || a.note === null ? undefined : a.note;
       if (!start && !end && !data && note === undefined) throw new ToolError("Nothing to change: give a new time, end, note or details.");
       const before = phrase(cur, ctx);
+      // What a bottle counted with before (a nursing feed, a bottle feed), so the reply says what changed for it.
+      const wasWith = await countedWith(ctx, cur);
       let updated: Entry;
       let moved: TimerResponse | null = null;
       if (start && !end && isTimedFeed(cur)) {
@@ -4986,8 +5060,14 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
       const token = moved && !moved.noop ? undoToken(moved) : null;
       const { alerts, emergencySigns } = await entryAlerts(updated, ctx);
       const timeline = isTimedFeed(updated) ? partsOf(updated, ctx) : null;
+      // Saved the same as it was (a detail it already had, or one that changes nothing): said so, never "Updated".
+      const unchanged = storedKey(updated) === storedKey(cur);
+      const count = await bottleCount(ctx, updated, wasWith);
       const lines = [
-        `Updated #${updated.id}: now ${phrase(updated, ctx)} at ${whenText(updated.started_at, ctx)}${updated.ended_at ? ` until ${formatTime(updated.ended_at, ctx.tz)}` : ""} (was: ${before}, ${whenText(cur.started_at, ctx)}).`,
+        unchanged
+          ? `Nothing changed: #${updated.id} is still ${phrase(updated, ctx)} at ${whenText(updated.started_at, ctx)}${updated.ended_at ? ` until ${formatTime(updated.ended_at, ctx.tz)}` : ""}.`
+          : `Updated #${updated.id}: now ${phrase(updated, ctx)} at ${whenText(updated.started_at, ctx)}${updated.ended_at ? ` until ${formatTime(updated.ended_at, ctx.tz)}` : ""} (was: ${before}, ${whenText(cur.started_at, ctx)}).`,
+        ...(count ? [count.line] : []),
         ...(timeline && timeline.length > 1 ? [updated.active ? nowText(updated as FeedEntry, ctx) : timelineText(updated as FeedEntry, ctx)] : []),
         ...(moved ? napLines(moved, ctx) : []),
         ...(token ? [`To put the start back: ${undoHint(token)}.`] : []),
@@ -4995,9 +5075,11 @@ E.g. "that diaper was actually poopy too" → details {poop: true}; "the feed st
         ...alertLines(sortAlerts(alerts), { emergencySigns }, voiceOf(ctx)),
       ];
       return ok(lines.join("\n"), {
-        updated: true,
+        updated: !unchanged,
+        ...(unchanged ? { unchanged: true } : {}),
         ...entryJson(updated, ctx),
         details: compactData(updated, ctx.now),
+        ...(count ? count.json : {}),
         ...(timeline ? { timeline: timelineJson(timeline, ctx) } : {}),
         ...(moved?.nap ? { nap: { id: moved.nap.entry.id, ended_local: moved.nap.entry.ended_at ? localWhen(moved.nap.entry.ended_at, ctx) : null } } : {}),
         alerts,

@@ -550,6 +550,9 @@ export async function updateEntry(fam: FamilyRef, id: number, patch: EntryPatch,
       delete mergedData.breastmilk_ml;
       delete mergedData.formula_ml;
     }
+    // A feed of its own names no feed, and a feed named makes it part of one: the one this edit said wins.
+    if (given("top_up_of") && !sent("own_feed")) delete mergedData.own_feed;
+    if (patch.data.own_feed === true) delete mergedData.top_up_of;
   }
   // Editing a finished nursing session's side minutes replaces its segments.
   if (

@@ -68,6 +68,8 @@ export type ChatToolOutput = {
   web?: ChatWebSearch;
   /** A write's read-back (confirm_needed): nothing saved yet, so its line shows without a check. */
   pending?: true;
+  /** A write that left the entry as it was (update_entry's unchanged): its "Nothing changed" line shows without a check. */
+  unchanged?: true;
 };
 
 /** A web page a search found: its title, link and site ("healthychildren.org"). */

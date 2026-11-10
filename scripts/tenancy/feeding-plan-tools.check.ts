@@ -707,7 +707,7 @@ async function main() {
       const nursingId = Number(fed.json.id);
       const late = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 30, unit: "ml", via: "paced" });
       ok(late.text.includes("Counted as a top-up to the feed that began at 10:40 AM today: part of that feed, not a feed of its own."), late.text);
-      ok(late.text.includes(`The feeding plan's 10:40 AM feed ("Nurse, top up") still had its top-up to log, so this was saved with that feed [entry #${nursingId}]. If it was a feed of its own, update_entry it with details {top_up_of: null}.`), late.text);
+      ok(late.text.includes(`The feeding plan's 10:40 AM feed ("Nurse, top up") still had its top-up to log, so this was saved with that feed [entry #${nursingId}]. If they say it was a feed of its own, update_entry it with details {own_feed: true}.`), late.text);
       eq((await sql(`SELECT (data->>'top_up_of')::int AS of FROM maple_entries WHERE id = $1`, [Number(late.json.id)]))[0].of, nursingId, "saved with that feed");
       const status = await tool(alpha.owner, A, "maple_status");
       ok(/^Last feed: nursed at 10:40 AM today \(1h 20m ago\): L 10m, R 10m, started on the left, with a 1\.01 oz \(30 ml\) top-up\.$/m.test(status.text), status.text);
@@ -737,6 +737,60 @@ async function main() {
       const later = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 30, unit: "ml", via: "paced" });
       ok(!/still had its/.test(later.text) && !/Counted as a top-up/.test(later.text) && !/feeding plan/.test(later.text), later.text);
       eq((await sql(`SELECT data ? 'plan' AS has FROM maple_entries WHERE id = $1`, [Number(later.json.id)]))[0].has, false, "no plan feed by day");
+      await wipe();
+    });
+
+    await test(`${shape}: an SNS logged after a nursing feed is that feed's until they say it was a feed of its own; own_feed makes it one for the log and the plan, and every reply says how it counts`, async () => {
+      const wipe = () => sql(`UPDATE maple_entries SET deleted_at = NOW() WHERE family_id = $1 AND deleted_at IS NULL`, [A]);
+      const dataOf = async (id: number) => (await sql(`SELECT data FROM maple_entries WHERE id = $1`, [id]))[0].data as Record<string, unknown>;
+      const status = async () => (await tool(alpha.owner, A, "maple_status")).text;
+      await wipe();
+      // "Nurse + SNS" from 10:40 to 10:52; at 11:40, 48 minutes on, 45 ml of formula in the SNS: a feed of its own, with
+      // only the SNS logged (an invented day, as the rest).
+      const fed = await tool(alpha.owner, A, "log_feed", { method: "breast", left_minutes: 12, first_side: "left", plan: "Nurse + SNS", at: "10:40am" });
+      const nursingId = Number(fed.json.id);
+      const sns = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 45, unit: "ml", milk: "formula", via: "sns", at: "11:40am" });
+      const id = Number(sns.json.id);
+      ok(sns.text.includes("Counted with the feed that began at 10:40 AM today: milk at the breast, part of that feed, not a feed of its own.\n"), sns.text);
+      // The way out is the plan's line's (said once): own_feed, never top_up_of: null, which leaves an SNS with that feed.
+      ok(sns.text.includes(`so this was saved with that feed [entry #${nursingId}]. If they say it was a feed of its own, update_entry it with details {own_feed: true}.`), sns.text);
+      eq(sns.text.match(/own_feed: true/g)?.length, 1, "the way out, once");
+      ok(/^Today so far: 1 feed \(1\.52 oz \(45 ml\) in the SNS\)/m.test(await status()), "one feed, the SNS with it");
+      // Taking top_up_of off isn't it: the reply says it still counts with that feed, and how to make it a feed of its own.
+      const off = await tool(alpha.owner, A, "update_entry", { id, details: { top_up_of: null } });
+      ok(!off.error && off.text.includes(`Counted with the feed that began at 10:40 AM today: milk at the breast, part of that feed, not a feed of its own. If they say it was a feed of its own, update_entry #${id} with details {own_feed: true}.`), off.text);
+      eq([off.json.updated, (off.json.counted_with as { id?: number } | undefined)?.id], [true, nursingId]);
+      // The same again changes nothing, and says so (the chat shows it without a check): never "Updated".
+      const again = await tool(alpha.owner, A, "update_entry", { id, details: { top_up_of: null } });
+      ok(!again.error && again.text.startsWith(`Nothing changed: #${id} is still SNS (1.52 oz, formula) at 11:40 AM today.\n`), again.text);
+      eq([again.json.updated, again.json.unchanged], [false, true]);
+      // own_feed: a feed of its own, for the log's count, Last fed and the plan (its next feed counts from it).
+      const own = await tool(alpha.owner, A, "update_entry", { id, details: { own_feed: true } });
+      ok(!own.error && own.text.startsWith(`Updated #${id}: now SNS (1.52 oz, formula, a feed of its own) at 11:40 AM today (was: SNS (1.52 oz, formula), 11:40 AM today).`), own.text);
+      ok(own.text.includes("A feed of its own now, no longer part of the feed that began at 10:40 AM today: it counts as a feed."), own.text);
+      eq([own.json.feed_of_its_own, (await dataOf(id)).own_feed], [true, true]);
+      const after = await status();
+      ok(/^Today so far: 2 feeds\b/m.test(after) && /^Last feed: 1\.52 oz \(45 ml\) SNS feed of formula at 11:40 AM today \(20m ago\)\.$/m.test(after), after);
+      ok(/^Feeding plan: next is "Nurse, top up".*Next feed 2:10 PM–3:10 PM/m.test(after), after);
+      // Undone (null), it's with that feed again; a feed named (top_up_of) takes own_feed off, and the other way round.
+      const back = await tool(alpha.owner, A, "update_entry", { id, details: { own_feed: null } });
+      ok(!back.error && back.text.includes("Counted with the feed that began at 10:40 AM today") && !("own_feed" in (await dataOf(id))), back.text);
+      await tool(alpha.owner, A, "update_entry", { id, details: { own_feed: true } });
+      const named = await tool(alpha.owner, A, "update_entry", { id, details: { top_up_of: nursingId } });
+      eq([named.error, "own_feed" in (await dataOf(id)), (await dataOf(id)).top_up_of], [false, false, nursingId], "a feed named: no longer its own");
+      await tool(alpha.owner, A, "update_entry", { id, details: { own_feed: true } });
+      eq([(await dataOf(id)).own_feed, "top_up_of" in (await dataOf(id))], [true, false], "its own: no feed named");
+      // Said up front, log_feed saves it so, with no plan link; what can't go together is refused, nothing saved.
+      const alone = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 30, unit: "ml", milk: "formula", via: "sns", own_feed: true, at: "11:50am" });
+      ok(!alone.error && alone.text.includes("A feed of its own, as they said: it counts as a feed.") && !/Counted with|still had its/.test(alone.text), alone.text);
+      const aloneData = await dataOf(Number(alone.json.id));
+      eq([aloneData.own_feed, "top_up_of" in aloneData, "plan" in aloneData, alone.json.own_feed], [true, false, false, true]);
+      const both = await tool(alpha.owner, A, "log_feed", { method: "bottle", amount: 30, unit: "ml", own_feed: true, top_up_of: nursingId });
+      ok(both.error && /say opposite things/.test(both.text), both.text);
+      const nursing = await tool(alpha.owner, A, "log_feed", { method: "breast", left_minutes: 5, own_feed: true });
+      ok(nursing.error && /own_feed are for bottles/.test(nursing.text), nursing.text);
+      const onNursing = await tool(alpha.owner, A, "update_entry", { id: nursingId, details: { own_feed: true } });
+      ok(onNursing.error && /own_feed is for a bottle/.test(onNursing.text), onNursing.text);
       await wipe();
     });
 

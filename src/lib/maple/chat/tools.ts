@@ -156,6 +156,7 @@ export function toOutput(res: CallToolResult, opts: { write: boolean; mom: boole
     ...(memory && !res.isError ? { memory } : {}),
     ...(typeof invite?.email === "string" && typeof invite.url === "string" && typeof invite.emailed === "boolean" ? { invite: { email: invite.email, url: invite.url, emailed: invite.emailed } } : {}),
     ...(opts.write && !res.isError && sc.confirm_needed === true ? { pending: true as const } : {}),
+    ...(opts.write && !res.isError && sc.unchanged === true ? { unchanged: true as const } : {}),
   };
 }
 

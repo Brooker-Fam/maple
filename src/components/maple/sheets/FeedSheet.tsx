@@ -130,6 +130,13 @@ import {
  * With a plan saved, a nursing feed or a bottle on its own says which of the
  * plan's feeds it was ("Plan feed", data.plan): a feed Maple read as the wrong
  * kind is put right for every phone, since Today's card reads it first.
+ *
+ * Any other bottle the log would count with a nursing feed (given during it or
+ * just after, or an SNS logged up to 3 hours after it: feed.ts topUpRunFor),
+ * new or saved, says so under When, with "A feed of its own" above that line:
+ * on, it's saved as one (data.own_feed, feed.ts ownFeed), whenever it was
+ * given, and the line says which feed it isn't part of; off again, the time
+ * rules decide. A saved one keeps the switch while it's on, near a feed or not.
  */
 
 type Milk = NonNullable<FeedData["milk"]>;
@@ -207,6 +214,10 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   // Either of those said to be "A feed of its own" instead (its amount is more than the plan gives for that part): a
   // bottle on its own, with no feed or plan feed named.
   const [own, setOwn] = useState(false);
+  // Any other bottle said to be a feed of its own (data.own_feed): never part of the feed the time rules would put it
+  // with, whatever its time. A saved one opens as it was saved.
+  const origAlone = e?.data.method === "bottle" && e.data.own_feed === true;
+  const [alone, setAlone] = useState(origAlone);
   const atBreastForm = forBreast && !own;
   const lastBottle = useMemo(
     () => state?.entries.find((x): x is EntryOf<"feed"> => x.kind === "feed" && x.data.method === "bottle" && x.id !== e?.id && !!atBreastOf(x.data) === atBreastForm) ?? null,
@@ -469,7 +480,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const [breastPart, setBreastPart] = useState<number | null>(() => (e?.data.method === "bottle" ? shownMl(e.data.breastmilk_ml) : null));
   const [formulaPart, setFormulaPart] = useState<number | null>(() => (e?.data.method === "bottle" ? shownMl(e.data.formula_ml) : null));
   const [when, setWhen] = useState<Date | null>(() => (e ? new Date(e.started_at) : fromPreset));
-  const fieldsDirty = useDraftChanged({ manualTimeInvalid, method, when, note: notePatch.note, amount, milk, via, breastPart, formulaPart, left, right, both, first, range, shield, milkOn, milkVia, milkAmount, milkKind, planPick, own, invalid: checks.invalid });
+  const fieldsDirty = useDraftChanged({ manualTimeInvalid, method, when, note: notePatch.note, amount, milk, via, breastPart, formulaPart, left, right, both, first, range, shield, milkOn, milkVia, milkAmount, milkKind, planPick, own, alone, invalid: checks.invalid });
   const amountMl = !touched.amount ? initialAmountMl : amountUnit.toMl(amount);
   const partMl = (v: number | null) => amountUnit.toMl(v);
   const hadSplit = e?.data.method === "bottle" && (e.data.breastmilk_ml != null || e.data.formula_ml != null);
@@ -527,7 +538,9 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   // Logged late, milk at the breast is the feed's before it as feed.ts reads it: an SNS always, a syringe a plan's step gave.
   const lateVia = breastVia === "sns" || (breastVia === "syringe" && !!planPick) ? breastVia : null;
   // A feed of its own names no feed: only the time rule (during a feed, or just after) makes it part of one.
-  const topUpOf = method === "bottle" ? topUpRunFor(otherRuns, (when ?? now()).getTime(), now(), own ? undefined : linkTo, lateVia) : null;
+  const joinsRun = method === "bottle" ? topUpRunFor(otherRuns, (when ?? now()).getTime(), now(), own ? undefined : linkTo, lateVia) : null;
+  // Said to be a feed of its own (any bottle but a part opened for its feed): with no feed, whatever the time rules say.
+  const topUpOf = alone ? null : joinsRun;
   const bottleWord = topUpOf ? "top-up" : "bottle";
   const target = feedTargetOf(state?.baby.settings);
   // Its amount, quick amounts and button said as milk at the breast ("In the syringe", "Log 20 ml in the syringe"):
@@ -644,6 +657,7 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
               // it's said to be a feed of its own.
               ...(linkTo && !own && topUpOf?.entries.some((x) => x.id === linkTo) ? { top_up_of: linkTo } : {}),
               ...(planPick ? { plan: planPick } : {}),
+              ...(alone ? { own_feed: true } : {}),
             },
             note: note.trim() || null,
           },
@@ -746,6 +760,11 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
       if (touched.via) data.via = via ?? null;
       // Which of the plan's feeds it was (null: not said, read from what was logged).
       if (planChanged) data.plan = planPick ?? null;
+      // A feed of its own, or back to the time rules; on, the feed it named goes (sent, so Undo names it again).
+      if (alone !== origAlone) {
+        data.own_feed = alone ? true : null;
+        if (alone && e.data.top_up_of != null) data.top_up_of = null;
+      }
       // The split goes whenever it, the amount or the milk changed on a bottle that has one (so Undo can put it back).
       if (touched.split || ((touched.amount || touched.milk) && hadSplit)) {
         data.breastmilk_ml = splitShown ? partMl(breastPart) ?? null : null;
@@ -920,6 +939,10 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   // A feed's part opened for its feed: no Breast or Bottle to choose, and it says which feed it's with, on top (until
   // it's said to be a feed of its own).
   const asPart = partOpened && !own;
+  // "A feed of its own" for any other bottle the log would count with a nursing feed (or one saved as its own): never a
+  // part opened for its feed (its own switch is the plan's, ownRow), never for a viewer.
+  const aloneShown = method === "bottle" && !partOpened && !readOnly && (alone || origAlone || !!joinsRun);
+  const joinClock = joinsRun ? clock(joinsRun.start) : null;
   // Which of the plan's feeds it was: a nursing feed, or a bottle on its own (a feed's part goes with its feed).
   const planFeedShown = !!plan && !running && (method === "breast" || (!breastVia && !topUpOf));
   const changedBy = liveFeed ? memberLabel(liveFeed.updated_by) : null;
@@ -1409,11 +1432,21 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
               {(atBreastShown || (own && forBreast)) && milkSection}
               {/* Started over when a feed of its own moves the time to now (or back), so it shows what's set. */}
               <WhenField key={own ? "own" : "part"} value={when} onChange={setWhen} onInvalidChange={setManualTimeInvalid} tz={tz} />
-              {!asPart && topUpOf && (
+              {aloneShown && (
+                <div className="-mt-2 flex min-h-[44px] items-center justify-between gap-4">
+                  <Label className="mb-0">A feed of its own</Label>
+                  <FormSwitch checked={alone} onChange={setAlone} label="A feed of its own" />
+                </div>
+              )}
+              {!asPart && (topUpOf || (alone && aloneShown)) && (
                 <p className={cx(tone.muted, "-mt-2 text-[13px] leading-snug")}>
-                  {breastVia
-                    ? `Milk at the breast with the ${feedClock} feed: part of that feed, not a feed of its own.`
-                    : `A top-up for the ${feedClock} feed: part of that feed, not a feed of its own.`}
+                  {topUpOf
+                    ? breastVia
+                      ? `Milk at the breast with the ${feedClock} feed: part of that feed, not a feed of its own.`
+                      : `A top-up for the ${feedClock} feed: part of that feed, not a feed of its own.`
+                    : joinClock
+                      ? `A feed of its own, not part of the ${joinClock} feed.`
+                      : "A feed of its own."}
                 </p>
               )}
               {!(asPart && atBreastShown) && !(own && forBreast) && (

@@ -44,6 +44,86 @@ export function topUpCases({ fixture, freshState, record, writes, assert }) {
         assert.deepEqual(f.errors, []);
       } finally { await f.close(); }
     }],
+    ["An SNS logged after a feed says it's that feed's, and A feed of its own saves it as one", async () => {
+      const state = freshState();
+      // 8:00–8:15 AM, Left then Right; it's 9:30, and the SNS is logged now: 75 minutes on, an SNS goes with that feed.
+      state.entries = [nursing(51, "2026-10-28T12:00:00.000Z", "2026-10-28T12:08:00.000Z", "2026-10-28T12:15:00.000Z")];
+      const f = await fixture({ state, entryResponse: reply });
+      try {
+        await metric(f);
+        const form = await openBottle(f);
+        await form.getByRole("textbox", { name: "millilitres", exact: true }).fill("45");
+        const own = form.getByRole("switch", { name: "A feed of its own", exact: true });
+        assert.equal(await own.count(), 0, "a bottle on its own then: nothing to say");
+        await form.getByRole("button", { name: "SNS at the breast", exact: true }).click();
+        assert.match(await form.textContent(), /Milk at the breast with the 8:00\sAM feed: part of that feed, not a feed of its own\./);
+        assert.equal(await own.getAttribute("aria-checked"), "false");
+        const before = await own.boundingBox();
+        await own.click();
+        assert.equal(await own.getAttribute("aria-checked"), "true");
+        const after = await own.boundingBox();
+        assert(before && after && Math.abs(after.y - before.y) < 2, `the switch stays put (${before?.y} → ${after?.y})`);
+        assert.match(await form.textContent(), /A feed of its own, not part of the 8:00\sAM feed\./);
+        assert.doesNotMatch(await form.textContent(), /part of that feed/);
+        await form.getByRole("button", { name: "Log 45 ml now", exact: true }).click();
+        await form.waitFor({ state: "hidden" });
+        assert.deepEqual(writes(f)[0]?.body.data, { method: "bottle", amount_ml: 45, via: "sns", own_feed: true });
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["A saved SNS counted with a feed is made a feed of its own from its form, and back", async () => {
+      const fed = nursing(52, "2026-10-28T12:00:00.000Z", "2026-10-28T12:08:00.000Z", "2026-10-28T12:15:00.000Z");
+      const sns = (data = {}) => record(53, "feed", { method: "bottle", amount_ml: 45, milk: "formula", via: "sns", ...data }, "2026-10-28T13:00:00.000Z");
+      const patched = ({ route, req, records }) => route.fulfill({ json: { entry: { ...records.find((e) => e.id === 53), updated_at: "2026-10-28T13:31:00.000Z" } } });
+      let state = freshState();
+      state.entries = [sns(), fed];
+      let f = await fixture({ state, records: state.entries, entryResponse: patched });
+      try {
+        await metric(f);
+        await f.page.goto("https://first-use.example.test/#log");
+        const day = f.page.locator("#maple-day-2026-10-28");
+        await day.waitFor();
+        assert.match(await day.textContent(), /1 feed ·/, "with that feed, one feed");
+        await day.getByRole("button", { name: /^Edit: \+ 45 ml in the SNS/ }).click();
+        const form = f.page.getByRole("dialog", { name: "SNS at the breast", exact: true });
+        await form.waitFor();
+        assert.match(await form.textContent(), /Milk at the breast with the 8:00\sAM feed: part of that feed, not a feed of its own\./);
+        await form.getByRole("switch", { name: "A feed of its own", exact: true }).click();
+        await form.getByRole("button", { name: "Save", exact: true }).click();
+        await form.waitFor({ state: "hidden" });
+        const body = writes(f)[0]?.body;
+        assert.deepEqual(body?.data, { own_feed: true }, "only what changed");
+        assert.equal(body?.expect_updated_at, "2026-10-28T13:00:00.000Z", "against the version shown");
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+      // Saved as its own: a feed of its own on the day and on Today, its form saying so, and off again it's that feed's.
+      state = freshState();
+      state.entries = [sns({ own_feed: true }), fed];
+      f = await fixture({ state, records: state.entries, entryResponse: patched });
+      try {
+        await metric(f);
+        await f.page.goto("https://first-use.example.test/#today");
+        await f.page.getByRole("heading", { name: "Recently logged", exact: true }).waitFor();
+        assert.match(await f.page.locator("body").textContent(), /Last feed started\s*30m ago/, "Last fed at the SNS feed");
+        await f.page.goto("https://first-use.example.test/#log");
+        const day = f.page.locator("#maple-day-2026-10-28");
+        await day.waitFor();
+        assert.match(await day.textContent(), /2 feeds ·/);
+        assert.doesNotMatch(await day.textContent(), /\+ 45 ml in the SNS/, "a row of its own");
+        await day.getByRole("button", { name: /^Edit: SNS/ }).click();
+        const form = f.page.getByRole("dialog", { name: "SNS at the breast", exact: true });
+        await form.waitFor();
+        const own = form.getByRole("switch", { name: "A feed of its own", exact: true });
+        assert.equal(await own.getAttribute("aria-checked"), "true");
+        assert.match(await form.textContent(), /A feed of its own, not part of the 8:00\sAM feed\./);
+        await own.click();
+        assert.match(await form.textContent(), /Milk at the breast with the 8:00\sAM feed: part of that feed/);
+        await form.getByRole("button", { name: "Save", exact: true }).click();
+        await form.waitFor({ state: "hidden" });
+        assert.deepEqual(writes(f)[0]?.body.data, { own_feed: null });
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
     ["Today and the Timeline read a top-up as part of its feed", async () => {
       const state = freshState();
       const fed = nursing(43, "2026-10-28T12:45:00.000Z", "2026-10-28T13:00:00.000Z", "2026-10-28T13:15:00.000Z");

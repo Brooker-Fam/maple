@@ -26,7 +26,7 @@
  * which is how they're shown ("30 ml", "1 oz"). The target per feed stays
  * settings.feed_target_ml (checkFeedTarget), shared with the bottle form.
  */
-import { bottleAmount, CLUSTER_GAP_MS, countedFeeds, lastFedAnchor, nursingRuns, runAnchor, type FeedMinutes, type NursingRun } from "./feed";
+import { bottleAmount, CLUSTER_GAP_MS, countedFeeds, lastFedAnchor, nursingRuns, ownFeed, runAnchor, type FeedMinutes, type NursingRun } from "./feed";
 import { addDays, dayKey, DEFAULT_TZ, formatDuration, formatTime, localParts, parseDayKey, zonedTimeToUtc } from "./time";
 import type { Entry, EntryOf, Side, StretchSide } from "./types";
 import { ML_PER_FL_OZ, volumesBoth, type FeedTarget } from "./units";
@@ -1233,7 +1233,8 @@ function lastLogged(g: PlanGroup): number {
  * (countedFeeds, a plan's second bottle with its first), joined the way any
  * plan reads them: a timer paused 10 minutes or more is still one feed, and a
  * bottle soon after a bottle feed's last bottle, or after nursing that's
- * over, is more of it. Pumps aren't placed here: which feed a pump is for
+ * over, is more of it, unless the family said it was a feed of its own
+ * (feed.ts ownFeed). Pumps aren't placed here: which feed a pump is for
  * depends on the plan's steps (feedPlanNow).
  */
 export function planGroups(entries: readonly Entry[], now: Date, runs: readonly NursingRun[] = nursingRuns(entries, now)): PlanGroup[] {
@@ -1246,11 +1247,13 @@ export function planGroups(entries: readonly Entry[], now: Date, runs: readonly 
       const bottles = [c.bottle, ...c.more];
       // A second bottle soon after the feed's first (pumped milk, then formula to finish) is the same feed, never
       // counted on from a later bottle; so is a bottle soon after nursing that's over (a second bottle to finish it).
-      if (prev && !prev.run && c.start - prev.start < PLAN_BOTTLE_JOIN_MS) {
+      // One said to be a feed of its own begins one.
+      const joins = !!prev && !ownFeed(c.bottle.data) && c.start - prev.start < PLAN_BOTTLE_JOIN_MS;
+      if (prev && joins && !prev.run) {
         prev.bottles.push(...bottles);
         continue;
       }
-      if (prev && prev.run && prev.run.end !== null && c.start - prev.start < PLAN_BOTTLE_JOIN_MS && c.start >= prev.run.end) {
+      if (prev && joins && prev.run && prev.run.end !== null && c.start >= prev.run.end) {
         prev.bottles.push(...bottles);
         continue;
       }
@@ -1801,7 +1804,8 @@ function pointsElsewhere(plan: FeedingPlan, g: PlanGroup, feed: PlanFeed): boole
  * feed picked on this phone for the next feed (Do this one instead).
  *
  * Each feed logged is read in turn, oldest first. A bottle the feed before
- * still wants (a late top-up, formula to finish), or nursing again under
+ * still wants (a late top-up, formula to finish), unless the family said it was
+ * a feed of its own (feed.ts ownFeed), or nursing again under
  * PLAN_RELATCH_MS after it, is more of that feed: it takes no turn, starts no
  * steps anew and, on a set interval, never moves when the next is due (on
  * demand, the newest latch is when she last ate: nextAfter). Any other feed
@@ -1979,6 +1983,8 @@ export function feedPlanNow(
       const prev = views[k];
       const pg = prev.group!;
       const asTagged = !g.tag || g.tag === prev.feed.id;
+      // A bottle the family said was a feed of its own (feed.ts ownFeed) is never more of the feed before.
+      const alone = !g.run && g.bottles.length > 0 && ownFeed(g.bottles[0].data);
       // A bottle on its own the feed before still wants (its top-up, its milk at the breast logged as a bottle, formula
       // to finish a bottle short of its amount), logged late from the dock or the chat rather than the plan's card
       // (which links it: data.top_up_of): up to PLAN_LATE_TOP_UP_MS after that feed ended, before the next is due.
@@ -1988,6 +1994,7 @@ export function feedPlanNow(
       // logged) is a feed of its own.
       const late =
         !g.run &&
+        !alone &&
         asTagged &&
         ended !== null &&
         g.start - ended <= PLAN_LATE_TOP_UP_MS &&
@@ -2002,7 +2009,7 @@ export function feedPlanNow(
         const end = t(p.ended_at ?? p.started_at);
         if (t(p.started_at) < g.start && t(p.started_at) < joinFrom + PLAN_BOTTLE_JOIN_MS && end > joinFrom) joinFrom = end;
       }
-      const more = !g.run && asTagged && bottleLed(pg) && g.start - joinFrom < PLAN_BOTTLE_JOIN_MS;
+      const more = !g.run && !alone && asTagged && bottleLed(pg) && g.start - joinFrom < PLAN_BOTTLE_JOIN_MS;
       // Nursing again soon after it (comfort nursing after the night's bottle, a re-latch, a cluster): more of that feed,
       // unless what was logged with it (a shield, milk at the breast) points to another of the plan's feeds. In the
       // night every feed is the night's, however she was fed, so nothing points elsewhere.

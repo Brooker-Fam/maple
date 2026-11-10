@@ -600,6 +600,26 @@ check("milk at the breast logged late is part of the nursing it went with: the p
   eq([m.focus.state, m.focus.feed.id, m.missed, clock(m.due!.base)], ["upcoming", TOPUP.id, null, "08:00"]);
 });
 
+check("milk at the breast said to be a feed of its own is one: to the log and the plan, the next counting from it", () => {
+  const fed = nurse("L 08:00-08:15", { plan: SNS.id });
+  const pumped = pump("08:20-08:35");
+  // 8:50: an SNS feed of its own (only the SNS logged), 35 minutes after she came off the breast.
+  const alone = bottle("08:50", 20, { via: "sns", milk: "formula", own_feed: true });
+  const runs = nursingRuns([fed, alone], D("09:00"));
+  eq([runs[0].topUps.length, countedFeeds([fed, alone], D("09:00")).length, clock(lastFedAnchor([fed, alone], D("09:00"))!.at)], [0, 2, "08:50"]);
+  const n = now(PLAN, [fed, pumped, alone], "09:00");
+  eq([n.focus.state, clock(n.due!.base), clock(n.due!.from)], ["upcoming", "08:50", "11:20"], "the next feed counts from it, not from 8:00");
+  // A plain bottle the feed before still wants, said to be its own: a feed to the plan too, not that feed's formula.
+  eq(clock(now(PLAN, [fed, pumped, bottle("09:00", 20, { milk: "formula", own_feed: true })], "09:05").due!.base), "09:00");
+  eq(clock(now(PLAN, [fed, pumped, bottle("09:00", 20, { milk: "formula" })], "09:05").due!.base), "08:00", "without it, as before");
+  // The night's second bottle said to be its own: a feed of its own; a bottle after it can still be more of it.
+  const first = bottle("23:45", 40, { milk: "breastmilk", plan: NIGHT.id });
+  const second = bottle("+1 00:05", 15, { milk: "formula", plan: NIGHT.id, own_feed: true });
+  const third = bottle("+1 00:15", 10, { milk: "formula", plan: NIGHT.id });
+  eq([countedFeeds([first, second], D("+1 00:10")).length, [...sameFeedBottleIds([first, second, third], D("+1 00:20"))]], [2, [third.id]]);
+  eq(clock(now(PLAN, [pump("23:20-23:40"), first, second], "+1 00:10").due!.base), "00:05");
+});
+
 check("the night's second bottle: with the same plan feed it's that feed, counted from its first bottle; late formula never starts a new night feed", () => {
   const first = bottle("23:45", 40, { milk: "breastmilk", plan: NIGHT.id });
   const finish = bottle("+1 00:05", 15, { milk: "formula", plan: NIGHT.id });

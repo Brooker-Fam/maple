@@ -1253,9 +1253,13 @@ export async function planBottleFor(ctx: Ctx, at: Date, opts: { atBreast: boolea
   return planBottle(plan, log, at, { tz: ctx.tz, target: feedTargetOf(ctx.baby.settings), atBreast: opts.atBreast, tag: opts.tag, data: opts.data });
 }
 
-/** What log_feed says after linking a bottle to the feed the plan owed it to (owedPart), with how to undo the link. */
+/**
+ * What log_feed says after linking a bottle to the feed the plan owed it to (owedPart), with how to undo the link: a
+ * feed of its own (own_feed), which no time rule or plan join takes back (taking top_up_of off alone leaves an SNS
+ * with the feed before it, feed.ts TOP_UP_LINK_MS, and a bottle the feed still wants with it to the plan).
+ */
 export function owedPartLine(o: OwedPart, tz: string): string {
-  return `The feeding plan's ${feedWord(o.view, tz)} (${named(o.view.feed)}) still had its ${o.part} to log, so this was saved with that feed [entry #${o.id}]. If it was a feed of its own, update_entry it with details {top_up_of: null}.`;
+  return `The feeding plan's ${feedWord(o.view, tz)} (${named(o.view.feed)}) still had its ${o.part} to log, so this was saved with that feed [entry #${o.id}]. If they say it was a feed of its own, update_entry it with details {own_feed: true}.`;
 }
 
 /**
@@ -1275,7 +1279,7 @@ export function ledBottleLine(l: LedBottle, joined: boolean, tz: string): string
     return `${what}. If it wasn't, update_entry it with details {plan: null}.`;
   }
   const counted = joined ? ": part of it, not a feed of its own" : ", though the log still counts it as a feed of its own";
-  return `The feeding plan's ${formatTime(l.start, tz)} feed (${name}) still had ${l.part} to give, so this was saved with that feed${counted}. If it was a feed of its own, update_entry it with details {plan: null}.`;
+  return `The feeding plan's ${formatTime(l.start, tz)} feed (${name}) still had ${l.part} to give, so this was saved with that feed${counted}. If they say it was a feed of its own, update_entry it with details {own_feed: true, plan: null}.`;
 }
 
 /** Siri's words for a bottle the plan took as a feed's (owedPart, ledBottle): ", a top-up for the 9:00 AM feed", ", for the feeding plan's Pump + bottle". */

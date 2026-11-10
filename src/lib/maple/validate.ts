@@ -60,18 +60,26 @@ const photo = z.object({
 const tenth = (ml: number) => Math.round(ml * 10) / 10;
 
 /**
- * A bottle's milk split, how it was given and the feed it was a late top-up
- * for only mean something on a bottle, and the split only on a Mixed one; a
- * nipple shield only on nursing: they're dropped anywhere else.
+ * A bottle's milk split, how it was given, the feed it was a late top-up for
+ * and its being a feed of its own only mean something on a bottle, and the
+ * split only on a Mixed one; a nipple shield only on nursing: they're dropped
+ * anywhere else. A feed of its own is only ever true, and names no feed (a
+ * client that sends both meant the bottle on its own: store.ts updateEntry
+ * keeps whichever an edit sent last).
  * Both parts set the amount to their sum (a total more than 1 ml off is
  * refused, so a slip never saves); one part and the amount give the other.
  */
-function bottleParts<T extends { method: "breast" | "bottle"; amount_ml?: number; milk?: string; breastmilk_ml?: number; formula_ml?: number; via?: string; top_up_of?: number; shield?: boolean }>(d: T, ctx: z.RefinementCtx): T {
+function bottleParts<T extends { method: "breast" | "bottle"; amount_ml?: number; milk?: string; breastmilk_ml?: number; formula_ml?: number; via?: string; top_up_of?: number; own_feed?: boolean; shield?: boolean }>(d: T, ctx: z.RefinementCtx): T {
   const out = { ...d };
   if (out.method !== "bottle") {
     delete out.via;
     delete out.top_up_of;
-  } else delete out.shield;
+    delete out.own_feed;
+  } else {
+    delete out.shield;
+    if (out.own_feed !== true) delete out.own_feed;
+    else delete out.top_up_of;
+  }
   if (out.method !== "bottle" || out.milk !== "mixed") {
     delete out.breastmilk_ml;
     delete out.formula_ml;
@@ -114,8 +122,10 @@ export const dataSchemas = {
       breastmilk_ml: optNum(0, 500, "Breast milk amount"),
       formula_ml: optNum(0, 500, "Formula amount"),
       via: z.enum(BOTTLE_VIAS).optional(),
-      // A late top-up's feed (a nursing entry's id), a nursing feed's nipple shield, the plan feed it was started under.
+      // A late top-up's feed (a nursing entry's id), a bottle said to be a feed of its own, a nursing feed's nipple
+      // shield, the plan feed it was started under.
       top_up_of: z.number().int().positive().optional(),
+      own_feed: z.boolean().optional(),
       shield: z.boolean().optional(),
       plan: z.string().trim().regex(/^[A-Za-z0-9._-]{1,24}$/, "plan must be a plan feed's id").optional(),
       // Listed so .strip() keeps it: a stopped-while-paused feed must stay one through later edits.

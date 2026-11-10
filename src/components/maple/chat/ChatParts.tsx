@@ -157,8 +157,8 @@ function OutputView({ output, busy, onAsk, threadId, messageId, toolCallId }: { 
   }
   if (output.duplicateOf != null) return <Muted icon="info">Not saved yet: it looks like an entry already in the log.</Muted>;
   if (output.deleted != null) return <div className={GROUP}><ChatReceipt receipt={{ id: output.deleted, line: first, action: "deleted" }} /></div>;
-  // A read-back waiting for their yes (the feeding plan, a sleep goal): nothing was saved, so no check.
-  if (output.pending) return <Muted icon="info">{first}</Muted>;
+  // A read-back waiting for their yes (the feeding plan, a sleep goal), or an edit that changed nothing: no check.
+  if (output.pending || output.unchanged) return <Muted icon="info">{first}</Muted>;
   return <Muted icon="check">{first}</Muted>;
 }
 

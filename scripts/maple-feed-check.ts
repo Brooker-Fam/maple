@@ -38,6 +38,7 @@ import {
   nextSideText,
   normalizeSegments,
   nursingRuns,
+  ownFeed,
   partTotals,
   pause,
   previousFeed,
@@ -2437,6 +2438,38 @@ check("describeEntry: back and forth reads as such", () => {
     const t = statsFor([plain, bottleAt("09:20", { amount_ml: 30 })], D("00:00"), D("23:59"), "day", D("23:59"));
     eq([t.atBreast, t.atBreastMl], [0, 0]);
     eq(daySummaryParts(t, "metric").slice(0, 3), ["1 feed", "15m nursing", "30 ml bottle (1 top-up)"]);
+  });
+
+  check("a bottle or an SNS said to be a feed of its own is one, whenever it was given: never a top-up, never more of a bottle feed", () => {
+    // Nursing 2:00–2:20 PM; at 3:05 an SNS feed of its own (only the SNS logged), 45 minutes on: a feed, not that feed's.
+    const fed = nursed("L 14:00-14:12, R 14:13-14:20");
+    const sns = bottleAt("15:05", { amount_ml: 40, milk: "formula", via: "sns" });
+    const alone = { ...sns, data: { ...sns.data, own_feed: true } };
+    const at = D("16:00");
+    eq([nursingRuns([fed, sns], at)[0].topUps.length, countedFeeds([fed, sns], at).length], [1, 1], "unsaid: the SNS logged late is that feed's, as before");
+    eq([nursingRuns([fed, alone], at)[0].topUps.length, countedFeeds([fed, alone], at).length, topUpIds(nursingRuns([fed, alone], at)).size], [0, 2, 0]);
+    eq(clock(lastFedAnchor([fed, alone], at)!.at), "15:05", "Last fed moves to it");
+    // During the feed or just after, said to be its own, it's still one: they said so.
+    for (const t of ["14:05", "14:40"]) {
+      const b = bottleAt(t, { amount_ml: 60, own_feed: true });
+      eq(countedFeeds([fed, b], at).length, 2, `a bottle at ${t}`);
+    }
+    // The day counts it as a bottle feed; its row is its own ("SNS · 40 ml · formula"), never "+ 40 ml in the SNS".
+    const s = statsFor([fed, alone], D("00:00"), D("23:59"), "day", D("23:59"));
+    eq([s.feeds, s.bottleFeeds, s.topUps, s.atBreast, s.bottleMl], [2, 1, 0, 0, 40]);
+    const parts = feedRowParts(nursingRuns([fed, alone], at));
+    eq([parts.rowOf.has(alone.id), describeEntry(alone, { units: "metric" }).text], [false, "SNS · 40 ml · formula"]);
+    eq(feedGaps([fed, alone], at).map((g) => `${g.feed.kind} ${clock(new Date(g.start).toISOString())}${g.gapMin != null ? ` +${g.gapMin}` : ""}`), ["breast 14:00", "bottle 15:05 +65"]);
+    // A plan's second bottle said to be its own is a feed; the one after it can still be more of it.
+    const first = bottleAt("21:00", { amount_ml: 40, plan: "p1f3" });
+    const second = bottleAt("21:20", { amount_ml: 15, plan: "p1f3", own_feed: true });
+    const third = bottleAt("21:30", { amount_ml: 10, plan: "p1f3" });
+    eq(countedFeeds([first, second, third], D("22:00")).map((f) => (f.bottle ? `${clock(f.bottle.started_at)}${f.more.length ? ` + ${f.more.length}` : ""}` : "run")), ["21:00", "21:20 + 1"]);
+    // Only ever on a bottle, only ever true, and naming no feed.
+    eq([ownFeed(alone.data), ownFeed(sns.data), ownFeed({ method: "breast", own_feed: true })], [true, false, false]);
+    eq(cleanData("feed", { method: "bottle", amount_ml: 40, via: "sns", own_feed: true, top_up_of: fed.id }), { method: "bottle", amount_ml: 40, via: "sns", own_feed: true });
+    eq(cleanData("feed", { method: "bottle", amount_ml: 40, own_feed: false, top_up_of: fed.id }), { method: "bottle", amount_ml: 40, top_up_of: fed.id });
+    eq(cleanData("feed", { method: "breast", left_sec: 60, own_feed: true }), { method: "breast", left_sec: 60 });
   });
 
   check("milk at the breast during a feed still going is part of it, never a feed: counted from every feed, the running one too", () => {

@@ -83,6 +83,14 @@ export type FeedData = {
    * top-up and not a feed of its own (feed.ts topUpRunFor, TOP_UP_LINK_MS).
    */
   top_up_of?: number;
+  /**
+   * A bottle the family said was a feed of its own (the bottle form's "A feed
+   * of its own", log_feed / update_entry own_feed): never a nursing feed's
+   * top-up or milk at the breast, nor more of a bottle feed before it, whatever
+   * the time rules would make it (feed.ts ownFeed). Only ever true; it and
+   * top_up_of never go together (validate.ts, store.ts updateEntry).
+   */
+  own_feed?: boolean;
   /** Nursing: with a nipple shield. */
   shield?: boolean;
   /** The feeding plan's feed it was started under (settings.feeding_plan feeds[].id), on a nursing feed or a bottle. */
