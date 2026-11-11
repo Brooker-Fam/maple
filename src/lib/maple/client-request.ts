@@ -8,6 +8,27 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * How long a write waits for its answer. A request whose connection died
+ * quietly (a phone locked or switching networks mid-save) can stay pending
+ * with no error, and while any write is out the polls don't read (a read
+ * from before it lands could undo it on screen), so without a deadline one
+ * lost request kept a phone on an old log until someone reloaded the page.
+ * Every Maple write is quick; a call that can take longer passes `timeoutMs`.
+ */
+export const WRITE_TIMEOUT_MS = 30_000;
+
+/** A write that got no answer in time: it may or may not have reached the server. */
+export class RequestTimeout extends Error {
+  constructor() {
+    super("Maple didn't answer, so this may not have saved. Check the log before trying again.");
+    this.name = "RequestTimeout";
+  }
+}
+
+/** `timeoutMs`: how long this call may wait for its answer (writes default to WRITE_TIMEOUT_MS; reads, no limit). */
+export type MapleRequestInit = RequestInit & { timeoutMs?: number };
+
 type RefreshRequest = { sequence: number; generation: number; sentAt: number; requestId?: string };
 
 export function createMapleRequests() {
@@ -18,22 +39,35 @@ export function createMapleRequests() {
   let afterWrite: string | undefined;
   let refreshFailed = false;
 
-  async function request<T>(path: string, init?: RequestInit): Promise<T> {
-    const write = (init?.method ?? "GET").toUpperCase() !== "GET";
+  async function request<T>(path: string, options?: MapleRequestInit): Promise<T> {
+    const { timeoutMs, ...init } = options ?? {};
+    const write = (init.method ?? "GET").toUpperCase() !== "GET";
     const url = path.startsWith("/") ? path : `/api/maple/${path}`;
     const tracked = write && /^\/api\/maple\/(?:timer|entries)(?:[/?]|$)/.test(url);
     const requestId = tracked ? newSyncRequestId() : undefined;
     const started = Date.now();
     const headers = new Headers({ "Content-Type": "application/json", ...deviceHeaders(), ...(write ? shownFamilyHeaders() : {}) });
-    new Headers(init?.headers).forEach((value, key) => headers.set(key, value));
+    new Headers(init.headers).forEach((value, key) => headers.set(key, value));
     if (requestId) headers.set("x-maple-request-id", requestId);
     if (write) {
       generation++;
       writes++;
     }
+    // The deadline aborts the request; the caller's own signal still can (AbortSignal.any isn't on every phone).
+    const limit = timeoutMs ?? (write ? WRITE_TIMEOUT_MS : undefined);
+    const deadline = limit ? new AbortController() : null;
+    let timedOut = false;
+    const timer = deadline ? setTimeout(() => { timedOut = true; deadline.abort(); }, limit) : undefined;
+    const callerAbort = () => deadline?.abort();
+    if (deadline && init.signal) {
+      if (init.signal.aborted) deadline.abort();
+      else init.signal.addEventListener("abort", callerAbort, { once: true });
+    }
     try {
-      const res = await fetch(url, { ...init, headers, cache: "no-store" });
+      const res = await fetch(url, { ...init, headers, cache: "no-store", signal: deadline?.signal ?? init.signal });
       const body: unknown = await res.json().catch(() => null);
+      // Cut off while the answer was still arriving: no answer, not an empty one.
+      if (timedOut) throw new RequestTimeout();
       if (!res.ok) {
         const error = new ApiError((body as { error?: string } | null)?.error ?? `Request failed (${res.status})`, res.status, body);
         if (res.status === 409 && (body as { code?: string } | null)?.code === "family_mismatch") window.dispatchEvent(new Event(FAMILY_MOVED_EVENT));
@@ -46,8 +80,10 @@ export function createMapleRequests() {
       return body as T;
     } catch (error) {
       if (tracked) recordSyncDiagnostic("write_failed", { requestId, status: error instanceof ApiError ? error.status : 0, elapsedMs: Date.now() - started });
-      throw error;
+      throw timedOut ? new RequestTimeout() : error;
     } finally {
+      clearTimeout(timer);
+      init.signal?.removeEventListener("abort", callerAbort);
       if (write) {
         writes--;
         generation++;

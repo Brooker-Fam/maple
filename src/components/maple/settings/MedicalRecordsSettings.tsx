@@ -37,6 +37,8 @@ export type MedicalRecordsStatus = {
 };
 
 const ENDPOINT = "/api/maple/epic";
+/** Review and import read the health record and may run up to their routes' 60 seconds: past a write's usual wait. */
+const RECORD_WAIT_MS = 75_000;
 const CHANGED = "maple-medical-records-changed";
 const CALLBACK_ERRORS: Record<string, string> = {
   denied: "MyChart access wasn't approved. You can try again whenever you're ready.",
@@ -176,12 +178,13 @@ export default function MedicalRecordsSettings({ active = true }: { active?: boo
     setNotice("The pending connection was discarded. Nothing was added to the log.");
   });
   const review = () => run("review", async () => {
-    const next = await api<MedicalRecordsStatus>(`${ENDPOINT}/review`, { method: "POST", body: JSON.stringify({ pendingId: pending?.id, confirmPatient: true }) });
+    const next = await api<MedicalRecordsStatus>(`${ENDPOINT}/review`, { method: "POST", body: JSON.stringify({ pendingId: pending?.id, confirmPatient: true }), timeoutMs: RECORD_WAIT_MS });
     apply(next);
   });
   const save = () => run("import", async () => {
     const result = await api<{ imported: number; duplicates: number }>(`${ENDPOINT}/import`, {
       method: "POST", body: JSON.stringify({ pendingId: pending?.id, measurementIds: [...selected], shareWithFamilyAndAssistants: true }),
+      timeoutMs: RECORD_WAIT_MS,
     });
     apply(await api<MedicalRecordsStatus>(ENDPOINT));
     await refresh();

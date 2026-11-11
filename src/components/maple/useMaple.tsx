@@ -31,7 +31,7 @@ import {
 import { memberLabel as labelOf, summarize, memberName as nameOf, type Summary } from "@/lib/maple/insights";
 import { formatTime, localParts } from "@/lib/maple/time";
 import { setVolumesBoth } from "@/lib/maple/units";
-import { ApiError, createMapleRequests } from "@/lib/maple/client-request";
+import { ApiError, createMapleRequests, RequestTimeout, type MapleRequestInit } from "@/lib/maple/client-request";
 import { keepConfirmed, stampOutbox } from "@/lib/maple/client-state";
 import { FAMILY_MOVED_EVENT, setShownFamily } from "./shownFamily";
 import type {
@@ -201,8 +201,8 @@ export type MapleContextValue = {
    * else's change).
    */
   timerBusy: (id: number) => boolean;
-  /** Raw JSON fetch against /api/maple; throws ApiError (with .status, .body). */
-  api: <T = unknown>(path: string, init?: RequestInit) => Promise<T>;
+  /** Raw JSON fetch against /api/maple; throws ApiError (with .status, .body), or RequestTimeout for a write with no answer. */
+  api: <T = unknown>(path: string, init?: MapleRequestInit) => Promise<T>;
   toasts: Toast[];
   /** Show a toast; returns its id (for dismissToast). */
   toast: (text: string, opts?: Partial<Omit<Toast, "id" | "text">>) => number;
@@ -305,6 +305,8 @@ const UNITS_KEY = "maple-units";
 const VOLUME_BOTH_KEY = "maple-volume-both";
 const OUTBOX_KEY = "maple-outbox-v1";
 const POLL_MS = 10_000;
+/** A read lost on the way tries once more after this long, rather than leaving the old log up until the next poll. */
+const RETRY_MS = 2_000;
 /** Back after this long → refresh "While you slept" from the server. */
 const AWAY_MS = 3 * 3600_000;
 
@@ -519,6 +521,8 @@ export function MapleProvider({ children }: { children: ReactNode }) {
   const flushingEntry = useRef<number | null>(null);
   const seenRef = useRef(false);
   const lastPollRef = useRef(0);
+  /** A quick retry is out since the last read that worked (one per run of failures). */
+  const retriedRef = useRef(false);
   const tzRef = useRef("America/New_York");
   /** Entries a timer mutation answered for: id → updated_at (see keepConfirmed). Optimistic copies never go here. */
   const confirmedRef = useRef(new Map<number, { updatedAt: string; at: number }>());
@@ -704,6 +708,8 @@ export function MapleProvider({ children }: { children: ReactNode }) {
   const outboxRef = useRef<OutboxItem[]>([]);
   outboxRef.current = outbox;
 
+  /** The latest refresh, for its own retry. */
+  const refreshRef = useRef<() => Promise<void>>(async () => {});
   const refresh = useCallback(async () => {
     if (inflight.current > 0) return;
     const read = requests.beginRefresh();
@@ -728,6 +734,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         }
       }
       if (!accepted) return;
+      retriedRef.current = false;
       syncClock(res.now);
       setOnline(true);
       setError(null);
@@ -765,10 +772,18 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       if (!(e instanceof ApiError) && !controller.signal.aborted) setOnline(false);
       setError(controller.signal.aborted ? "Refresh took too long. Try again." : e instanceof Error ? e.message : "Couldn't reach Maple's log");
       setStatus((s) => (s === "loading" ? "error" : s));
+      // Lost on the way, not refused (a phone just woken, its Wi-Fi still coming back): once more in a moment. A phone
+      // that's really offline then waits for the poll, as before.
+      if (!(e instanceof ApiError) && !retriedRef.current && document.visibilityState === "visible") {
+        retriedRef.current = true;
+        window.setTimeout(() => void refreshRef.current(), RETRY_MS);
+      }
     } finally {
       clearTimeout(timeout);
     }
   }, [fetchJson, loadAuth, requests, syncClock, withPending]);
+
+  refreshRef.current = refresh;
 
   const forceRefresh = useCallback(async () => {
     revRef.current = null;
@@ -828,10 +843,11 @@ export function MapleProvider({ children }: { children: ReactNode }) {
   /**
    * Send anything waiting in the outbox. Entries can be queued or removed
    * while a slow request is in flight, so the result is applied to the
-   * current queue by client_id, never by replacing it wholesale.
+   * current queue by client_id, never by replacing it wholesale. True when
+   * something went and the log was read after it.
    */
-  const flush = useCallback(async () => {
-    if (flushing.current || !outboxRef.current.length) return;
+  const sendQueued = useCallback(async (): Promise<boolean> => {
+    if (flushing.current || !outboxRef.current.length) return false;
     flushing.current = true;
     const done = new Set<string>();
     const bumped = new Set<string>();
@@ -902,29 +918,49 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       if (done.size) {
         setOnline(true);
         await forceRefresh();
+        return true;
       }
     } catch (e) {
       toast(e instanceof Error ? e.message : "Couldn't update saved entries on this phone", { tone: "error" });
     } finally {
       flushing.current = false;
     }
+    return false;
   }, [careDuplicateToast, fetchJson, forceRefresh, setQueue, toast]);
+
+  /** One send at a time: a call while one is going gets that one, so the poll can wait for it. */
+  const flushRun = useRef<Promise<boolean> | null>(null);
+  const flush = useCallback((): Promise<boolean> => {
+    flushRun.current ??= sendQueued().finally(() => {
+      flushRun.current = null;
+    });
+    return flushRun.current;
+  }, [sendQueued]);
+
+  /**
+   * The poll: what waits on this phone goes first, then the log is read once
+   * that has settled, whether or not it went. (While a write is out a read
+   * is skipped, so reading beside the send meant a queued entry the server
+   * kept turning away kept this phone from ever seeing anyone else's.)
+   */
+  const sync = useCallback(async () => {
+    if (await flush()) return;
+    // Back after hours away: ask for a full snapshot (not just "unchanged") so
+    // the "While you slept" recap gets this member's previous visit.
+    if (Date.now() - lastPollRef.current >= AWAY_MS) await forceRefresh();
+    else await refresh();
+  }, [flush, forceRefresh, refresh]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
-  useVisiblePoll(() => {
-    void flush();
-    // Back after hours away: ask for a full snapshot (not just "unchanged") so
-    // the "While you slept" recap gets this member's previous visit.
-    if (Date.now() - lastPollRef.current >= AWAY_MS) void forceRefresh();
-    else void refresh();
-  }, POLL_MS);
+  useVisiblePoll(() => void sync(), POLL_MS);
 
   useEffect(() => {
+    // Back on a network: send what waited and read the log now, not at the next poll.
     const on = () => {
       setOnline(true);
-      void flush();
+      void sync();
     };
     const off = () => setOnline(false);
     window.addEventListener("online", on);
@@ -933,7 +969,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       window.removeEventListener("online", on);
       window.removeEventListener("offline", off);
     };
-  }, [flush]);
+  }, [sync]);
 
   // Re-derive the summary every 30s so "2h ago" and gap nudges stay fresh.
   useEffect(() => {
@@ -1368,6 +1404,11 @@ export function MapleProvider({ children }: { children: ReactNode }) {
                 : `This timer already stopped${when}`;
           return fail({ kind: "stopped", message, who, entry: cur }, "info");
         }
+        if (e instanceof RequestTimeout) {
+          // No answer, so it may have happened: once this tap is done, read the log and show which.
+          window.setTimeout(() => void forceRefreshRef.current(), 0);
+          return fail({ kind: "error", message: e.message, who: null }, "error", 8000);
+        }
         if (!(e instanceof ApiError)) {
           // Timers need the server's clock, so they aren't queued like entries.
           setOnline(false);
@@ -1418,7 +1459,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
     if (stale.length) setToasts((ts) => ts.filter((t) => !stale.includes(t)));
   }, [state, toasts]);
 
-  const api = useCallback(<T,>(path: string, init?: RequestInit) => fetchJson<T>(path, init), [fetchJson]);
+  const api = useCallback(<T,>(path: string, init?: MapleRequestInit) => fetchJson<T>(path, init), [fetchJson]);
 
   const member = useCallback(
     (id: string | null | undefined) => (id && state ? state.members.find((m) => m.email === id) ?? null : null),

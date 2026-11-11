@@ -13,6 +13,13 @@ warnings, recovery from unchanged responses, stalled requests, visit recap
 anchors, and the diagnostics sent by the production hook. Each case runs
 independently so one failure does not hide another.
 
+`resume-cases.mjs` checks that a phone keeps up with the others: an app back
+on screen with only `pageshow` or `focus`, or with no event at all, a write
+that never answers, a queued entry the server keeps turning away, coming back
+online, and a read lost on the network. A case registered with
+`{ clock: true }` gets Playwright's clock before the page loads, so it can jump
+past the poll's beat and the write deadline.
+
 The production timer actions also exercise a batch of time and side corrections:
 all changes appear optimistically, Save sends one guarded request, and the toast's
 Undo restores the entire original feed in one request.

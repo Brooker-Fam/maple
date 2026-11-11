@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resumeCases } from "./resume-cases.mjs";
 import { timingCases } from "./timing-cases.mjs";
 
 const require = createRequire(import.meta.url);
@@ -64,7 +65,8 @@ await build({
 const app = await readFile(path.join(output, "app.js"));
 const browser = await chromium.launch({ headless: true, ...(process.env.MAPLE_UI_CHROMIUM ? { executablePath: process.env.MAPLE_UI_CHROMIUM } : {}) });
 const cases = [];
-const check = (name, run) => cases.push({ name, run });
+/** `clock`: the page's timers are Playwright's from the first script on, so a case can jump past the poll's beat. */
+const check = (name, run, opts = {}) => cases.push({ name, run, opts });
 const settle = (page) => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 const state = (page) => page.evaluate(() => {
   const { state, status, error, online, pending, seenAt } = window.__mapleSync;
@@ -77,7 +79,7 @@ const poll = (page) => page.evaluate(() => {
   document.dispatchEvent(new Event("visibilitychange"));
 });
 
-async function fixture(entries = [previous]) {
+async function fixture(entries = [previous], opts = {}) {
   const context = await browser.newContext({ viewport: { width: 375, height: 812 }, reducedMotion: "reduce", timezoneId: "UTC" });
   const page = await context.newPage();
   const requests = [];
@@ -116,6 +118,7 @@ async function fixture(entries = [previous]) {
     await request.route.fulfill({ status, json });
     await settle(page);
   };
+  if (opts.clock) await page.clock.install();
   await page.goto(origin);
   await answer(await take("/api/maple/state"), snapshot("before", entries));
   await page.waitForFunction(() => window.__mapleSync?.status === "ready");
@@ -429,14 +432,15 @@ check("one-minute start correction: previous feed boundary", async (f) => {
 });
 
 timingCases({ check, snapshot, running, now });
+resumeCases({ check, snapshot, feed, saved, previous, settle, state, poll });
 
 let failures = 0;
 try {
-  for (const { name, run } of cases) {
+  for (const { name, run, opts } of cases) {
     if (process.env.MAPLE_SYNC_CASE && !name.includes(process.env.MAPLE_SYNC_CASE)) continue;
     let f;
     try {
-      f = await fixture();
+      f = await fixture(undefined, opts);
       await run(f);
       await f.close();
       f = null;
