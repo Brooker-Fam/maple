@@ -247,9 +247,11 @@ export const voiceOf = (ctx: Pick<Ctx, "fam" | "baby">): Voice => voiceFor(ctx.f
 
 /**
  * Instructions derived from the signed-in family's profile, or neutral fallback copy.
+ * `receipts`: where a write's confirmation reaches the person: the assistant's own reply for a connected app, the app's
+ * saved-entry card in Maple's chat. Either way ids stay in the tool results for follow-up edits and never reach the person.
  * `memories`: where the family's memories reach the reader (memoryRules): maple_status for a connected app, a block after these in Maple's chat.
  */
-export function mapleInstructions(c: ToolCopy, { entryNumbers = true, memories = "mcp" }: { entryNumbers?: boolean; memories?: "mcp" | "chat" } = {}): string {
+export function mapleInstructions(c: ToolCopy, { receipts = "mcp", memories = "mcp" }: { receipts?: "mcp" | "chat"; memories?: "mcp" | "chat" } = {}): string {
   const { v } = c;
   const m = v.mom;
   const momRule = v.hasMom
@@ -266,7 +268,7 @@ export function mapleInstructions(c: ToolCopy, { entryNumbers = true, memories =
     : `Leave out the parents' own medicines, the supplements they take, and their health (everyone in the family reads the plan; ${v.name}'s milk at the breast stays in it)`;
   return `${c.opening} (timezone ${c.tz}; reply in US units). Call maple_status first for the local time, running timers, "when did ${v.they} last eat", "which side next" or "how many diapers". Log what the user describes with the log_* tools. Not medical advice. If anyone may harm themselves or someone else: 911 if in immediate danger, otherwise call or text 988. ${momRule}
 
-For times pass minutes_ago or a local clock time like "3:10am" or "15:10"; never invent a date. ${entryNumbers ? 'After a write, repeat its summary sentence with the entry number ("Saved #123: …").' : "After a write, rely on the app's saved-entry confirmation when present; add useful context without showing internal entry numbers."}
+For times pass minutes_ago or a local clock time like "3:10am" or "15:10"; never invent a date. ${receipts === "chat" ? "After a write, rely on the app's saved-entry confirmation when present; add useful context without showing internal entry numbers." : 'After a write, tell the user what its summary sentence says was saved, without the entry number ("Saved: wet diaper at 3:10 AM today"). Ids are only for your tool calls: never show the user an entry number (#123) or any other id (like c12, p4, m12, t12, h7 or g3), and name an entry by what and when instead ("the 7:13 AM bottle").'}
 
 Health alerts: when a result includes alerts, tell the user each one word for word with its label (for example "Call your pediatrician now: …"). Don't soften, shorten or add to them, never give medical advice of your own, and never suggest medicine doses. Suggest calling the pediatrician (or 911 for the emergency signs).
 

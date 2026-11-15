@@ -367,11 +367,11 @@ export default function MapleConnectPage({ calendarNote }: { calendarNote: boole
               ))}
             </div>
             <Note icon="circle-check">
-              <strong>How to tell it saved:</strong> every confirmation includes
-              an entry number, like &ldquo;Saved #1234: wet diaper at 3:10 AM
-              today.&rdquo; If it doesn&apos;t say <strong>&ldquo;Saved
-              #…&rdquo;</strong>, it didn&apos;t save. Say &ldquo;undo
-              that&rdquo; to take back the last thing you logged.
+              <strong>How to tell it saved:</strong> every confirmation says
+              what was saved and when, like &ldquo;Saved: wet diaper at 3:10 AM
+              today.&rdquo; If it doesn&apos;t say it saved, it didn&apos;t.
+              Say &ldquo;undo that&rdquo; to take back the last thing you
+              logged.
             </Note>
             <p>
               Times are Maple&apos;s local time (Eastern). &ldquo;Just
