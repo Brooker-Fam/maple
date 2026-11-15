@@ -7,8 +7,11 @@ import { countedFeeds } from "@/lib/maple/feed";
 import { STOOL_COLOR_INFO } from "@/lib/maple/guidelines";
 import { isVitaminD } from "@/lib/maple/insights";
 import { DEFAULT_TZ, formatDuration, formatTime, localParts } from "@/lib/maple/time";
+import { handoffThanks } from "@/lib/maple/whimsy/quips";
 import { useAppNav } from "./AppNav";
 import { photoUrl } from "./EntryRow";
+import { useExtrasOn } from "./extras";
+import { useNightActive } from "./nightLook";
 import { holdTodayTaps } from "./tapShield";
 import { SIDE_NAME } from "./TimerCard";
 import { Icon } from "./icons";
@@ -19,10 +22,12 @@ import { useMaple } from "./useMaple";
  * The hand-off for the parent who just woke up (or got back from work):
  * everything logged since their last visit. On Today it's one line under
  * "Right now" that keeps the key facts in view ("While you slept · 1 feed ·
- * 2 wet · a nap · by Matt"), so it never pushes the 3am answers down; a tap
+ * 2 wet · a nap · by Alex"), so it never pushes the 3am answers down; a tap
  * opens the few sentences the other parent would leave on the counter ("5
  * feeds, the last at 12:05 PM. Left is next."), signed by whoever logged it,
- * with "Got it". Shown after a 3h+ gap, until "Got it".
+ * with "Got it". Shown after a 3h+ gap, until "Got it". By day, with "Fun
+ * facts and cheers" on, the sentences end with a thank-you for whoever logged
+ * them ("Alex had it covered."): never the reader, never beside an alert.
  */
 
 const GAP_MS = 3 * 3600_000;
@@ -42,8 +47,10 @@ function overlapsNight(from: number, to: number, tz: string): boolean {
 }
 
 export default function WhileYouSlept() {
-  const { state, summary, seenAt, memberName, member, now, units } = useMaple();
+  const { state, summary, seenAt, memberName, member, now, units, isNight } = useMaple();
   const { go } = useAppNav();
+  const nightLook = useNightActive();
+  const [extrasOn] = useExtrasOn();
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   useEffect(() => {
@@ -152,6 +159,12 @@ export default function WhileYouSlept() {
   if (other.length) facts.push(`${other.length}${facts.length ? " other" : ""} update${plural(other.length)}`);
   const names = who.map((w) => memberName(w).split(" ")[0]);
   const by = names.length ? `by ${names.length < 3 ? names.join(" and ") : `${names.slice(0, 2).join(", ")} and more`}` : null;
+  // The note's last line thanks whoever logged it, by the first names the card signs (never the reader, whose own logs
+  // aren't in it): by day, with this phone's fun facts and cheers on, and never under an alert to look at.
+  const thanks =
+    extrasOn && !urgent.length && !nightLook && !isNight()
+      ? handoffThanks(who.filter((w) => w !== state.me.email).map((w) => memberName(w).split(" ")[0]), seenAt)
+      : null;
 
   const overnight = overlapsNight(since, nowMs, tz);
   const lead = overnight ? "While you slept" : `Since ${formatTime(since, tz)}`;
@@ -252,8 +265,13 @@ export default function WhileYouSlept() {
               <p className="text-sm text-mp-ink-2">{extra.join(" · ")}</p>
             </div>
           )}
+          {thanks && (
+            <p data-wys-thanks className="mt-3 text-[15px] leading-snug text-balance text-mp-ink">
+              {thanks}
+            </p>
+          )}
           <div className="mt-3 flex items-center justify-between gap-3">
-            {/* Signed, like a note: each person's initial disc and name ("Brittany", "Brittany and Grandma"). */}
+            {/* Signed, like a note: each person's initial disc and name ("Alex", "Alex and Grandma"). */}
             <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[13px] text-mp-ink-2">
               {who.map((w, i) => (
                 <span key={w} className="inline-flex items-center gap-1.5">

@@ -75,5 +75,55 @@ export function handoffCases({ fixture, freshState, record, writes, assert }) {
         assert.deepEqual(f.errors, []);
       } finally { await f.close(); }
     }],
+    ["Handoff ends with a thank-you for whoever logged, by day, with this phone's fun facts and cheers on", async () => {
+      const jo = { email: "jo@example.test", display_name: "Jo Example", role: "member", emoji: null, color: null };
+      for (const [label, opts, expected] of [
+        ["Alex alone", { extras: true }, /^Alex (had it covered|kept things running)\.( Say thanks when you get a chance\.)?$/],
+        ["Alex and Jo", { extras: true, jo: true }, /^Alex and Jo had it covered\.( Say thanks when you get a chance\.)?$/],
+        ["fun facts and cheers off", {}, null],
+        ["the night look on", { extras: true, night: true }, null],
+        ["an alert to look at", { extras: true, fever: true }, null],
+      ]) {
+        const state = awayState();
+        // Sam's own change while Alex was on is never what the thank-you is for.
+        state.entries = [fromHelper(61, "diaper", { pee: true, poop: false }), record(62, "diaper", { pee: true, poop: false }, "2026-10-28T12:30:00.000Z")];
+        if (opts.jo) {
+          state.members.push(jo);
+          state.entries.push(record(63, "feed", { method: "bottle", amount_ml: 60 }, "2026-10-28T11:00:00.000Z", { created_by: jo.email }));
+        }
+        if (opts.fever) {
+          state.baby.settings.show_alerts = true;
+          state.entries.push(fromHelper(64, "temp", { temp_c: 38.6, method: "rectal" }, { started_at: "2026-10-28T12:40:00.000Z" }));
+        }
+        const f = await fixture({ state, records: state.entries });
+        try {
+          await f.page.addInitScript(({ extras, night }) => {
+            if (extras) localStorage.setItem("maple-extras", "on");
+            if (night) localStorage.setItem("maple-night", "always");
+          }, opts);
+          await f.page.goto("https://first-use.example.test/#today");
+          const recap = f.page.getByRole("button", { name: /^While you slept/ });
+          assert.doesNotMatch(await recap.innerText(), /covered|thanks|team/i, `${label}: the line on Today stays the counts and who`);
+          await recap.click();
+          const details = f.page.locator("#wys-more");
+          await details.getByRole("button", { name: "Got it", exact: true }).waitFor();
+          const thanks = details.locator("[data-wys-thanks]");
+          if (!expected) assert.equal(await thanks.count(), 0, `${label}: no thank-you`);
+          else {
+            const line = await thanks.innerText();
+            assert.match(line, expected, label);
+            assert.doesNotMatch(line, /Sam/, "The thank-you never names the reader");
+            assert(await thanks.evaluate((el) => el.nextElementSibling?.querySelector("button")?.textContent?.trim() === "Got it"),
+              "The thank-you ends the note, just above who signed it and Got it");
+            if (process.env.MAPLE_HANDOFF_SCREENSHOT && !opts.jo) await f.page.screenshot({ path: process.env.MAPLE_HANDOFF_SCREENSHOT.replace(/(\.png)?$/, "-thanks.png"), fullPage: true });
+          }
+          if (opts.fever) assert.match(await details.innerText(), /alert to look at below/, "The alert is what the note ends on");
+          await details.getByRole("button", { name: "Got it", exact: true }).click();
+          await recap.waitFor({ state: "hidden" });
+          assert.equal(writes(f).length, 0);
+          assert.deepEqual(f.errors, []);
+        } finally { await f.close(); }
+      }
+    }],
   ];
 }

@@ -4,6 +4,9 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useCallback, useEffect, useState } from "react";
 import type { Celebration } from "@/lib/maple/insights";
 import { DEFAULT_TZ, dayKey } from "@/lib/maple/time";
+import { celebrationQuip } from "@/lib/maple/whimsy/quips";
+import { useExtrasOn } from "./extras";
+import { useBabyWords } from "./familyWords";
 import { MAPLE_LEAF_PATH } from "./Hero";
 import { Icon } from "./icons";
 import { LeafMark, ageShort, keptDate, keepsakeBirthAt } from "./keepsake";
@@ -18,8 +21,10 @@ import { usePart } from "./useAccess";
  * A milestone reached at 3am waits for the morning: celebrations only show by
  * day, with a few maple leaves drifting down inside the card (a still card
  * under reduced motion or the night look). The card is the fact, plainly: the
- * leaf (kept), the title, the day it happened and, when whoever logged it
- * wrote something, their words. "Keep as a moment" turns it into a keepsake.
+ * leaf (kept), the title, the day it happened, a fun line under it (whimsy's
+ * celebrationQuip, while this phone has "Fun facts and cheers" on) and, when
+ * whoever logged it wrote something, their words. "Keep as a moment" turns it
+ * into a keepsake: the title and their words, never the fun line.
  */
 
 const LEAF_COLORS = ["#B5452B", "#D9772B", "#E0A93B", "#C49A3C"];
@@ -83,6 +88,8 @@ export default function Celebrations() {
   const { open } = useSheets();
   const reduce = useReducedMotion();
   const nightLook = useNightActive();
+  const [extrasOn] = useExtrasOn();
+  const w = useBabyWords();
   const me = state?.me.email ?? "";
   const [seen, setSeen] = useState<string[] | null>(null);
   const [falling, setFalling] = useState<string | null>(null);
@@ -117,6 +124,8 @@ export default function Celebrations() {
     : "";
   const source = current?.entryId != null ? state?.entries.find((e) => e.id === current.entryId) : undefined;
   const said = source?.note?.trim() ? { note: source.note.trim(), created_by: source.created_by } : null;
+  // "100 diapers" → "You could do this blindfolded now. Please don't." The same line on every render (picked by the id).
+  const quip = current && extrasOn ? celebrationQuip(current.id, w) : null;
 
   const markSeen = (id: string) => {
     const next = [...new Set([...(seen ?? []), ...readSeen(me), id])].slice(-200);
@@ -145,6 +154,11 @@ export default function Celebrations() {
             <div className="min-w-0 flex-1">
               <h2 className={cx(tone.heading, "text-[17px] leading-snug")}>{current.title}</h2>
               <p className="mt-0.5 text-[13px] text-mp-ink-2 tabular-nums">{dated}</p>
+              {quip && (
+                <p data-celebration-quip className="mt-1.5 text-[15px] leading-snug text-balance text-mp-ink">
+                  {quip}
+                </p>
+              )}
               {said && (
                 <>
                   <p className={cx(tone.display, "mt-2 line-clamp-4 text-[20px] leading-snug italic")}>“{said.note}”</p>
