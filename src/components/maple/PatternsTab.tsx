@@ -307,8 +307,8 @@ export default function PatternsTab({
             <>
               {view === "totals" && loggedDays === 0 && ready && (
                 <Card>
-                  <EmptyState title="No daily totals logged in this range">
-                    Choose a longer range, or come back after logging an activity.
+                  <EmptyState title="Nothing to add up in this range">
+                    {readOnly ? "Choose a longer range, or check back once something's logged." : "Choose a longer range, or come back after logging an activity."}
                   </EmptyState>
                 </Card>
               )}
@@ -702,7 +702,7 @@ function Ribbons({
     : null;
   const hasMarks = rows.some((row) => row.feeds.length + row.sleeps.length + row.diapers.length + row.tummies.length > 0);
   if (!hasMarks) return <Card><EmptyState title="No feeds, sleep, diapers or tummy time in this range">
-    {rows.some((row) => row.stats.pumpSessions > 0) ? "Pumping sessions and amounts are in Daily totals." : "Choose another range to look for logged activity."}
+    {rows.some((row) => row.stats.pumpSessions > 0) ? "Pumping sessions and amounts are in Daily totals." : "Choose another range, or come back after a day or two of logging."}
   </EmptyState></Card>;
 
   return (

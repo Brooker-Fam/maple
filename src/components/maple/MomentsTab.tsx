@@ -753,7 +753,9 @@ function EmptyScrapbook({ viewer, onAdd }: { viewer: boolean; onAdd: () => void 
   return (
     <div className={tone.card}>
       <EmptyState icon="camera" title="No moments yet">
-        <p>{w.His} first photo goes here.</p>
+        <p className="text-balance">
+          {w.His} first photo goes here. {viewer ? "You'll see it the moment it's added." : "Blurry ones count."}
+        </p>
         {!viewer && (
           <Button className="mt-4" onClick={onAdd}>
             <Icon name="camera" size={18} />

@@ -16,7 +16,7 @@ export function pumpSummaryCases({ fixture, freshState, record, assert }) {
         assert.match(await table.innerText(), /1 session · 20m/);
         assert.match(await table.innerText(), /Amount not logged/);
         assert.doesNotMatch(await table.innerText(), /0 oz/);
-        assert.equal(await f.page.getByText("No daily totals logged in this range", { exact: true }).count(), 0);
+        assert.equal(await f.page.getByText("Nothing to add up in this range", { exact: true }).count(), 0);
         await f.page.getByRole("button", { name: "Charts", exact: true }).click();
         await f.page.getByRole("button", { name: /More charts/ }).click();
         const chart = f.page.getByRole("img", { name: /^Pumping sessions per day:/ });

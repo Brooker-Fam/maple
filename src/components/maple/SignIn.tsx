@@ -139,7 +139,7 @@ export default function SignIn() {
         </div>
         <h1 className={cx(tone.display, "mt-6 text-[34px] leading-[1.05]")}>Maple&apos;s Log</h1>
         <p className={cx(tone.muted, "mx-auto mt-2 max-w-[18rem] text-[15px] leading-relaxed text-balance")}>
-          Your family&apos;s newborn log.
+          Your family&apos;s newborn&nbsp;log, for all the little things.
         </p>
 
         {notice && (

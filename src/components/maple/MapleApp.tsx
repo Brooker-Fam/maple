@@ -2,7 +2,7 @@
 
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import dynamic from "next/dynamic";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { postToNative } from "@/lib/maple/native";
 import { AppNavProvider, useAppNav, type NavTarget, type TabId } from "./AppNav";
 import { WelcomeHost } from "./BirthSheet";
@@ -149,7 +149,13 @@ function Screens() {
     go("today");
   }, [loaded, tab, hasCare, go, toast, photosOnly, chatOn, momentsOn]);
 
-  if (status === "loading") return <Splash />;
+  if (status === "loading") {
+    return (
+      <Splash>
+        <LoadingLine />
+      </Splash>
+    );
+  }
   if (status === "signedOut") return <SignIn />;
   if (status === "error" || !state) {
     return (
@@ -320,5 +326,37 @@ function Splash({ children }: { children?: React.ReactNode }) {
       <p className={cx(tone.display, "mt-3 text-[28px]")}>Maple&apos;s Log</p>
       {children}
     </div>
+  );
+}
+
+/**
+ * A little line under the splash's title while the app loads, one per page
+ * load. Never about the baby: nothing is loaded yet to name them by. Each
+ * line fits one line at 320 px.
+ */
+const LOADING_LINES = [
+  "Finding a pen that works…",
+  "Rounding up the burp cloths…",
+  "Putting the kettle on…",
+  "Folding the tiny laundry…",
+  "Smoothing out the pages…",
+  "Catching a falling leaf…",
+];
+
+let loadingLine: string | null = null;
+const thisLoadsLine = () => (loadingLine ??= LOADING_LINES[Math.floor(Math.random() * LOADING_LINES.length)]);
+const noSubscribe = () => () => {};
+
+/**
+ * Picked on the client only: the server and the first render (hydration)
+ * show the same empty line, at its full height, so the leaf and title don't
+ * move when the words arrive. Decorative, so screen readers skip it.
+ */
+function LoadingLine() {
+  const line = useSyncExternalStore(noSubscribe, thisLoadsLine, () => null);
+  return (
+    <p aria-hidden className={cx(tone.muted, "mt-2 h-5 text-sm leading-5 whitespace-nowrap")}>
+      {line}
+    </p>
   );
 }
