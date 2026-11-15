@@ -38,7 +38,7 @@ The debug APK is `app/build/outputs/apk/debug/app-debug.apk`. There is no releas
 - **Edge to edge.** The app draws behind the system bars. The WebView is padded by the system bars, the display cutout and the keyboard (`WindowInsets.safeDrawing`) on Maple's page color. The WebView gets no insets of its own, so `env(safe-area-inset-*)` is 0 and the page is never padded twice.
 - **Offline.** If the main page fails to load, the app shows a "Can't reach Maple" screen with a Try again button, in Maple's day or dark colors.
 - **Crashes.** If the WebView's renderer dies, the app rebuilds the WebView on the last page instead of crashing.
-- **Icon.** The adaptive launcher icon is built from `public/maple-icon-512.png`: the leaf in the safe zone on cream (`#FDF8F0`), plus a monochrome layer for themed icons.
+- **Icon.** The adaptive launcher icon has three layers per density: the forest ground, the leaf (sized like the iPhone icon's within the visible 72 dp), and a monochrome leaf for themed icons. `pnpm brand:render` at the repository root draws them, and the offline screen's leaf, from `src/lib/brand.ts` ([docs/brand.md](../docs/brand.md)).
 
 ## Not in this phase
 

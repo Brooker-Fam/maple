@@ -59,6 +59,7 @@ self.addEventListener("push", (e) => {
       body,
       tag: n.tag || undefined,
       icon: "/maple-icon-192.png",
+      badge: "/maple-badge.png",
       silent: n.silent === true,
       data,
     });

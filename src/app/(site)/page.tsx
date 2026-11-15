@@ -5,7 +5,7 @@ import SiteFooter from "@/components/site/SiteFooter";
 import SiteHeader from "@/components/site/SiteHeader";
 import FeatureExplorer from "@/components/site/FeatureExplorer";
 import HomeDayScene from "@/components/site/HomeDayScene";
-import Leaf from "@/components/site/Leaf";
+import MapleMark from "@/components/MapleMark";
 import { Icon } from "@/components/maple/icons";
 
 export const metadata: Metadata = { alternates: { canonical: "/" } };
@@ -57,7 +57,7 @@ export default function Home() {
             <article className="home-care-card home-card-lilac">
               <div className="home-care-art home-chat-art" aria-hidden>
                 <span className="home-chat-bubble">What happened while I slept?</span>
-                <span className="home-chat-answer"><Leaf size={22} /><span>2 feeds. 3 diapers.<br />One busy morning.</span></span>
+                <span className="home-chat-answer"><MapleMark size={22} /><span>2 feeds. 3 diapers.<br />One busy morning.</span></span>
               </div>
               <h3>Ask it like<br />you’d say it.</h3>
               <p>Log a moment or explore your history with Maple’s chat.</p>
@@ -76,7 +76,7 @@ export default function Home() {
 
         <section id="maples-story" aria-labelledby="story-title" className="home-story">
           <div className="home-story-inner">
-            <div className="home-story-art" aria-hidden><span className="home-story-ring" /><Leaf size={100} /><span className="home-story-star">✧</span><span className="home-story-handwritten">for Maple,<br />with love.</span></div>
+            <div className="home-story-art" aria-hidden><span className="home-story-ring" /><MapleMark size={100} /><span className="home-story-star">✧</span><span className="home-story-handwritten">for Maple,<br />with love.</span></div>
             <div className="home-story-copy">
               <p className="home-eyebrow">A real baby. A real beginning.</p>
               <h2 id="story-title">Made for Maple.<br /><em>Here for your family.</em></h2>

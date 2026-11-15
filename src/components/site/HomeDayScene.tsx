@@ -1,5 +1,5 @@
 import { Icon } from "@/components/maple/icons";
-import Leaf from "./Leaf";
+import MapleMark from "@/components/MapleMark";
 
 const ticks = Array.from({ length: 48 }, (_, i) => i * 7.5);
 
@@ -30,7 +30,7 @@ export default function HomeDayScene() {
           </g>
         </svg>
         <div className="home-dial-center">
-          <Leaf size={34} />
+          <MapleMark size={34} />
           <span className="home-dial-label">a day together</span>
           <strong>It all<br />belongs.</strong>
           <span className="home-dial-date">Feeds · naps · firsts</span>
