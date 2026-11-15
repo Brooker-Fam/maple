@@ -1,17 +1,23 @@
-const LEAF =
-  "M50 4 L55.5 15.5 L62.5 11.5 L60.5 28 Q61.5 36.5 69.5 32.5 L77 22.5 L81 28 L95 24.5 L88.5 37.5 L94 42 L80.5 50.5 Q75 58.5 67.5 55.5 L72 64 L60 61.5 L53.6 66 L51.7 67.5 L52.9 86 L47.1 86 L48.3 67.5 L46.4 66 L40 61.5 L28 64 L32.5 55.5 Q25 58.5 19.5 50.5 L6 42 L11.5 37.5 L5 24.5 L19 28 L23 22.5 L30.5 32.5 Q38.5 36.5 39.5 28 L37.5 11.5 L44.5 15.5 L50 4 Z";
+import { LEAF_GRADIENT, LEAF_LIGHT, LEAF_PATH, LEAF_SHADE, LEAF_SHADE_PATH, LEAF_VIEWBOX } from "@/lib/brand";
 
-export function OgLeaf() {
+/** Maple's leaf (src/lib/brand.ts), cropped close, for the social cards. */
+export function OgLeaf({ size = 56 }: { size?: number }) {
+  const { x1, y1, x2, y2, offsets } = LEAF_GRADIENT;
+  const fill = (id: string, colors: readonly string[]) => (
+    <linearGradient id={id} gradientUnits="userSpaceOnUse" x1={x1} y1={y1} x2={x2} y2={y2}>
+      {colors.map((c, i) => (
+        <stop key={c} offset={offsets[i]} stopColor={c} />
+      ))}
+    </linearGradient>
+  );
   return (
-    <svg width="54" height="50" viewBox="0 0 100 92">
+    <svg width={size} height={size} viewBox={LEAF_VIEWBOX}>
       <defs>
-        <linearGradient id="g" x1="0.2" y1="0" x2="0.75" y2="1">
-          <stop offset="0" stopColor="#E8902F" />
-          <stop offset="0.55" stopColor="#CC4A2A" />
-          <stop offset="1" stopColor="#A3321F" />
-        </linearGradient>
+        {fill("leaf", LEAF_LIGHT)}
+        {fill("leafShade", LEAF_SHADE)}
       </defs>
-      <path d={LEAF} fill="url(#g)" />
+      <path d={LEAF_PATH} fill="url(#leaf)" />
+      <path d={LEAF_SHADE_PATH} fill="url(#leafShade)" />
     </svg>
   );
 }

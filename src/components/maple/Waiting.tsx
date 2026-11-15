@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { dayKey, daysBetween } from "@/lib/maple/time";
 import BirthSheet from "./BirthSheet";
-import { MapleLeaf, Sapling } from "./art";
+import MapleMark from "@/components/MapleMark";
+import { Sapling } from "./art";
 import { useBabyWords } from "./familyWords";
 import { Button, cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
@@ -80,7 +81,7 @@ export function BirthBanner({ className }: { className?: string }) {
   return (
     <>
       <div role="status" className={cx(tone.card, "flex items-center gap-3 px-4 py-3", className)}>
-        <MapleLeaf size={24} veins={false} className="shrink-0" />
+        <MapleMark size={24} className="shrink-0" />
         <p className="flex-1 text-sm leading-snug text-mp-ink">Add {w.his} birth time so Day 1 and {w.his} age are right</p>
         <Button size="sm" onClick={() => setOpen(true)}>
           Add now

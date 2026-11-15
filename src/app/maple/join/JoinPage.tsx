@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { MapleLeaf } from "@/components/maple/art";
+import MapleMark from "@/components/MapleMark";
 import { Icon } from "@/components/maple/icons";
 import { Button, cx, tone } from "@/components/maple/ui";
 import { MAPLE_HOST } from "@/lib/maple/origin";
@@ -109,7 +109,7 @@ export default function JoinPage({ askWho }: { askWho: string }) {
     <div className="flex min-h-[100dvh] flex-col items-center justify-center px-6 pt-[max(2rem,env(safe-area-inset-top))] pb-[max(2rem,env(safe-area-inset-bottom))] text-center">
       <div className="w-full max-w-sm">
         <div className="mx-auto flex h-[88px] w-[88px] items-center justify-center rounded-[24px] border border-mp-line bg-mp-surface">
-          <MapleLeaf size={60} className="[.maple-night_&]:opacity-70" />
+          <MapleMark size={60} className="[.maple-night_&]:opacity-70" />
         </div>
 
         {phase.kind === "working" && (

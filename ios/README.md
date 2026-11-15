@@ -74,4 +74,4 @@ In Xcode, change it under Build Settings → User-Defined → `MAPLE_BASE_URL`. 
 - `Maple/MapleRoutes.swift`: URL building and link routing (unit tested).
 - `Maple/OfflineView.swift`: the error screen.
 - `Maple/Assets.xcassets`: the app icon, Maple's colours (day and dark) and the leaf mark.
-- `scripts/render-icon.sh`: re-renders the 1024 px icon from `public/maple-icon.svg` with Quick Look and ImageMagick.
+- The app icon (light, dark and tinted) and the leaf come from `pnpm brand:render` at the repository root, which draws them from `src/lib/brand.ts` ([docs/brand.md](../docs/brand.md)). Don't edit them by hand.

@@ -2,58 +2,16 @@
 
 import { motion, useReducedMotion } from "framer-motion";
 import { useId } from "react";
+import { LEAF_GRADIENT, LEAF_LIGHT, LEAF_PATH, LEAF_SHADE, LEAF_SHADE_PATH } from "@/lib/brand";
 import { useNightActive } from "./nightLook";
 
 /**
- * Illustrations for Maple's Log: the sugar-maple leaf (same shape as the app
- * icon: sign-in, the birth welcome, the join and connect pages, the birth
- * banner) and the waiting sapling. The app's chrome uses line icons
- * (./icons); these are the few drawn marks. Motion is gentle
- * and switches off under prefers-reduced-motion and the night look.
+ * Illustrations for Maple's Log: the waiting sapling, crowned with Maple's
+ * leaf (src/lib/brand.ts; the leaf on its own is @/components/MapleMark). The
+ * app's chrome uses line icons (./icons); these are the few drawn marks.
+ * Motion is gentle and switches off under prefers-reduced-motion and the night
+ * look.
  */
-
-/** The app-icon leaf, stem included, in a 100×100 box. */
-export const LEAF_PATH =
-  "M50 4 L55.5 15.5 L62.5 11.5 L60.5 28 Q61.5 36.5 69.5 32.5 L77 22.5 L81 28 L95 24.5 L88.5 37.5 L94 42 L80.5 50.5 Q75 58.5 67.5 55.5 L72 64 L60 61.5 L53.6 66 L51.7 67.5 L52.9 86 L47.1 86 L48.3 67.5 L46.4 66 L40 61.5 L28 64 L32.5 55.5 Q25 58.5 19.5 50.5 L6 42 L11.5 37.5 L5 24.5 L19 28 L23 22.5 L30.5 32.5 Q38.5 36.5 39.5 28 L37.5 11.5 L44.5 15.5 L50 4 Z";
-
-/** A maple leaf. `color` gives a flat fill; otherwise the icon's autumn gradient. */
-export function MapleLeaf({
-  size = 48,
-  color,
-  veins = true,
-  className,
-}: {
-  size?: number;
-  color?: string;
-  veins?: boolean;
-  className?: string;
-}) {
-  const id = useId().replace(/:/g, "");
-  return (
-    <svg viewBox="0 0 100 100" width={size} height={size} className={className} aria-hidden>
-      {!color && (
-        <defs>
-          <linearGradient id={`leaf${id}`} x1="0.2" y1="0" x2="0.75" y2="1">
-            <stop offset="0" stopColor="#E8902F" />
-            <stop offset="0.55" stopColor="#CC4A2A" />
-            <stop offset="1" stopColor="#A3321F" />
-          </linearGradient>
-        </defs>
-      )}
-      <path d={LEAF_PATH} fill={color ?? `url(#leaf${id})`} />
-      {veins && (
-        <path
-          d="M50 64V13M50 58L86 28.5M50 58L14 28.5"
-          stroke="#F8DB97"
-          strokeOpacity={0.55}
-          strokeWidth={1.8}
-          strokeLinecap="round"
-          fill="none"
-        />
-      )}
-    </svg>
-  );
-}
 
 /** True when the art should hold still. */
 export function useStill(): boolean {
@@ -72,20 +30,23 @@ export function Sapling({ size = 160, sway = true }: { size?: number; sway?: boo
       {/* two small side leaves */}
       <path d="M80 86 C70 84 63 78 61 70 C70 70 77 75 80 86 Z" fill="#6B8448" />
       <path d="M80.5 78 C90 76 96 70 98 62 C89 62 83 67 80.5 78 Z" fill="#7F9A57" />
-      {/* the first maple leaf, crowning it */}
-      <g transform="translate(57 18) scale(0.46)">
+      {/* the first maple leaf, crowning it: its stem's tip meets the sapling's at 80,58 */}
+      <g transform="translate(54.8 15.5) scale(0.46)">
         <path d={LEAF_PATH} fill={`url(#sap${id})`} />
+        <path d={LEAF_SHADE_PATH} fill={`url(#sapShade${id})`} />
       </g>
     </g>
   );
   return (
     <svg viewBox="0 0 160 140" width={size} height={(size * 140) / 160} className="[.maple-night_&]:opacity-75" aria-hidden>
       <defs>
-        <linearGradient id={`sap${id}`} x1="0.2" y1="0" x2="0.75" y2="1">
-          <stop offset="0" stopColor="#E8902F" />
-          <stop offset="0.55" stopColor="#CC4A2A" />
-          <stop offset="1" stopColor="#A3321F" />
-        </linearGradient>
+        {[`sap${id}`, `sapShade${id}`].map((gid, k) => (
+          <linearGradient key={gid} id={gid} gradientUnits="userSpaceOnUse" x1={LEAF_GRADIENT.x1} y1={LEAF_GRADIENT.y1} x2={LEAF_GRADIENT.x2} y2={LEAF_GRADIENT.y2}>
+            {(k ? LEAF_SHADE : LEAF_LIGHT).map((c, i) => (
+              <stop key={c} offset={LEAF_GRADIENT.offsets[i]} stopColor={c} />
+            ))}
+          </linearGradient>
+        ))}
       </defs>
       {/* mound */}
       <path d="M18 122 C34 98 126 98 142 122 Z" fill="#8A5A2B" opacity="0.9" />

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import GetStarted from "./GetStarted";
 import { SIGN_IN_PATH } from "./paths";
-import Leaf from "./Leaf";
+import MapleMark from "@/components/MapleMark";
 
 const LINKS = [
   { href: "/faq", label: "FAQ" },
@@ -20,8 +20,9 @@ export default function SiteHeader({ home = false }: { home?: boolean }) {
       <a href="#main" className="site-skip">
         Skip to content
       </a>
-      <Link href="/" className="site-focus -m-2 flex items-center gap-2.5 rounded-xl p-2" aria-label="Maple, home">
-        <Leaf size={30} />
+      <Link href="/" className="site-focus -m-2 flex items-center gap-[7px] rounded-xl p-2" aria-label="Maple, home">
+        {/* Dropped a little so the leaf sits on the word and its stem hangs like the p. */}
+        <MapleMark size={34} className="relative top-[3px]" />
         <span className="font-display text-[1.7rem] leading-none font-semibold tracking-[-0.01em] text-mp-ink">Maple</span>
       </Link>
       <nav aria-label="Main" className="order-last -ml-3 flex w-full items-center sm:order-none sm:ml-auto sm:w-auto">

@@ -4,7 +4,6 @@
 .home-sky { --mp-ink: #f5f1df; --mp-ink-2: #d1d9c8; --mp-ink-3: #b2c4b1; --mp-accent: #edf0ce; --mp-on-accent: #183a2b; --mp-accent-fg: #edf0ce; --mp-focus: #efbd9e; color: var(--mp-ink); background: #153328; }
 .home-header { position: relative; z-index: 2; }
 .home-header header { padding-bottom: 20px; }
-.home-header header > a { gap: 8px; }
 .home-header nav a { font-size: 14px; }
 .home-header .site-button-sm { height: 40px; padding-inline: 20px; }
 .home-hero { position: relative; padding: 28px 0 0; background: radial-gradient(ellipse at 78% 45%, #39544170, transparent 55%), radial-gradient(ellipse at 0% 100%, #56614a40, transparent 55%), #153328; }
