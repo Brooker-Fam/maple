@@ -414,7 +414,7 @@ function ToastBody({ t, dismiss }: { t: Toast; dismiss: (id: number) => void }) 
         <span className="flex-1">{t.text}</span>
         {!t.actions?.length && undo}
       </div>
-      {t.aside && <p className="mt-0.5 pl-8 text-[13px] leading-snug text-balance opacity-80">{fillExtra(t.aside, w)}</p>}
+      {t.aside && <p data-toast-extra className="mt-0.5 pl-8 text-[13px] leading-snug text-balance opacity-80">{fillExtra(t.aside, w)}</p>}
       {t.actions?.length ? (
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
           {t.actions.map((a) => (
