@@ -271,8 +271,10 @@ function FreshPage({ readOnly }: { readOnly: boolean }) {
     <section className={cx(tone.card, "px-6 py-8 text-center")}>
       <RestingCat className="mx-auto h-10 w-[72px]" />
       <p className={cx(tone.heading, "mt-3 text-[20px]")}>A fresh page</p>
-      <p className={cx(tone.muted, "mx-auto mt-1 max-w-[18rem] text-[15px]")}>
-        {readOnly ? "Nothing logged yet today. Check back soon." : `Tap a button below when ${w.name} eats, sleeps, or needs a change.`}
+      <p className={cx(tone.muted, "mx-auto mt-1 max-w-[18rem] text-[15px] text-balance")}>
+        {readOnly
+          ? "Nothing logged yet today. Check back soon: things move fast around here."
+          : `Tap a button below when ${w.name} eats, sleeps, or needs a change. Any minute now.`}
       </p>
     </section>
   );

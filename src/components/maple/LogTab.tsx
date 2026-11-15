@@ -32,7 +32,7 @@ import { KIND_COLOR } from "./palette";
 import MoreSheet, { logSwitches } from "./MoreSheet";
 import { useSheets } from "./sheets";
 import { useClusterInfo } from "./sheets/ClusterInfoSheet";
-import { babyFirstName, useMilestoneWords } from "./familyWords";
+import { babyFirstName, babyWords, useMilestoneWords } from "./familyWords";
 import { Button, Chip, EmptyState, SectionTitle, Sheet, cx, tone } from "./ui";
 import { useMaple, useNow } from "./useMaple";
 
@@ -597,7 +597,11 @@ export default function LogTab({
 
       {nothingAtAll && !running.length && !pinned ? (
         <div className="mt-6">
-          <EmptyState title="Nothing logged yet">Feeds, changes and naps show up here, newest first.</EmptyState>
+          <EmptyState title="Nothing logged yet">
+            <p className="text-balance">
+              Feeds, changes and naps show up here, newest first. Think of it as {babyWords(state.baby).his} very first diary.
+            </p>
+          </EmptyState>
           {!readOnly && <QuickLog onMore={() => addOnDay(todayKey)} />}
         </div>
       ) : (

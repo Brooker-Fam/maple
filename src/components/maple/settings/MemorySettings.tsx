@@ -260,7 +260,11 @@ export default function MemorySettings({ active }: { active: boolean }) {
           {current.length ? (
             <ul className={tone.divide}>{current.map((m) => card(m))}</ul>
           ) : (
-            !draft && <EmptyState icon="sticky-note" title="Nothing saved yet">Things like the feeding plan, who does the night feeds, or what the doctor asked you to watch.</EmptyState>
+            !draft && (
+              <EmptyState icon="sticky-note" title="Nothing saved yet">
+                Things like the feeding plan, who does the night feeds, or what the doctor asked you to watch. One less thing to keep in your head.
+              </EmptyState>
+            )
           )}
         </div>
       </Section>

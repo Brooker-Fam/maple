@@ -156,7 +156,10 @@ export default function GrowthChart({ baby, growth, units, todayKey, onAdd, onEd
     return (
       <div className={VARS}>
         <EmptyState icon="ruler" title="No weigh-ins yet">
-          Add {w.his} birth stats or numbers from the next checkup.
+          {/* A view-only guest (no onAdd) can't add one, so it says they'll show here once someone does. */}
+          <span className="block text-balance">
+            {onAdd ? `Add ${w.his} birth stats or numbers from the next checkup, whenever you have them.` : `${w.His} measurements show up here once they're added.`}
+          </span>
           {onAdd && (
             <span className="mt-4 block">
               <Button variant="soft" onClick={onAdd}>
