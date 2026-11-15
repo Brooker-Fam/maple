@@ -86,7 +86,8 @@ function uploadingFixture(items: Item[], holdAt = 1) {
   };
   return {
     ...f, requests, saved, toasts, release,
-    flush: sourceFunction<() => Promise<void>>("useMaple", "flush", context),
+    // The queue's rules live in sendQueued; useMaple's flush only runs one of those at a time.
+    flush: sourceFunction<() => Promise<boolean>>("useMaple", "sendQueued", context),
     update: sourceFunction<(id: number, patch: { note: string }) => Promise<Item["entry"] | null>>("useMaple", "update", context),
     remove: sourceFunction<(id: number) => Promise<boolean>>("useMaple", "remove", context),
     unqueue: sourceFunction<(id: number) => boolean>("useMaple", "unqueue", context),
@@ -106,7 +107,7 @@ async function main() {
     let release!: () => void;
     const deferred = new Promise<void>((resolve) => { release = resolve; });
     const isFamilyMismatch = sourceFunction("useMaple", "isFamilyMismatch", { ApiError });
-    const flush = sourceFunction<() => Promise<void>>("useMaple", "flush", {
+    const flush = sourceFunction<() => Promise<boolean>>("useMaple", "sendQueued", {
       ...f, flushing: { current: false }, flushingEntry: { current: null }, syncedEntryIds: { current: { ids: new Map() } },
       ownedBy: sourceFunction("useMaple", "ownedBy"),
       isEntryItem: sourceFunction("useMaple", "isEntryItem"), isMoodItem: sourceFunction("useMaple", "isMoodItem"), isCareItem: sourceFunction("useMaple", "isCareItem"),

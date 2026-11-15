@@ -103,7 +103,8 @@ function flushing(item: Queued) {
   const requests: { path: string; init: RequestInit }[] = [];
   let resolve!: (value: unknown) => void;
   const reply = new Promise((done) => { resolve = done; });
-  const flush = clientFunction<() => Promise<void>>("flush", {
+  // The queue's rules live in sendQueued; useMaple's flush only runs one of those at a time.
+  const flush = clientFunction<() => Promise<boolean>>("sendQueued", {
     flushing: { current: false }, flushingEntry: { current: null }, syncedEntryIds: { current: { ids: new Map() } }, outboxRef, stateRef,
     ownedBy: clientFunction("ownedBy"),
     isEntryItem: clientFunction("isEntryItem"), isMoodItem: clientFunction("isMoodItem"), isCareItem: clientFunction("isCareItem"),

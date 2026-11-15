@@ -74,7 +74,7 @@ function App() {
     now: NOW.toISOString(), rev: "synthetic", growth: [], lifetime: null, care: null,
     baby: { name: "River", nickname: null, sex: "female", timezone: "America/New_York", born_at: "2026-10-01T12:00:00.000Z", settings: {} },
     family: { id: 99, care_name: "Sam", ask: "an owner" },
-    me: { email: EMAIL }, members: [{ email: EMAIL, display_name: "Sam", role: "owner", color: "#674b7b" }],
+    me: { email: EMAIL, role: "owner" }, members: [{ email: EMAIL, display_name: "Sam", role: "owner", color: "#674b7b" }],
     entries: mode === "today-empty" ? [] : mode.startsWith("more") ? [entry(6, "feed", "2026-10-28T13:20:00.000Z", { method: "breast", first_side: "L", segments: [{ side: "L", start: "2026-10-28T13:20:00.000Z", end: mode === "more-paused" ? "2026-10-28T13:25:00.000Z" : null }] }, { active: true })] : mode === "form-temp-edit-unknown" ? [...entries, savedTemperature] : entries,
   }), []);
   const summary = useMemo(() => summarize({ ...state, now: NOW, vo: makeVoice({ name: "River", pronoun: "she", mom: "Sam" }) }), [state]);

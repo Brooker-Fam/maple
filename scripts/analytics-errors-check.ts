@@ -8,6 +8,7 @@ import { PostHog } from "posthog-node";
 import type { NextRequest } from "next/server";
 import type { AnalyticsActor } from "../src/lib/analytics/identity";
 import { syncRequestFor } from "../src/lib/maple/diagnostics";
+import * as access from "../src/lib/maple/access";
 
 const PRIVATE = "synthetic_private_token";
 const ACTOR = { member: "synthetic-parent@example.test", familyId: 701, role: "owner" };
@@ -108,6 +109,8 @@ function api(failure?: "capture" | "delivery" | "auth") {
       },
     },
     "./origin": { MAPLE_ORIGIN: "https://synthetic.example.test" },
+    // Per-person parts (doctor questions, moments, the chat): the real rules, which need nothing of their own.
+    "./access": access,
   });
   return { ...loaded, reports, diagnostics, alerts, emails, drain: async () => { for (const task of tasks.splice(0)) await task(); } };
 }

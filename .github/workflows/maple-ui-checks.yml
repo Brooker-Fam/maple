@@ -10,7 +10,8 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest is 26.04 now, where Playwright 1.56.1 installs no browsers ("does not support chromium").
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       NEXT_TELEMETRY_DISABLED: "1"
@@ -181,7 +182,8 @@ jobs:
         run: pnpm exec next build
 
   recovery:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest is 26.04 now, where Playwright 1.56.1 installs no browsers ("does not support chromium").
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       NEXT_TELEMETRY_DISABLED: "1"
