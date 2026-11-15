@@ -33,6 +33,9 @@ import { formatTime, localParts } from "@/lib/maple/time";
 import { setVolumesBoth } from "@/lib/maple/units";
 import { ApiError, createMapleRequests, RequestTimeout, type MapleRequestInit } from "@/lib/maple/client-request";
 import { keepConfirmed, stampOutbox } from "@/lib/maple/client-state";
+import type { ExtraTopic } from "@/lib/maple/whimsy";
+import { extraForEntry, takeExtra } from "./extras";
+import { nightActive } from "./nightLook";
 import { FAMILY_MOVED_EVENT, setShownFamily } from "./shownFamily";
 import type {
   CareEntry,
@@ -106,6 +109,12 @@ export type Toast = {
   watch?: { entryId: number; updatedAt: string; /** Historical records are omitted by recent-state polls. */ allowMissing?: boolean };
   /** The mark in place of the check: a saved diaper wears its drop or pile (toastIcon). */
   icon?: IconName;
+  /**
+   * A little extra on a line of its own under the text: a fun fact, a joke or
+   * a cheer (lib/maple/whimsy, picked by `extra`). It's kept as written, and
+   * the toast fills in the baby's name and pronouns as it shows.
+   */
+  aside?: string;
   owner?: Owner;
 };
 
@@ -180,6 +189,8 @@ export type MapleContextValue = {
       toast?: string;
       silent?: boolean;
       actions?: (entry: Entry) => ToastAction[];
+      /** false: no little extra under the toast (one that asks something: "Same one?"). */
+      extra?: boolean;
     }
   ) => Promise<Entry | null>;
   update: (id: number, patch: UpdateEntryInput, opts?: { toast?: string; onConflict?: (entry: Entry) => void; throwOnError?: boolean }) => Promise<Entry | null>;
@@ -206,6 +217,14 @@ export type MapleContextValue = {
   toasts: Toast[];
   /** Show a toast; returns its id (for dismissToast). */
   toast: (text: string, opts?: Partial<Omit<Toast, "id" | "text">>) => number;
+  /**
+   * The little extra for a toast about something just logged (its `aside`):
+   * an entry (extraTopics says what its line may be about) or the topics
+   * themselves (["try"] after a bassinet try). Undefined for none: this phone
+   * has them off (extras.ts), nothing fits, an urgent alert is up, or it's
+   * night and one showed a moment ago. `log` already adds one to its toast.
+   */
+  extra: (what: Entry | ExtraTopic[]) => string | undefined;
   dismissToast: (id: number) => void;
   /** Close the timer toast, if one is up (a dock tap, Fix times opening). */
   dismissTimerToast: () => void;
@@ -599,7 +618,8 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       // A group holds one toast: the newest timer toast replaces the last.
       setToasts((t) => [...t.filter((x) => !opts.group || x.group !== opts.group).slice(-2), { id, text, tone: opts.tone ?? "ok", ...opts }]);
       const long = opts.undo || opts.actions?.length;
-      const ms = opts.duration ?? (long ? (isNight() ? 12_000 : 8_000) : 3_500);
+      // A little extra under it is another line to read: two seconds more.
+      const ms = opts.duration ?? (long ? (isNight() ? 12_000 : 8_000) : 3_500) + (opts.aside ? 2_000 : 0);
       setTimeout(() => dismissToast(id), ms);
     },
     [dismissToast, isNight]
@@ -990,6 +1010,19 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       vo: voiceFor(state.family?.id ?? 0, state.baby, state.care?.person.name ?? null),
     });
   }, [state, tick, now]);
+  const summaryRef = useRef(summary);
+  summaryRef.current = summary;
+
+  /** A little extra for a toast (MapleContextValue.extra): never beside an urgent alert, and quiet at night. */
+  const extra = useCallback<MapleContextValue["extra"]>(
+    (what) => {
+      const s = stateRef.current;
+      if (!s || summaryRef.current?.alerts.some((a) => a.tier === "emergency" || a.tier === "now")) return undefined;
+      const when = { bornAt: s.baby.born_at, now: now(), night: isNight() || nightActive() };
+      return Array.isArray(what) ? takeExtra(what, when) : extraForEntry(what, when);
+    },
+    [isNight, now]
+  );
 
   /**
    * Show a change to one entry at once (optimistic): `make` gets its current
@@ -1151,10 +1184,12 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         );
         upsert(entry, id);
         if (!opts.silent) {
+          const aside = opts.extra === false ? undefined : extra(entry);
           toast(opts.toast ?? "Logged", {
             undo: () => void remove(entry.id, { toast: "Undone" }),
             actions: opts.actions?.(entry),
             icon: toastIcon(entry),
+            ...(aside ? { aside } : {}),
           });
         }
         return entry;
@@ -1176,7 +1211,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
         void forceRefresh();
       }
     },
-    [dropEntry, fetchJson, forceRefresh, now, remove, setQueue, state, toast, upsert, withInflight]
+    [dropEntry, extra, fetchJson, forceRefresh, now, remove, setQueue, state, toast, upsert, withInflight]
   );
 
   const update = useCallback<MapleContextValue["update"]>(
@@ -1582,6 +1617,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       api,
       toasts,
       toast,
+      extra,
       dismissToast,
       dismissTimerToast,
       holdTimerToasts,
@@ -1593,7 +1629,7 @@ export function MapleProvider({ children }: { children: ReactNode }) {
       care,
       sleep,
     }),
-    [status, error, auth, state, summary, now, isNight, units, setUnits, volumeBoth, setVolumeBoth, forceRefresh, outbox, online, seenAt, log, update, remove, restore, timerCall, timer, timerBusy, api, toasts, toast, dismissToast, dismissTimerToast, holdTimerToasts, memberName, memberLabel, whoDiscarded, member, readOnly, care, sleep]
+    [status, error, auth, state, summary, now, isNight, units, setUnits, volumeBoth, setVolumeBoth, forceRefresh, outbox, online, seenAt, log, update, remove, restore, timerCall, timer, timerBusy, api, toasts, toast, extra, dismissToast, dismissTimerToast, holdTimerToasts, memberName, memberLabel, whoDiscarded, member, readOnly, care, sleep]
   );
 
   return <MapleContext.Provider value={value}>{children}</MapleContext.Provider>;

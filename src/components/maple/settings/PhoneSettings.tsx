@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useTheme } from "@/components/ThemeProvider";
 import { isNativeApp } from "@/lib/maple/native";
 import { otherUnits, ozToMl, volumeIn } from "@/lib/maple/units";
+import { useExtrasOn } from "../extras";
 import { Icon } from "../icons";
 import { useNightPref, type NightPref } from "../nightLook";
 import { Segmented, cx, tone } from "../ui";
@@ -28,6 +29,7 @@ export default function PhoneSettings() {
   const example = units === "metric" ? 60 : ozToMl(2);
   const bothExample = `${volumeIn(example, units)} (${volumeIn(example, otherUnits(units))})`;
   const [night, setNight] = useNightPref();
+  const [extras, setExtras] = useExtrasOn();
   const { theme, setTheme } = useTheme();
   const [standalone, setStandalone] = useState(true);
   useEffect(() => {
@@ -72,6 +74,12 @@ export default function PhoneSettings() {
               ]}
             />
           </SegmentRow>
+          <Toggle
+            label="Fun facts and cheers"
+            hint="A fun fact, a joke or a cheer under what you log. At night, only a quiet cheer now and then."
+            checked={extras}
+            onChange={setExtras}
+          />
         </div>
       </Section>
       <Section title="Measurements" footnote="These preferences stay on this device. Everyone else keeps their own.">

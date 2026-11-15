@@ -359,6 +359,8 @@ export default function Dock() {
       { kind: "diaper", data: { pee, poop } },
       {
         toast: text,
+        // "Same one?" is a question: nothing under it but its two answers.
+        extra: !dup,
         actions: (saved: Entry): ToastAction[] => {
           if (dup) {
             return [

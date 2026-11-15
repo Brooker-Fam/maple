@@ -4,11 +4,13 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Member } from "@/lib/maple/types";
+import { fillExtra } from "@/lib/maple/whimsy";
 export { Field, parseTypedNumber, useTypedNumber, NumberProblem, Stepper, WhenField, resolveWallTime, RepeatButton, TimeScrubber, TimeRange, TextArea } from "./uiFields";
 export { Sheet, useSheetArmed } from "./Sheet";
 import { subscribeSlots, topSlot, noSlot } from "./sheetSlots";
 import { Icon, type IconName } from "./icons";
 import { useNightActive } from "./nightLook";
+import { useBabyWords } from "./familyWords";
 import { doubleTap, noteTap } from "./tapCooldown";
 import { useMaple, type Toast } from "./useMaple";
 
@@ -376,8 +378,13 @@ const CHIP_CHAIN_MS = 3000;
 const CHIP_ARM_MS = 600;
 let lastChipTap = -Infinity;
 
-/** A toast's text, chips and trailing button (Undo, "Back to 4:25"). */
+/**
+ * A toast's text, its little extra (a fun fact, a joke or a cheer, on a quieter line of its own under the text, with the
+ * baby's name and pronouns filled in), its chips and its trailing button (Undo, "Back to 4:25"). The extra sits between
+ * the text and the chips, so it never moves a chip out from under the thumb: the toast grows upward.
+ */
 function ToastBody({ t, dismiss }: { t: Toast; dismiss: (id: number) => void }) {
+  const w = useBabyWords();
   // When it showed, and whether a chip tap just raised it (performance clock: monotonic, like the dock's cooldowns).
   const shown = useRef<{ at: number; chained: boolean } | null>(null);
   useEffect(() => {
@@ -407,6 +414,7 @@ function ToastBody({ t, dismiss }: { t: Toast; dismiss: (id: number) => void }) 
         <span className="flex-1">{t.text}</span>
         {!t.actions?.length && undo}
       </div>
+      {t.aside && <p className="mt-0.5 pl-8 text-[13px] leading-snug text-balance opacity-80">{fillExtra(t.aside, w)}</p>}
       {t.actions?.length ? (
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
           {t.actions.map((a) => (
