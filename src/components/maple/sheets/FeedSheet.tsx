@@ -195,7 +195,7 @@ export default function FeedSheet(props: SheetProps) {
 
 function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const base = useSheetBase();
-  const { tz, units, state, summary, log, update, remove, clock, now, ageDays, age, api, refresh, toast, memberLabel, readOnly } = base;
+  const { tz, units, state, summary, log, update, remove, clock, now, ageDays, age, api, refresh, toast, extra, memberLabel, readOnly } = base;
   const openSheet = useOpenSheet();
   const w = useBabyWords();
   const voice = useVoice();
@@ -754,10 +754,13 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     // The side words go last, as on the Done toast.
     const tail = next ? ` · ${next}` : "";
     const head = tail && feedText.endsWith(tail) ? feedText.slice(0, -tail.length) : feedText;
+    // Both saves were silent, so this one toast carries the feed's little extra, as the feed's own toast would have.
+    const aside = extra(feed);
     toast(`${head} ${feedPartWords(given, units, planUnits)}${head === feedText ? "" : tail}`, {
       undo: () => {
         void remove(given.id, { toast: "Undone" }).then((ok) => ok && remove(feed.id, { toast: "Undone" }));
       },
+      ...(aside ? { aside } : {}),
     });
   };
 

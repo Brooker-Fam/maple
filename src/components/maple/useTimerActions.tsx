@@ -48,10 +48,11 @@ import { useMaple, type TimerCallOptions, type TimerFailure, type ToastAction } 
  * at a time; its chips move the moment the tap recorded ("5 min earlier"),
  * counted from the server's value, never from the phone clock, and its
  * trailing button puts back exactly what the server says was there before.
- * A toast that reports something finished (Done, Woke up, a finish fixed)
- * carries the little extra a log's toast does (useMaple's extra); one about a
- * timer still running never does, so it stays two lines tall under the card,
- * and neither does a finish while another timer's card runs on above it.
+ * A toast that reports something finished (Done, Woke up) carries the little
+ * extra a log's toast does (useMaple's extra); one about a timer still running
+ * never does, so it stays two lines tall under the card, and neither does a
+ * finish while another timer's card runs on above it, or a fix to a finish
+ * ("Ended earlier…", "She went back on…"): an edit, and its Done had one.
  */
 
 type SidePart = Extract<Part, { kind: "side" }>;
@@ -366,11 +367,9 @@ export function useTimerActions() {
       }
       // A stale chip on a feed the other phone had already ended: the fix saved, but say the feed is over.
       if (wasActive && !after.active && after.ended_at && moved?.moment !== "feed_end") text += ` · the feed ended ${short(after.ended_at)}`;
-      // When a finished feed ended, fixed ("Ended earlier…"): a finish, so it gets the Done toast's little extra.
-      const aside = edit.op === "move" && moved?.moment === "feed_end" ? finishedExtra(after) : undefined;
-      timerToast(text, after, { undo: () => void restoreFrom(res), undoLabel: back, aside });
+      timerToast(text, after, { undo: () => void restoreFrom(res), undoLabel: back });
     },
-    [finishedExtra, now, restoreFrom, short, timerToast]
+    [now, restoreFrom, short, timerToast]
   );
 
   /**
@@ -513,11 +512,10 @@ export function useTimerActions() {
       const last = sideParts(res.entry, now()).at(-1);
       const ended = res.entry.ended_at ?? until.toISOString();
       const text = last?.end ? `${last.side === "B" ? "Back and forth" : SIDE_NAME[last.side]} ${short(last.start)} – ${short(last.end)} · ended ${short(ended)}` : `Ended ${short(ended)}`;
-      // The feed ends at the Done tap again, with the side added: a finish, with its little extra.
-      timerToast(text, res.entry, { undo: () => void restoreFrom(res, endedAgain), aside: finishedExtra(res.entry) });
+      timerToast(text, res.entry, { undo: () => void restoreFrom(res, endedAgain) });
       return res;
     },
-    [carriedToast, endedAgain, finishedExtra, now, restoreFrom, short, timerCall, timerToast]
+    [carriedToast, endedAgain, now, restoreFrom, short, timerCall, timerToast]
   );
 
   /**
