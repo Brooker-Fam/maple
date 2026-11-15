@@ -74,6 +74,11 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
     return s && s <= end ? [s, presetEnd ? end : s] : [end, end];
   });
   const [includeDuration, setIncludeDuration] = useState(() => !!e?.ended_at || (!e && range[1].getTime() > range[0].getTime()));
+  /**
+   * A start someone set (a saved pump's, a preset's, or one they chose here) stays where it is: a duration runs on from
+   * it and moves the end. Until then (a new pump, or When: Now) it just finished, so a duration counts back from its end.
+   */
+  const [startSet, setStartSet] = useState(() => !!e || presetStart(preset) !== null);
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
   const [timeInvalid, setTimeInvalid] = useState(false);
@@ -264,9 +269,20 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
               Include duration
             </label>
             {includeDuration ? (
-              <TimeRange start={start} end={end} onInvalidChange={setTimeInvalid} tz={tz} durations={[10, 15, 20, 30, 45]} onChange={(s, en) => setRange([s, en])} />
+              <TimeRange
+                start={start}
+                end={end}
+                onInvalidChange={setTimeInvalid}
+                tz={tz}
+                durations={[10, 15, 20, 30, 45]}
+                keep={startSet ? "start" : "end"}
+                onChange={(s, en, changed) => {
+                  if (changed === "start") setStartSet(true);
+                  setRange([s, en]);
+                }}
+              />
             ) : (
-              <WhenField value={start} onChange={(value) => { const at = value ?? now(); setRange([at, at]); }} onInvalidChange={setTimeInvalid} tz={tz} />
+              <WhenField value={start} onChange={(value) => { const at = value ?? now(); setRange([at, at]); setStartSet(value !== null); }} onInvalidChange={setTimeInvalid} tz={tz} />
             )}
           </>
         )}

@@ -459,8 +459,11 @@ export function TimeScrubber({
 /**
  * Start and end for timed things (sleep, a feed logged afterwards, tummy
  * time, pumping): two scrubbers, the live duration between them, and
- * duration chips that set start = end − duration. Moving the start keeps the
- * end where it is.
+ * duration chips. Moving the start keeps the end where it is. A chip keeps
+ * one time and moves the other (`keep`): by default the end, so it sets
+ * start = end − duration (it just finished, that long); with "start", it
+ * sets end = start + duration, and a chip that would end after now is off,
+ * never moving the start to fit.
  */
 export function TimeRange({
   start,
@@ -469,25 +472,35 @@ export function TimeRange({
   tz,
   labels = ["Started", "Ended"],
   durations = [15, 30, 45, 60, 90, 120, 180],
+  keep = "end",
   startQuick,
   onInvalidChange,
 }: {
   start: Date;
   end: Date;
-  onChange: (start: Date, end: Date) => void;
+  /** `changed` says what moved them: the start's own field, the end's, or a duration chip. */
+  onChange: (start: Date, end: Date, changed: "start" | "end" | "duration") => void;
   tz: string;
   labels?: [string, string];
   /** Minutes; [] hides the chips. */
   durations?: number[];
+  /** Which time a duration chip keeps where it is: "end" (the chip moves the start) or "start" (it moves the end). */
+  keep?: "start" | "end";
   /** "{N}m ago" chips under the start; choices after the end stay visible but disabled. */
   startQuick?: number[];
   onInvalidChange?: (invalid: boolean) => void;
 }) {
+  const { now: nowFn } = useMaple();
+  // A chip that would end after now turns on as the clock gets there.
+  useNow(30_000);
   const invalid = useRef({ start: false, end: false });
+  const [startInvalid, setStartInvalid] = useState(false);
   const [endInvalid, setEndInvalid] = useState(false);
   const [startRevision, setStartRevision] = useState(0);
+  const [endRevision, setEndRevision] = useState(0);
   const reportStart = useCallback((next: boolean) => {
     invalid.current.start = next;
+    setStartInvalid(next);
     onInvalidChange?.(next || invalid.current.end);
   }, [onInvalidChange]);
   const reportEnd = useCallback((next: boolean) => {
@@ -497,9 +510,26 @@ export function TimeRange({
   }, [onInvalidChange]);
   const ms = Math.max(0, end.getTime() - start.getTime());
   const fmt = (m: number) => (m < 60 ? `${m}m` : `${Math.round((m / 60) * 10) / 10}h`);
+  const fromStart = keep === "start";
+  // A chip counts from the kept time, so it waits while that time's visible draft needs correcting.
+  const keptInvalid = fromStart ? startInvalid : endInvalid;
+  // The latest end a chip may set: what the end's own field accepts.
+  const fits = (m: number) => start.getTime() + m * MIN_MS <= nowFn().getTime() + MIN_MS;
+  const tooLong = fromStart && !keptInvalid ? durations.filter((m) => !fits(m)) : [];
+  const choose = (m: number) => {
+    if (!fromStart) {
+      setStartRevision((current) => current + 1);
+      onChange(new Date(end.getTime() - m * MIN_MS), end, "duration");
+      return;
+    }
+    if (!fits(m)) return;
+    // A deliberate choice also replaces an end draft that needed correcting.
+    setEndRevision((current) => current + 1);
+    onChange(start, new Date(start.getTime() + m * MIN_MS), "duration");
+  };
   return (
     <div className="space-y-2">
-      <TimeScrubber key={startRevision} label={labels[0]} value={start} max={end} quick={startQuick?.length ? startQuick : false} tz={tz} onChange={(s) => onChange(s, end)} onInvalidChange={reportStart} />
+      <TimeScrubber key={`start-${startRevision}`} label={labels[0]} value={start} max={end} quick={startQuick?.length ? startQuick : false} tz={tz} onChange={(s) => onChange(s, end, "start")} onInvalidChange={reportStart} />
       <div className="px-1" role="group" aria-label="Duration">
         <p className={cx(tone.body, "flex items-baseline gap-2 text-sm")}>
           <Icon name="arrow-right" size={14} className="rotate-90 self-center text-mp-ink-3" />
@@ -509,20 +539,26 @@ export function TimeRange({
         {durations.length > 0 && (
           <div className="mt-1.5 flex flex-wrap gap-1.5">
             {durations.map((m) => (
-              <Chip key={m} disabled={endInvalid} selected={Math.abs(ms - m * MIN_MS) < 30_000} onClick={() => { setStartRevision((current) => current + 1); onChange(new Date(end.getTime() - m * MIN_MS), end); }}>
+              <Chip key={m} disabled={keptInvalid || tooLong.includes(m)} selected={Math.abs(ms - m * MIN_MS) < 30_000} onClick={() => choose(m)}>
                 {fmt(m)}
               </Chip>
             ))}
           </div>
         )}
-        {durations.length > 0 && endInvalid && <p className={cx(tone.muted, "mt-1.5 text-xs")}>Check the end date and time before choosing a duration.</p>}
+        {durations.length > 0 && keptInvalid && <p className={cx(tone.muted, "mt-1.5 text-xs")}>Check the {fromStart ? "start" : "end"} date and time before choosing a duration.</p>}
+        {tooLong.length > 0 && (
+          <p className={cx(tone.muted, "mt-1.5 text-xs")}>
+            {tooLong.length === durations.length ? "Each of these" : "A longer one"} would end after now. Choose an earlier start first.
+          </p>
+        )}
       </div>
       <TimeScrubber
+        key={`end-${endRevision}`}
         label={labels[1]}
         value={end}
         min={start}
         tz={tz}
-        onChange={(e) => onChange(start, e)}
+        onChange={(e) => onChange(start, e, "end")}
         onInvalidChange={reportEnd}
       />
     </div>

@@ -129,6 +129,94 @@ export function pumpReviewCases({ fixture, freshState, record, writes, assert })
         await form.waitFor({ state: "hidden" });
         const saved = writes(f)[0]?.body;
         assert.equal(Date.parse(saved.ended_at) - Date.parse(saved.started_at), 20 * 60_000);
+        // Nobody set a start, so it just finished: the duration counts back from when the form opened.
+        assert(Math.abs(Date.parse(saved.ended_at) - Date.parse(freshState().now)) < 60_000, "An untouched start ends the pump now, never after it");
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["A pump duration runs on from the start chosen before it, moving the end", async () => {
+      const f = await fixture({ entryResponse: ({ route, req }) => route.fulfill({ json: { entry: record(707, "pump", req.postDataJSON().data, req.postDataJSON().started_at, req.postDataJSON()) } }) });
+      try {
+        const form = await openNew(f.page);
+        await form.getByLabel("When: exact time: time", { exact: true }).fill("09:00");
+        await form.getByRole("checkbox", { name: "Include duration", exact: true }).check();
+        await form.getByRole("button", { name: "20m", exact: true }).click();
+        assert.equal(await form.getByLabel("Started: time", { exact: true }).inputValue(), "09:00", "Choosing a duration keeps the start");
+        assert.equal(await form.getByLabel("Ended: time", { exact: true }).inputValue(), "09:20", "Choosing a duration moves the end");
+        await form.getByRole("button", { name: "30m", exact: true }).click();
+        assert.equal(await form.getByLabel("Started: time", { exact: true }).inputValue(), "09:00");
+        assert.equal(await form.getByLabel("Ended: time", { exact: true }).inputValue(), "09:30");
+        await form.getByRole("button", { name: "Log it", exact: true }).click();
+        await form.waitFor({ state: "hidden" });
+        const saved = writes(f)[0]?.body;
+        assert.equal(saved.started_at, "2026-10-28T13:00:00.000Z");
+        assert.equal(saved.ended_at, "2026-10-28T13:30:00.000Z");
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["Log earlier: a pump's start moved by hand stays put when a duration is chosen", async () => {
+      const f = await fixture({ entryResponse: ({ route, req }) => route.fulfill({ json: { entry: record(708, "pump", req.postDataJSON().data, req.postDataJSON().started_at, req.postDataJSON()) } }) });
+      try {
+        await f.page.goto("https://first-use.example.test/#today");
+        await f.page.getByRole("button", { name: "More", exact: true }).click();
+        await f.page.getByRole("dialog", { name: "More to log", exact: true }).getByRole("button", { name: /^Log earlier/ }).click();
+        await f.page.getByRole("dialog", { name: "Log earlier", exact: true }).getByRole("button", { name: "Pump", exact: true }).click();
+        const form = f.page.getByRole("dialog", { name: "Pump", exact: true });
+        const start = form.getByLabel("Started: time", { exact: true });
+        const end = form.getByLabel("Ended: time", { exact: true });
+        const duration = form.getByRole("group", { name: "Duration", exact: true });
+        await start.fill("08:40");
+        assert.equal(await end.inputValue(), "09:30", "Moving the start keeps the end");
+        await duration.getByRole("button", { name: "20m", exact: true }).click();
+        assert.equal(await start.inputValue(), "08:40", "The start someone set is never moved by a duration");
+        assert.equal(await end.inputValue(), "09:00");
+        await form.getByRole("button", { name: "Log it", exact: true }).click();
+        await form.waitFor({ state: "hidden" });
+        const saved = writes(f)[0]?.body;
+        assert.equal(saved.started_at, "2026-10-28T12:40:00.000Z");
+        assert.equal(saved.ended_at, "2026-10-28T13:00:00.000Z");
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["A pump duration that would end after now is off rather than moving the start", async () => {
+      const f = await fixture();
+      try {
+        const form = await openNew(f.page);
+        await form.getByRole("button", { name: "15 min ago", exact: true }).click();
+        await form.getByRole("checkbox", { name: "Include duration", exact: true }).check();
+        const duration = form.getByRole("group", { name: "Duration", exact: true });
+        const start = await form.getByLabel("Started: time", { exact: true }).inputValue();
+        for (const m of ["10m", "15m"]) assert(await duration.getByRole("button", { name: m, exact: true }).isEnabled(), `${m} fits before now`);
+        for (const m of ["20m", "30m", "45m"]) assert(await duration.getByRole("button", { name: m, exact: true }).isDisabled(), `${m} would end after now`);
+        await duration.getByText("A longer one would end after now. Choose an earlier start first.", { exact: true }).waitFor();
+        await duration.getByRole("button", { name: "10m", exact: true }).click();
+        assert.equal(await form.getByLabel("Started: time", { exact: true }).inputValue(), start);
+        assert.equal(writes(f).length, 0);
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }],
+    ["A saved pump's new duration keeps its start and changes only its end", async () => {
+      const state = freshState();
+      const original = record(709, "pump", { total_ml: 90 }, "2026-10-28T12:00:00.000Z", { ended_at: "2026-10-28T12:15:00.000Z" });
+      state.entries = [original];
+      const f = await fixture({ state, records: state.entries, entryResponse: ({ route, req }) => route.fulfill({ json: { entry: { ...original, ...req.postDataJSON() } } }) });
+      try {
+        const form = await openSaved(f.page);
+        const start = form.getByLabel("Started: time", { exact: true });
+        const duration = form.getByRole("group", { name: "Duration", exact: true });
+        // A start draft past the end holds the chips: they'd count from a start no longer on screen.
+        await start.fill("08:30");
+        assert(await duration.getByRole("button", { name: "30m", exact: true }).isDisabled());
+        await duration.getByText("Check the start date and time before choosing a duration.", { exact: true }).waitFor();
+        await start.fill("08:00");
+        await duration.getByRole("button", { name: "30m", exact: true }).click();
+        assert.equal(await start.inputValue(), "08:00");
+        assert.equal(await form.getByLabel("Ended: time", { exact: true }).inputValue(), "08:30");
+        await form.getByRole("button", { name: "Save", exact: true }).click();
+        await form.waitFor({ state: "hidden" });
+        const patch = writes(f)[0]?.body;
+        assert.equal(patch.started_at, undefined, "The saved start is not rewritten");
+        assert.equal(patch.ended_at, "2026-10-28T12:30:00.000Z");
         assert.deepEqual(f.errors, []);
       } finally { await f.close(); }
     }],
