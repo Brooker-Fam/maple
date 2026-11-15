@@ -76,7 +76,7 @@ export default function PhoneSettings() {
           </SegmentRow>
           <Toggle
             label="Fun facts and cheers"
-            hint="A fun fact, a joke or a cheer under what you log. At night, only a quiet cheer now and then."
+            hint="A fun fact, a joke or a cheer when you log something, plus a quip on milestones and a few fun numbers in Patterns. At night, only a quiet cheer now and then."
             checked={extras}
             onChange={setExtras}
           />
