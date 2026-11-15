@@ -1,0 +1,52 @@
+import type { Extra } from "../types";
+
+/** Moments: a photo or a milestone saved. Cheers for keeping it, jokes for the fan club, and facts about faces. */
+export const MOMENTS: readonly Extra[] = [
+  { id: "moment-cheer-future-you", kind: "cheer", topics: ["moment"], text: "Saved. Future you says thank you." },
+  { id: "moment-cheer-worth-keeping", kind: "cheer", topics: ["moment"], text: "A moment worth keeping. Saved." },
+  { id: "moment-cheer-archives", kind: "cheer", topics: ["moment"], text: "Saved for the family archives." },
+  { id: "moment-cheer-highlight", kind: "cheer", topics: ["moment"], text: "This one's going in the highlight reel." },
+  { id: "moment-cheer-good-parts", kind: "cheer", topics: ["moment"], text: "Saved. These are the good parts." },
+  { id: "moment-cheer-scrapbook", kind: "cheer", topics: ["moment"], text: "Saved. One more for the scrapbook." },
+  { id: "moment-cheer-second-look", kind: "cheer", topics: ["moment"], text: "Captured. Some moments deserve a second look." },
+  { id: "moment-cheer-glad", kind: "cheer", topics: ["moment"], text: "Saved. Glad you caught that one." },
+  { id: "moment-cheer-story", kind: "cheer", topics: ["moment"], text: "Saved. The family story just got a little longer." },
+  { id: "moment-cheer-for-later", kind: "cheer", topics: ["moment"], text: "Saved. Right now, kept for later." },
+  { id: "moment-joke-paparazzi", kind: "joke", topics: ["moment"], text: "Saved. The paparazzi thank you." },
+  { id: "moment-joke-fan-club", kind: "joke", topics: ["moment"], text: "Saved. The fan club will want copies." },
+  { id: "moment-joke-framed", kind: "joke", topics: ["moment"], text: "Framed, figuratively." },
+  { id: "moment-joke-agent", kind: "joke", topics: ["moment"], text: "Saved. {His} agent will be in touch." },
+  { id: "moment-joke-museum", kind: "joke", topics: ["moment"], text: "Saved. Somewhere, a museum is jealous." },
+  { id: "moment-joke-front-page", kind: "joke", topics: ["moment"], text: "Saved. Front-page news, as far as this family is concerned." },
+  {
+    id: "moment-fact-faces",
+    kind: "fact",
+    topics: ["moment"],
+    ages: [0, 61],
+    text: "Fun fact: of everything there is to look at, newborns like human faces best.",
+    source: "https://kidshealth.org/en/parents/sensenewborn.html",
+  },
+  {
+    id: "moment-fact-circles",
+    kind: "fact",
+    topics: ["moment"],
+    ages: [120, 365],
+    text: "Fun fact: babies love looking at faces, partly because faces are full of circles and curves.",
+    source: "https://www.healthychildren.org/English/ages-stages/baby/Pages/Babys-Vision-Development.aspx",
+  },
+  {
+    id: "moment-fact-familiar-faces",
+    kind: "fact",
+    topics: ["moment"],
+    ages: [240, 365],
+    text: "Fun fact: familiar, loving faces are still a baby's favorite thing to look at.",
+    source: "https://kidshealth.org/en/parents/sense812m.html",
+  },
+  {
+    id: "moment-fact-learning",
+    kind: "fact",
+    topics: ["moment"],
+    text: "Fun fact: babies start learning about the world from the minute they're born.",
+    source: "https://www.healthychildren.org/English/ages-stages/baby/pages/Cognitive-Development-4-to-7-Months.aspx",
+  },
+];
