@@ -65,8 +65,11 @@ export function useNutrition(care: UseCare) {
       if (!entry || (!result.created && !result.deduped)) throw new Error("That entry wasn't saved. Try again.");
       current.care.patch((value) => ({ ...value, entries: [entry, ...value.entries.filter((item) => item.id !== entry.id)] }));
       const label = input.kind === "food" ? "Food" : input.data.name;
+      // Her own food or drink, saved: a cheer for her (useMaple's extra; "self" lines are cheers only, never about what she had).
+      const aside = current.extra(["self"]);
       current.toast(`${label} logged at ${formatTime(entry.at, state.baby.timezone ?? DEFAULT_TZ)}`, {
         undo: () => void currentCare.act.deleteEntry(entry.id).catch(() => {}),
+        ...(aside ? { aside } : {}),
       });
     } finally {
       inflight.current = false;

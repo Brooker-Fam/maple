@@ -820,6 +820,8 @@ function Phone({ world }) {
     api: handle,
     memberName: nameOf, memberLabel: nameOf, member: (email) => state.members.find((m) => m.email === email) ?? null,
     isNight: () => NIGHT, timerBusy: () => false, toasts, toast, dismissToast,
+    // useMaple's little extra under a toast (a try's outcome): none here, so the checks read each toast as it always was.
+    extra: () => undefined,
     dismissTimerToast: () => setToasts((t) => t.filter((x) => x.group !== "timer")), holdTimerToasts: () => {},
     // useMaple's log: saves the entry and says so, with Undo, unless `silent` (the Last night card's "She slept through" shows its own receipt).
     log: async (input, opts = {}) => {

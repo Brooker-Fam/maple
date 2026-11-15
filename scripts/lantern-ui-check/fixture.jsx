@@ -30,6 +30,8 @@ function Fixture() {
   const maple = {
     state: { baby: { name: "River", sex: null, timezone: "UTC", settings: {} }, family: { id: 99 }, entries: [entry] },
     now: () => now, readOnly: false, toasts: [],
+    // useMaple's little extra under a finish's toast: none here (the timer actions are synthetic; scripts/extras-ui checks them).
+    extra: () => undefined,
   };
   const care = params.has("care") ? {
     name: "Sam", self: true, access: { write: true },
