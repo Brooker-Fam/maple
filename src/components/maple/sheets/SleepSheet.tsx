@@ -67,6 +67,8 @@ function SleepForm({ open, onClose, entry, preset }: SheetProps) {
     const s = presetStart(preset);
     return s && s.getTime() <= end.getTime() ? [s, end] : [new Date(end.getTime() - H), end];
   });
+  // A saved sleep's start, or one picked here, stays when a duration is chosen; the form's guess gives way (TimeRange).
+  const [startSet, setStartSet] = useState(() => !!e);
   const [place, setPlace] = useState<SleepPlace | undefined>(() => e?.data.place ?? (pstr(preset, "place") as SleepPlace | undefined));
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
@@ -137,7 +139,18 @@ function SleepForm({ open, onClose, entry, preset }: SheetProps) {
         {running ? (
           <RunningNote kind="sleep" />
         ) : (
-          <TimeRange start={start} end={end} onInvalidChange={setTimeInvalid} tz={tz} labels={["Fell asleep", "Woke up"]} onChange={(s, en) => setRange([s, en])} />
+          <TimeRange
+            start={start}
+            end={end}
+            onInvalidChange={setTimeInvalid}
+            tz={tz}
+            labels={["Fell asleep", "Woke up"]}
+            startSet={startSet}
+            onChange={(s, en, changed) => {
+              if (changed === "start") setStartSet(true);
+              setRange([s, en]);
+            }}
+          />
         )}
 
         {!running && (

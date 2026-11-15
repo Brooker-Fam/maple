@@ -20,6 +20,7 @@ import {
   RunningNote,
   SheetFooter,
   SideLabel,
+  pbool,
   presetStart,
   pnum,
   pstr,
@@ -75,10 +76,11 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
   });
   const [includeDuration, setIncludeDuration] = useState(() => !!e?.ended_at || (!e && range[1].getTime() > range[0].getTime()));
   /**
-   * A start someone set (a saved pump's, a preset's, or one they chose here) stays where it is: a duration runs on from
-   * it and moves the end. Until then (a new pump, or When: Now) it just finished, so a duration counts back from its end.
+   * A duration keeps the start and moves the end. A start someone set (a saved pump's, one chosen here, or the plan's
+   * end of the feed, start_known) never moves, so a duration that would end after now is off. The form's own guess
+   * (now, When: Now, or Log earlier's 15 minutes ago) gives way to one instead: it just finished.
    */
-  const [startSet, setStartSet] = useState(() => !!e || presetStart(preset) !== null);
+  const [startSet, setStartSet] = useState(() => !!e || pbool(preset, "start_known") === true);
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
   const [timeInvalid, setTimeInvalid] = useState(false);
@@ -275,7 +277,7 @@ function PumpForm({ open, onClose, entry, preset }: SheetProps) {
                 onInvalidChange={setTimeInvalid}
                 tz={tz}
                 durations={[10, 15, 20, 30, 45]}
-                keep={startSet ? "start" : "end"}
+                startSet={startSet}
                 onChange={(s, en, changed) => {
                   if (changed === "start") setStartSet(true);
                   setRange([s, en]);

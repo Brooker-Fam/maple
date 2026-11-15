@@ -51,7 +51,7 @@ try {
   console.log(`PASS Today preserves the selected current date across midnight (${browserName})`);
 
   {
-    // Chips that keep the start (the pump form): each moves the end, and one that would end after now stays off.
+    // A start someone set: each chip keeps it and moves the end, and one that would end after now stays off.
     const context = await browser.newContext({ timezoneId: "UTC" });
     const page = await context.newPage();
     const errors = [];
@@ -60,7 +60,7 @@ try {
     page.on("console", (message) => { if (message.type() === "error" && !message.text().startsWith("Failed to load resource")) errors.push(message.text()); });
     await page.clock.install({ time: new Date("2026-10-29T14:00:00.000Z") });
     await page.route("**/*", serve);
-    await page.goto("https://timing-range.example.test/?keep=start&start=2026-10-29T13:45:00.000Z&end=2026-10-29T13:45:00.000Z");
+    await page.goto("https://timing-range.example.test/?start=2026-10-29T13:45:00.000Z&end=2026-10-29T13:45:00.000Z");
     const start = page.getByLabel("Started: time", { exact: true });
     const end = page.getByLabel("Ended: time", { exact: true });
     const duration = page.getByRole("group", { name: "Duration", exact: true });
@@ -92,7 +92,39 @@ try {
     assert.equal(await page.getByLabel("Saved end").textContent(), "2026-10-29T14:15:00.000Z");
     assert.deepEqual(errors, []);
     await context.close();
-    console.log(`PASS Duration chips that keep the start move only the end, never past now (${browserName})`);
+    console.log(`PASS Duration chips keep a start someone set and move only the end, never past now (${browserName})`);
+  }
+
+  {
+    // The form's own guess at the start: kept while a chip fits, and given way to one that can't (it just finished).
+    const context = await browser.newContext({ timezoneId: "UTC" });
+    const page = await context.newPage();
+    const errors = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    page.on("console", (message) => { if (message.type() === "error" && !message.text().startsWith("Failed to load resource")) errors.push(message.text()); });
+    await page.clock.install({ time: new Date("2026-10-29T14:00:00.000Z") });
+    await page.clock.setFixedTime(new Date("2026-10-29T14:00:00.000Z"));
+    await page.route("**/*", serve);
+    await page.goto("https://timing-range.example.test/?set=0&start=2026-10-29T13:45:00.000Z&end=2026-10-29T14:00:00.000Z");
+    const start = page.getByLabel("Started: time", { exact: true });
+    const end = page.getByLabel("Ended: time", { exact: true });
+    const duration = page.getByRole("group", { name: "Duration", exact: true });
+    const chip = (name) => duration.getByRole("button", { name, exact: true });
+    await end.waitFor();
+    for (const name of ["15m", "30m", "1h", "3h"]) assert(await chip(name).isEnabled(), `${name} is offered from a guessed start`);
+    assert.equal(await duration.getByText(/would end after now/).count(), 0);
+    await chip("15m").click();
+    assert.equal(await start.inputValue(), "09:45", "A chip that fits keeps even a guessed start");
+    assert.equal(await end.inputValue(), "10:00");
+    await chip("1h").click();
+    assert.equal(await start.inputValue(), "09:00", "One that can't fit from the guess: it just finished");
+    assert.equal(await end.inputValue(), "10:00");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    assert.equal(await page.getByLabel("Saved start").textContent(), "2026-10-29T13:00:00.000Z");
+    assert.equal(await page.getByLabel("Saved end").textContent(), "2026-10-29T14:00:00.000Z");
+    assert.deepEqual(errors, []);
+    await context.close();
+    console.log(`PASS A guessed start stays while a chip fits and gives way to one that can't (${browserName})`);
   }
 } finally {
   await browser.close();

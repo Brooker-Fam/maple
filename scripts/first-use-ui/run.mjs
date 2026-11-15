@@ -13,6 +13,7 @@ import { feedPartsCases } from "./feed-parts-cases.mjs";
 import { feedingPlanSheetCases } from "./feeding-plan-sheet-cases.mjs";
 import { bottleMethodCases } from "./bottle-method-cases.mjs";
 import { pumpReviewCases } from "./pump-review-cases.mjs";
+import { durationCases } from "./duration-cases.mjs";
 import { volumeBoundaryCases } from "./volume-boundary-cases.mjs";
 import { pumpSummaryCases } from "./pump-summary-cases.mjs";
 import { dailyReviewCases } from "./daily-review-cases.mjs";
@@ -113,6 +114,7 @@ const cases = [
   ...feedingPlanSheetCases({ fixture, freshState, assert }),
   ...bottleMethodCases({ fixture, freshState, record, writes, assert }),
   ...pumpReviewCases({ fixture, freshState, record, writes, assert }),
+  ...durationCases({ fixture, freshState, record, writes, assert }),
   ...volumeBoundaryCases({ fixture, freshState, record, writes, assert }),
   ...pumpSummaryCases({ fixture, freshState, record, writes, assert }),
   ...dailyReviewCases({ fixture, freshState, record, writes, assert }),

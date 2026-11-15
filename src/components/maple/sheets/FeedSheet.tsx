@@ -81,7 +81,8 @@ import {
  * Right and Back and forth minutes (both sides, not tracked: never split into
  * made-up sides), which side she started on, and when it started and ended.
  * Typing the minutes for a new one slides the start back from the end, so
- * "15 left, 10 right, just finished" needs no time fiddling.
+ * "15 left, 10 right, just finished" needs no time fiddling; once someone sets
+ * the start, minutes move the end from it instead (never past now).
  *
  * A finished timed feed shows its times as what happened: a row per side and
  * break, "Ended", and "Add a side she nursed on". A row opens its moments
@@ -341,13 +342,11 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     return [s, s];
   };
   const [range, setRange] = useState<[Date, Date]>(origRange);
-  // New entries: minutes slide the start back from the end (or the end on from a preset start)
-  // until someone moves a time by hand. A saved feed whose span is exactly its minutes keeps
-  // its end in step with them.
-  const [anchor, setAnchor] = useState<"end" | "start" | null>(() => {
-    if (!e) return fromPreset ? "start" : "end";
+  // Which times someone set: a saved feed's start, and its end unless its span is just its minutes; or one picked here.
+  const [timesSet, setTimesSet] = useState(() => {
+    if (!e) return { start: false, end: false };
     const span = e.ended_at ? Date.parse(e.ended_at) - Date.parse(e.started_at) : 0;
-    return totals && Math.abs(span - totals.total * 1000) < MIN ? "start" : null;
+    return { start: true, end: !(totals && Math.abs(span - totals.total * 1000) < MIN) };
   });
   // Typed minutes on a timed session replace its parts ("Type minutes instead").
   const [minutesTyped, setMinutesTyped] = useState(false);
@@ -364,6 +363,18 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
   const [addBlocked, setAddBlocked] = useState(false);
   const [timeInvalid, setTimeInvalid] = useState(false);
   const [manualTimeInvalid, setManualTimeInvalid] = useState(false);
+  /**
+   * What typed minutes move. A start someone set stays: they move the end ("start"), never past now. With no start
+   * set they count back from the end ("end": a new feed just finished, or an end picked here). Log earlier's guessed
+   * start ("guess") is kept while they fit, and gives way to ones that can't: it ended now. With both times set, or a
+   * time draft being corrected (an explicit draft owns its time even before it is valid), they leave the times alone.
+   */
+  const anchor: "start" | "end" | "guess" | null = manualTimeInvalid
+    ? null
+    : timesSet.start
+      ? timesSet.end ? null : "start"
+      : timesSet.end || !fromPreset ? "end" : "guess";
+  const typedTotal = ((left ?? 0) + (right ?? 0) + (both ?? 0)) * MIN;
   // "Add a side" open with no side picked: Save with nothing else to save would close as if it added one.
   const [addPending, setAddPending] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -426,10 +437,10 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
     const total = ((l ?? 0) + (r ?? 0) + (b ?? 0)) * MIN;
     const [s, en] = range;
     const limit = now().getTime();
-    // The end can't pass now, so a feed that would run into the future starts earlier instead.
-    if (anchor === "end") setRange([new Date(en.getTime() - total), en]);
-    else if (s.getTime() + total > limit) setRange([new Date(limit - total), new Date(limit)]);
-    else setRange([s, new Date(s.getTime() + total)]);
+    if (anchor === "end") return setRange([new Date(en.getTime() - total), en]);
+    if (s.getTime() + total <= limit) return setRange([s, new Date(s.getTime() + total)]);
+    // The end can't pass now. A start someone set stays, so it ends now; a guessed one gives way, so it ended now.
+    setRange(anchor === "start" ? [s, new Date(Math.max(s.getTime(), limit))] : [new Date(limit - total), new Date(limit)]);
   };
 
   // Closing with a staged change asks first. Stable, because Sheet re-runs its open effect (and refocuses) when onClose changes.
@@ -1379,21 +1390,22 @@ function FeedForm({ open, onClose, entry, preset }: SheetProps) {
                 {steppers}
                 {startedOn}
                 <TimeRange
-                  onInvalidChange={(invalid) => {
-                    setManualTimeInvalid(invalid);
-                    // An explicit draft owns its time even before it is valid.
-                    if (invalid) setAnchor(null);
-                  }}
+                  onInvalidChange={setManualTimeInvalid}
                   start={range[0]}
                   end={range[1]}
                   tz={tz}
                   durations={[]}
                   startQuick={[1, 5, 10, 20, 30, 60, 120]}
-                  onChange={(s, en) => {
-                    setAnchor(null);
+                  onChange={(s, en, changed) => {
+                    if (changed !== "duration") setTimesSet((set) => ({ ...set, [changed]: true }));
                     setRange([s, en]);
                   }}
                 />
+                {anchor === "start" && typedTotal > 0 && range[0].getTime() + typedTotal > now().getTime() + MIN && (
+                  <p className={cx(tone.muted, "text-[13px] leading-snug")}>
+                    {typedTotal / MIN} min from {clock(range[0])} would run past now, so it ends now. If it started earlier, choose an earlier start.
+                  </p>
+                )}
                 {feedOwnParts}
               </>
             )

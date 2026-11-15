@@ -459,11 +459,11 @@ export function TimeScrubber({
 /**
  * Start and end for timed things (sleep, a feed logged afterwards, tummy
  * time, pumping): two scrubbers, the live duration between them, and
- * duration chips. Moving the start keeps the end where it is. A chip keeps
- * one time and moves the other (`keep`): by default the end, so it sets
- * start = end − duration (it just finished, that long); with "start", it
- * sets end = start + duration, and a chip that would end after now is off,
- * never moving the start to fit.
+ * duration chips. Moving the start keeps the end where it is, and a chip
+ * keeps the start and moves the end: end = start + duration. When that would
+ * end after now, a start someone set (`startSet`) still never moves: the
+ * chip is off, with a note. A start nobody set yet (the form's own guess)
+ * gives way instead: it ended now and started that long before.
  */
 export function TimeRange({
   start,
@@ -472,7 +472,7 @@ export function TimeRange({
   tz,
   labels = ["Started", "Ended"],
   durations = [15, 30, 45, 60, 90, 120, 180],
-  keep = "end",
+  startSet = true,
   startQuick,
   onInvalidChange,
 }: {
@@ -484,8 +484,11 @@ export function TimeRange({
   labels?: [string, string];
   /** Minutes; [] hides the chips. */
   durations?: number[];
-  /** Which time a duration chip keeps where it is: "end" (the chip moves the start) or "start" (it moves the end). */
-  keep?: "start" | "end";
+  /**
+   * Whether someone set the start (a saved entry's, or one picked in the form), so a chip never moves it. False for a
+   * form's own guess (now, or Log earlier's "15 minutes ago"), which a chip that can't fit before now replaces.
+   */
+  startSet?: boolean;
   /** "{N}m ago" chips under the start; choices after the end stay visible but disabled. */
   startQuick?: number[];
   onInvalidChange?: (invalid: boolean) => void;
@@ -495,7 +498,6 @@ export function TimeRange({
   useNow(30_000);
   const invalid = useRef({ start: false, end: false });
   const [startInvalid, setStartInvalid] = useState(false);
-  const [endInvalid, setEndInvalid] = useState(false);
   const [startRevision, setStartRevision] = useState(0);
   const [endRevision, setEndRevision] = useState(0);
   const reportStart = useCallback((next: boolean) => {
@@ -505,27 +507,24 @@ export function TimeRange({
   }, [onInvalidChange]);
   const reportEnd = useCallback((next: boolean) => {
     invalid.current.end = next;
-    setEndInvalid(next);
     onInvalidChange?.(next || invalid.current.start);
   }, [onInvalidChange]);
   const ms = Math.max(0, end.getTime() - start.getTime());
   const fmt = (m: number) => (m < 60 ? `${m}m` : `${Math.round((m / 60) * 10) / 10}h`);
-  const fromStart = keep === "start";
-  // A chip counts from the kept time, so it waits while that time's visible draft needs correcting.
-  const keptInvalid = fromStart ? startInvalid : endInvalid;
   // The latest end a chip may set: what the end's own field accepts.
   const fits = (m: number) => start.getTime() + m * MIN_MS <= nowFn().getTime() + MIN_MS;
-  const tooLong = fromStart && !keptInvalid ? durations.filter((m) => !fits(m)) : [];
+  // A chip counts from the start, so it waits while the start's visible draft needs correcting.
+  const tooLong = startSet && !startInvalid ? durations.filter((m) => !fits(m)) : [];
   const choose = (m: number) => {
-    if (!fromStart) {
-      setStartRevision((current) => current + 1);
-      onChange(new Date(end.getTime() - m * MIN_MS), end, "duration");
-      return;
-    }
-    if (!fits(m)) return;
-    // A deliberate choice also replaces an end draft that needed correcting.
+    const fit = fits(m);
+    if (!fit && startSet) return;
+    // A deliberate choice also replaces a draft that needed correcting.
     setEndRevision((current) => current + 1);
-    onChange(start, new Date(start.getTime() + m * MIN_MS), "duration");
+    if (fit) return onChange(start, new Date(start.getTime() + m * MIN_MS), "duration");
+    // Nobody set the start, and this can't have finished by now from it: it just did.
+    const at = nowFn().getTime();
+    setStartRevision((current) => current + 1);
+    onChange(new Date(at - m * MIN_MS), new Date(at), "duration");
   };
   return (
     <div className="space-y-2">
@@ -539,13 +538,13 @@ export function TimeRange({
         {durations.length > 0 && (
           <div className="mt-1.5 flex flex-wrap gap-1.5">
             {durations.map((m) => (
-              <Chip key={m} disabled={keptInvalid || tooLong.includes(m)} selected={Math.abs(ms - m * MIN_MS) < 30_000} onClick={() => choose(m)}>
+              <Chip key={m} disabled={startInvalid || tooLong.includes(m)} selected={Math.abs(ms - m * MIN_MS) < 30_000} onClick={() => choose(m)}>
                 {fmt(m)}
               </Chip>
             ))}
           </div>
         )}
-        {durations.length > 0 && keptInvalid && <p className={cx(tone.muted, "mt-1.5 text-xs")}>Check the {fromStart ? "start" : "end"} date and time before choosing a duration.</p>}
+        {durations.length > 0 && startInvalid && <p className={cx(tone.muted, "mt-1.5 text-xs")}>Check the start date and time before choosing a duration.</p>}
         {tooLong.length > 0 && (
           <p className={cx(tone.muted, "mt-1.5 text-xs")}>
             {tooLong.length === durations.length ? "Each of these" : "A longer one"} would end after now. Choose an earlier start first.

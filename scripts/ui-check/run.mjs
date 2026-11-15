@@ -135,7 +135,7 @@ try {
   const anchoredFeed = (await snapshot()).calls;
   assert.equal(anchoredFeed.length, 1);
   assert.equal(anchoredFeed[0].entry.started_at, "2026-10-28T13:25:00.000Z", "A chosen start stays fixed when side minutes change afterward");
-  assert.equal(anchoredFeed[0].entry.ended_at, "2026-10-28T13:30:00.000Z");
+  assert.equal(anchoredFeed[0].entry.ended_at, "2026-10-28T13:29:00.000Z", "Side minutes changed after choosing a start move its end");
   assert.equal(anchoredFeed[0].entry.data.left_sec, 3 * 60);
   assert.equal(anchoredFeed[0].entry.data.right_sec, 60);
 

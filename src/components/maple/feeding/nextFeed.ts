@@ -547,9 +547,9 @@ export function missedItems(fp: FeedPlanNow): MissedItem[] {
       if (v.milkMissing && v.step.supplement) out.push({ key, what: `milk ${AT_BREAST_WORDS[v.step.supplement.via].inThe}`, fix: milkAction(v.step, c, { compact: true }), logged: null });
       else out.push({ key, what: "nursing", fix: null, logged: null });
     } else if (v.step.do === "pump") {
-      // The pump form at the end of the feed: the family sets how long.
+      // The pump form at the end of the feed: the family sets how long, and the pump's start stays there (start_known).
       const at = nursing.end ?? (view.lastAt !== null ? new Date(view.lastAt).toISOString() : null);
-      out.push({ key, what: "pump", fix: { kind: "form", sheet: "pump", label: "Log pump", aria: "Log the pump: opens the pump form", preset: at ? { started_at: at } : {} }, logged: null });
+      out.push({ key, what: "pump", fix: { kind: "form", sheet: "pump", label: "Log pump", aria: "Log the pump: opens the pump form", preset: at ? { started_at: at, start_known: true } : {} }, logged: null });
     } else if (v.step.do === "bottle") {
       if (short(v)) {
         // A top-up names its feed (top_up_of); a bottle-led feed's rest goes with its last bottle, so it stays that feed.

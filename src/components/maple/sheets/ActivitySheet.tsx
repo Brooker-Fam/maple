@@ -43,6 +43,8 @@ function TummyForm({ open, onClose, entry, preset }: SheetProps) {
     const s = presetStart(preset);
     return s && s <= end ? [s, end] : [new Date(end.getTime() - 5 * MIN), end];
   });
+  // A saved start, or one picked here, stays when a duration is chosen; the form's guess gives way (TimeRange).
+  const [startSet, setStartSet] = useState(() => !!e);
   const [note, setNote] = useState(e?.note ?? pstr(preset, "note") ?? "");
   const [busy, setBusy] = useState(false);
   const [timeInvalid, setTimeInvalid] = useState(false);
@@ -111,7 +113,18 @@ function TummyForm({ open, onClose, entry, preset }: SheetProps) {
         {running ? (
           <RunningNote kind="tummy" />
         ) : (
-          <TimeRange start={start} end={end} onInvalidChange={setTimeInvalid} tz={tz} durations={[3, 5, 10, 15, 20, 30]} onChange={(s, en) => setRange([s, en])} />
+          <TimeRange
+            start={start}
+            end={end}
+            onInvalidChange={setTimeInvalid}
+            tz={tz}
+            durations={[3, 5, 10, 15, 20, 30]}
+            startSet={startSet}
+            onChange={(s, en, changed) => {
+              if (changed === "start") setStartSet(true);
+              setRange([s, en]);
+            }}
+          />
         )}
         <NoteField value={note} onChange={setNote} />
         {age && <TummyProgress soFar={soFar} goal={goal} />}
@@ -127,6 +140,13 @@ function BathForm({ open, onClose, entry, preset }: SheetProps) {
   const e = entry?.kind === "bath" ? entry : undefined;
   const { changed, onConflict, notice } = useSavedEntryConflict(e);
   const [when, setWhen] = useState<Date | null>(() => (e ? new Date(e.started_at) : presetStart(preset)));
+  /**
+   * A saved bath's start, or one picked here, stays when a length is chosen (one that would end after now waits, below).
+   * Log earlier's guess gives way to such a length instead: it just happened, so When moves back to fit (whenKey
+   * redraws the field on the new time).
+   */
+  const [startSet, setStartSet] = useState(() => !!e);
+  const [whenKey, setWhenKey] = useState(0);
   const [minutes, setMinutes] = useState<number | null>(() =>
     e?.ended_at ? (Date.parse(e.ended_at) - Date.parse(e.started_at)) / MIN : null
   );
@@ -143,6 +163,15 @@ function BathForm({ open, onClose, entry, preset }: SheetProps) {
   };
   const { start, end } = times();
   const inFuture = !!end && end.getTime() > current.getTime() + MIN;
+  const chooseLength = (m: number) => {
+    const next = minutes === m ? null : m;
+    const at = now().getTime();
+    if (next !== null && !startSet && when && when.getTime() + next * MIN > at + MIN) {
+      setWhen(new Date(at - next * MIN));
+      setWhenKey((k) => k + 1);
+    }
+    setMinutes(next);
+  };
 
   const save = async () => {
     if (busy || timeInvalid || changed) return;
@@ -205,12 +234,21 @@ function BathForm({ open, onClose, entry, preset }: SheetProps) {
       <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-5">
         {e && <LoggedBy entry={e} />}
         {notice}
-        <WhenField value={when} onChange={setWhen} onInvalidChange={setTimeInvalid} tz={tz} />
+        <WhenField
+          key={whenKey}
+          value={when}
+          onChange={(v) => {
+            setWhen(v);
+            setStartSet(v !== null);
+          }}
+          onInvalidChange={setTimeInvalid}
+          tz={tz}
+        />
         <div>
           <Label optional>How long</Label>
           <div className="flex flex-wrap gap-2">
             {BATH_MINUTES.map((m) => (
-              <Chip key={m} selected={minutes === m} onClick={() => setMinutes(minutes === m ? null : m)}>
+              <Chip key={m} selected={minutes === m} onClick={() => chooseLength(m)}>
                 {m}m
               </Chip>
             ))}

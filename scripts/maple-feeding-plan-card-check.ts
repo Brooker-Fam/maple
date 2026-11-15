@@ -432,7 +432,7 @@ check("missed: a top-up opens the form naming its feed; milk at the breast is on
   m = missedItems(fp);
   eq(m.map((x) => [x.what, x.fix?.kind]), [["milk in the SNS", "log"], ["pump", "form"]]);
   eq(m[0].fix?.kind === "log" ? [m[0].fix.log.label, m[0].fix.log.started_at, m[0].fix.log.data] : null, ["Log 20 ml in the SNS", T("08:15"), { method: "bottle", amount_ml: 20, milk: "formula", via: "sns", plan: SNS.id, top_up_of: sns.id }]);
-  eq(form(m[1].fix), { label: "Log pump", aria: "Log the pump: opens the pump form", preset: { started_at: T("08:15") } });
+  eq(form(m[1].fix), { label: "Log pump", aria: "Log the pump: opens the pump form", preset: { started_at: T("08:15"), start_known: true } });
   // Milk at the breast with no milk named, in the missed line's single link: the form, its milk blank.
   const syr = nurse("R 14:00-14:12", { plan: SYR.id });
   fp = at(SYRINGE, [syr, pump("14:13-14:28")], "15:30", { target: null });
