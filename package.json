@@ -9,6 +9,8 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
+    "brand:leaf": "tsx scripts/brand/leaf.ts",
+    "brand:render": "tsx scripts/brand/render.ts",
     "check:maple-development": "tsx scripts/maple-development-check.ts",
     "check:maple-development-ui": "node scripts/development-ui/run.mjs",
     "check:maple-feed": "tsx scripts/maple-feed-check.ts",

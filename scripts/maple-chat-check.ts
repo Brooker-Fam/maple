@@ -271,7 +271,7 @@ check("toOutput: a read-back waiting for their yes is pending (its line shows wi
 
 check("the feeding plan in the instructions: build it only from what's written, a read-back and a clear yes, the plan not a memory, its own words for what's next", () => {
   const mcp = mapleInstructions(FAMILY_ONE_COPY);
-  const chat = mapleInstructions(FAMILY_ONE_COPY, { entryNumbers: false, memories: "chat" });
+  const chat = mapleInstructions(FAMILY_ONE_COPY, { receipts: "chat", memories: "chat" });
   for (const want of ["build it with set_feeding_plan", "never fill in a number that isn't there", "which feeds take turns, when night starts and ends", "save only on a clear yes", "the plan is the source, not a memory", "offer to turn it into the plan", "never a schedule of your own", "never suggest changing the plan", "update_entry its nursing entry with details {plan: that feed} (and shield if they say so)", "never answer only in words"]) {
     ok(mcp.includes(want) && chat.includes(want), `says "${want}"`);
   }
@@ -295,7 +295,7 @@ check("the feeding plan in the instructions: build it only from what's written, 
   // app keeps none for them); her page, where there is one: the chat sends them to the app (it can't add her medicines),
   // a connector to add_mom_medicines. With no page, the parents' own, never "their mom" or "she".
   const robin = toolCopy(2, { name: "June", nickname: null, sex: "female" }, "Robin", "America/New_York");
-  const robinChat = mapleInstructions(robin, { entryNumbers: false, memories: "chat" });
+  const robinChat = mapleInstructions(robin, { receipts: "chat", memories: "chat" });
   ok(
     robinChat.includes("Leave out Robin's own medicines, the supplements Robin takes, and Robin's health (everyone in the family reads the plan; June's milk at the breast stays in it), and offer to put Robin's medicines on Robin's page instead (in the app)."),
     "the chat: her page in the app"
@@ -540,12 +540,20 @@ check("GLM gets no Anthropic cache markers; a chat closed to her says so in its 
   eq(systemBlocks({ viewer: true, care: false, model: GLM, copy: FAMILY_ONE_COPY })[1].content, CHAT_ADDENDUM_VIEWER, "a viewer's stays the viewer's");
 });
 
-check("in-app prompts keep record numbers internal without changing external MCP instructions", () => {
+check("record numbers stay internal: in the in-app prompts and in a connected app's instructions", () => {
   for (const mode of [{ viewer: false, care: true }, { viewer: false, care: false }, { viewer: true, care: false }]) {
     const prompt = systemBlocks({ ...mode, model: GLM, copy: FAMILY_ONE_COPY }).map((block) => block.content).join("\n");
-    ok(!prompt.includes("repeat its summary sentence with the entry number"), "no conflicting entry-number instruction");
+    ok(!prompt.includes("with the entry number") && prompt.includes("without showing internal entry numbers"), "the chat leans on its saved-entry card");
   }
-  eq(mapleInstructions(FAMILY_ONE_COPY), MAPLE_INSTRUCTIONS, "external MCP copy stays the same");
+  // A connected app (Claude, ChatGPT, Muse, Grok) has no card and nothing hiding ids on screen, so its instructions say it.
+  const mcp = MAPLE_INSTRUCTIONS;
+  eq(mapleInstructions(FAMILY_ONE_COPY), mcp, "a connector's are the default");
+  ok(!mcp.includes("with the entry number") && !mcp.includes('"Saved #123'), "never asked to repeat the number");
+  ok(mcp.includes('tell the user what its summary sentence says was saved, without the entry number ("Saved: wet diaper at 3:10 AM today")'), "the sentence, without its number");
+  ok(mcp.includes("Ids are only for your tool calls: never show the user an entry number (#123) or any other id (like c12, p4, m12, t12, h7 or g3)"), "no id of any kind reaches the person");
+  ok(mcp.includes('name an entry by what and when instead ("the 7:13 AM bottle")'), "an entry is named by what and when");
+  ok(mcp.includes("update_entry / delete_entry by the id in the result"), "ids still come from the results for a fix");
+  ok(!mcp.includes("without showing internal entry numbers") && !mapleInstructions(FAMILY_ONE_COPY, { receipts: "chat" }).includes("Ids are only for your tool calls"), "each surface keeps its own wording");
 });
 
 check("markTailForCache leaves exactly one message breakpoint, on the newest", () => {

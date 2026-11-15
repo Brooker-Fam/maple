@@ -13,8 +13,8 @@ export const generateMetadata = (): Metadata => ({
   },
   icons: {
     icon: [
+      { url: "/favicon.ico", sizes: "32x32" },
       { url: "/maple-icon.svg", type: "image/svg+xml" },
-      { url: "/maple-icon-192.png", sizes: "192x192", type: "image/png" },
     ],
     // Sized, so iOS prefers it over the site-wide apple-touch-icon the root layout hard-codes.
     apple: { url: "/maple-apple-touch-icon.png", sizes: "180x180" },

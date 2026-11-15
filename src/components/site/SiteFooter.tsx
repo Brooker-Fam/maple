@@ -1,7 +1,7 @@
 import Link from "next/link";
 import GetStarted from "./GetStarted";
 import { SIGN_IN_PATH } from "./paths";
-import Leaf from "./Leaf";
+import MapleMark from "@/components/MapleMark";
 import { CONTACT_EMAIL } from "./legal";
 
 export default function SiteFooter() {
@@ -9,8 +9,8 @@ export default function SiteFooter() {
     <footer className="border-t border-mp-line">
       <div className="mx-auto grid w-full max-w-[76rem] gap-8 px-4 py-12 sm:grid-cols-[1fr_auto] sm:px-8">
         <div className="max-w-[34rem]">
-          <p className="flex items-center gap-2">
-            <Leaf size={22} />
+          <p className="flex items-center gap-[5px]">
+            <MapleMark size={25} className="relative top-[2px]" />
             <span className="font-display text-xl font-semibold text-mp-ink">Maple</span>
           </p>
           <p className="mt-4 text-[15px] leading-relaxed text-mp-ink-2">

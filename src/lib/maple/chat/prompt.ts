@@ -140,7 +140,7 @@ export function systemBlocks(opts: { viewer: boolean; care: boolean; page?: "vie
           ? chatAddendumCareClosed(copy.v)
           : opts.page === "view" ? chatAddendumCareView(copy.v) : chatAddendum(copy.v);
   return [
-    { role: "system", content: mapleInstructions(copy, { entryNumbers: false, memories: "chat" }) },
+    { role: "system", content: mapleInstructions(copy, { receipts: "chat", memories: "chat" }) },
     { role: "system", content: addendum + chatPartLines(copy.v, opts.limits) + (opts.images ? `\n${imageInstructions(copy.v)}` : ""), ...(usesCacheBreakpoints(opts.model) ? { providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } } } : {}) },
   ];
 }

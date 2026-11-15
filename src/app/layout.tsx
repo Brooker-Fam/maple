@@ -9,10 +9,11 @@ export const metadata: Metadata = {
   metadataBase: new URL(MAPLE_ORIGIN),
   title: "Maple Baby",
   description: "Make sense of the early days. See patterns in feeds, sleep, and growth, share care with your family, and keep the moments you want to remember.",
+  // The leaf (src/lib/brand.ts, drawn by `pnpm brand:render`). The .ico says 32x32, not "any", so Chrome still picks the SVG.
   icons: {
     icon: [
+      { url: "/favicon.ico", sizes: "32x32" },
       { url: "/maple-icon.svg", type: "image/svg+xml" },
-      { url: "/maple-icon-192.png", sizes: "192x192", type: "image/png" },
     ],
     apple: { url: "/maple-apple-touch-icon.png", sizes: "180x180" },
   },

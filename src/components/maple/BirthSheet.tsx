@@ -6,7 +6,8 @@ import { birthInstant, birthProblem } from "@/lib/maple/onboarding/steps";
 import { dayKey, formatTime } from "@/lib/maple/time";
 import { cmToIn, formatLength, formatWeight, gramsToLbOz, inToCm, lbOzToGrams } from "@/lib/maple/units";
 import type { UnitSystem } from "@/lib/maple/types";
-import { MapleLeaf, useStill } from "./art";
+import MapleMark from "@/components/MapleMark";
+import { useStill } from "./art";
 import { useBabyWords } from "./familyWords";
 import { Icon } from "./icons";
 import { useSheets } from "./sheets";
@@ -360,7 +361,7 @@ export function WelcomeHost() {
               animate={{ scale: 1, rotate: 0 }}
               transition={{ type: "spring", damping: 12, stiffness: 120, delay: 0.35 }}
             >
-              <MapleLeaf size={88} className="[.maple-night_&]:opacity-70" />
+              <MapleMark size={88} className="[.maple-night_&]:opacity-70" />
             </motion.div>
             <p className={cx(tone.muted, "text-[20px]")}>Welcome to the world,</p>
             <h2 id="maple-welcome-title" className={cx(tone.display, "mt-1 text-[44px] leading-[1.05]")}>

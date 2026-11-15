@@ -2,7 +2,7 @@
 
 import { Fragment, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { MapleLeaf } from "@/components/maple/art";
+import MapleMark from "@/components/MapleMark";
 import { Icon, type IconName } from "@/components/maple/icons";
 import { cx, tone } from "@/components/maple/ui";
 import { MCP_URL } from "@/lib/maple/origin";
@@ -190,7 +190,7 @@ export default function MapleConnectPage({ calendarNote }: { calendarNote: boole
 
         <header className="mt-4 mb-8">
           <div className="flex h-14 w-14 items-center justify-center rounded-[16px] border border-mp-line bg-mp-surface">
-            <MapleLeaf size={38} className="[.maple-night_&]:opacity-70" />
+            <MapleMark size={38} className="[.maple-night_&]:opacity-70" />
           </div>
           <h1 className={cx(tone.display, "mt-5 text-[34px] leading-[1.05] sm:text-[40px]")}>Just say it out loud</h1>
           <p className={cx(tone.muted, "mt-3 text-[15px] leading-relaxed sm:text-base")}>
@@ -367,11 +367,11 @@ export default function MapleConnectPage({ calendarNote }: { calendarNote: boole
               ))}
             </div>
             <Note icon="circle-check">
-              <strong>How to tell it saved:</strong> every confirmation includes
-              an entry number, like &ldquo;Saved #1234: wet diaper at 3:10 AM
-              today.&rdquo; If it doesn&apos;t say <strong>&ldquo;Saved
-              #…&rdquo;</strong>, it didn&apos;t save. Say &ldquo;undo
-              that&rdquo; to take back the last thing you logged.
+              <strong>How to tell it saved:</strong> every confirmation says
+              what was saved and when, like &ldquo;Saved: wet diaper at 3:10 AM
+              today.&rdquo; If it doesn&apos;t say it saved, it didn&apos;t.
+              Say &ldquo;undo that&rdquo; to take back the last thing you
+              logged.
             </Note>
             <p>
               Times are Maple&apos;s local time (Eastern). &ldquo;Just

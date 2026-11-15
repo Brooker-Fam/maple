@@ -4,7 +4,8 @@ import { motion } from "framer-motion";
 import Link from "next/link";
 import { useEffect, useState, type FormEvent, type MouseEvent } from "react";
 import { isNativeApp, postToNative, supportsNativeAppleSignIn } from "@/lib/maple/native";
-import { MapleLeaf, useStill } from "./art";
+import MapleMark from "@/components/MapleMark";
+import { useStill } from "./art";
 import EmailSignIn from "./EmailSignIn";
 import AppleMark from "./AppleMark";
 import { Icon } from "./icons";
@@ -135,7 +136,7 @@ export default function SignIn() {
       >
         {/* The app icon's leaf on a plain tile: the one mark on this page. */}
         <div className="mx-auto flex h-[88px] w-[88px] items-center justify-center rounded-[24px] border border-mp-line bg-mp-surface">
-          <MapleLeaf size={60} className="[.maple-night_&]:opacity-70" />
+          <MapleMark size={60} className="[.maple-night_&]:opacity-70" />
         </div>
         <h1 className={cx(tone.display, "mt-6 text-[34px] leading-[1.05]")}>Maple&apos;s Log</h1>
         <p className={cx(tone.muted, "mx-auto mt-2 max-w-[18rem] text-[15px] leading-relaxed text-balance")}>

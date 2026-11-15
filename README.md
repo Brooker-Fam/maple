@@ -1,3 +1,5 @@
+<img src="public/maple-icon-512.png" width="88" alt="Maple's icon: an autumn maple leaf on forest green">
+
 # Maple Baby
 
 Feeds, naps, little firsts. A shared place to make sense of it all. Maple Baby brings feeding, sleep, diapers, growth, and shared care into one family log.
@@ -9,6 +11,7 @@ The app includes nursing timers, bottles, pumping, wet and dirty diapers, sleep,
 Built for one family (it lives at [maplebaby.app](https://maplebaby.app)); the code is MIT-licensed. Not medical advice.
 
 - Design and ops notes: [`docs/maple.md`](docs/maple.md)
+- The leaf and every icon file: [`docs/brand.md`](docs/brand.md)
 - Working on it: [`CLAUDE.md`](CLAUDE.md)
 
 ```bash

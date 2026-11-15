@@ -2,6 +2,7 @@
 
 import { motion, useReducedMotion } from "framer-motion";
 import { type ReactNode, useLayoutEffect, useState } from "react";
+import { LEAF_PATH_SMALL } from "@/lib/brand";
 import { DEFAULT_TZ, localParts } from "@/lib/maple/time";
 import { eligibleDiscoveries } from "@/lib/maple/development";
 import AccountMenu from "./AccountMenu";
@@ -24,9 +25,8 @@ import { useMaple, useNow } from "./useMaple";
 /** The leaf count this phone last showed, so the week's new leaf grows in once. */
 const LEAVES_KEY = "maple-tree-leaves";
 
-/** A small maple leaf, centered on 0,0, about 20 units tall (stem at the bottom). */
-export const MAPLE_LEAF_PATH =
-  "M0,-10 L1.9,-5.6 L5.6,-7.4 L4.7,-2.8 L9.6,-3.6 L6.8,0 L8.6,2 L3,1.8 L3.8,5.6 L0.9,3.8 L0.6,9 L-0.6,9 L-0.9,3.8 L-3.8,5.6 L-3,1.8 L-8.6,2 L-6.8,0 L-9.6,-3.6 L-4.7,-2.8 L-5.6,-7.4 L-1.9,-5.6 Z";
+/** Maple's leaf (src/lib/brand.ts), centered on 0,0 and 19 units tall (stem at the bottom): the tree's leaves, the dial's hand, keepsakes, the splash. */
+export const MAPLE_LEAF_PATH = LEAF_PATH_SMALL;
 
 const AUTUMN = ["#B5452B", "#D9772B", "#E0A93B", "#C49A3C", "#C2552F"];
 const SUMMER = ["#5C7A4A", "#6B8448", "#7FA05A", "#4E6E3E"];
