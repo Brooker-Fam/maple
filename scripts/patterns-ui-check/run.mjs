@@ -623,6 +623,54 @@ try {
     assert.match(await circle.getAttribute("aria-label"), /1 wet/);
     assert.equal(await circle.locator("svg title").count(), 1, "Circles exclude the actual future event too");
   });
+
+  await scenario("by the numbers ends Patterns with a few lifetime counts, by day", "lifetime=342,410&extras=1", 320, async (page) => {
+    const card = page.getByRole("region", { name: "By the numbers", exact: true });
+    await card.waitFor();
+    const text = async (locator) => (await locator.innerText()).replace(/\s+/g, " ").trim();
+    // Born 28 days before noon today: 672 hours. 342 diapers at about 2 minutes a change is 684 minutes, roughly 11 hours.
+    assert.equal(await text(card), "By the numbers 28 days old. That's 672 hours of River. 410 feeds and 342 diapers logged. "
+      + "At about 2 minutes a change, that's roughly 11 hours of diaper duty.");
+    assert.equal(await card.locator(".tabular-nums").count(), 5, "Every number is set in tabular figures");
+    // The page's last card in every view: under Growth, over the disclaimer.
+    for (const view of ["Compare days", "Daily totals", "Day clock"]) {
+      await page.getByRole("radio", { name: view, exact: true }).click();
+      const placed = await card.evaluate((el) => [el.previousElementSibling?.id, el.nextElementSibling?.textContent]);
+      assert.deepEqual(placed, ["maple-growth-chart", "Maple's Log isn't medical advice. When in doubt, call your pediatrician."], `${view} ends with the card`);
+    }
+    await card.scrollIntoViewIfNeeded();
+    await noOverflow(page);
+    await page.screenshot({ path: path.join(screenshots, "by-the-numbers-320.png"), fullPage: true });
+    // Whimsy stays away at night: the night look puts it away, and day brings it back.
+    await page.evaluate(() => window.__patterns.night(true));
+    await card.waitFor({ state: "detached" });
+    await page.evaluate(() => window.__patterns.night(false));
+    await card.waitFor();
+  });
+
+  await scenario("by the numbers waits for a birth, 20 diapers and this phone's fun facts, and stays away at night and from photos-only guests", "", 375, async (page) => {
+    for (const [query, why] of [
+      ["lifetime=342,410", "while this phone has fun facts and cheers off"],
+      ["lifetime=19,400&extras=1", "under 20 diapers"],
+      ["lifetime=342,410&extras=1&noBirthDate=1", "without a birth time"],
+      ["lifetime=342,410&extras=1&born=2026-11-20T12:00:00.000Z", "before birth"],
+      ["lifetime=342,410&extras=1&clockNight=1", "at night by the family's clock"],
+      ["lifetime=342,410&extras=1&photos=1", "for a photos-only guest"],
+      ["extras=1", "without the server's lifetime counts"],
+    ]) {
+      await page.evaluate(() => localStorage.clear());
+      await page.goto(`${origin}/?${query}`);
+      await page.waitForFunction(() => !!window.__patterns);
+      await page.getByRole("button", { name: /^Growth / }).waitFor();
+      assert.equal(await page.getByRole("region", { name: "By the numbers", exact: true }).count(), 0, `No card ${why}`);
+    }
+    // A viewer sees it like everyone else; with no feeds logged it says only the diapers, and a short duty in minutes.
+    await page.goto(`${origin}/?lifetime=25,0&extras=1&viewer=1`);
+    const card = page.getByRole("region", { name: "By the numbers", exact: true });
+    await card.waitFor();
+    assert.equal((await card.innerText()).replace(/\s+/g, " ").trim(), "By the numbers 28 days old. That's 672 hours of River. 25 diapers logged. "
+      + "At about 2 minutes a change, that's roughly 50 minutes of diaper duty.");
+  });
 } finally {
   await browser.close();
   await rm(output, { recursive: true, force: true });

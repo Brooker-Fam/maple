@@ -4,6 +4,7 @@ import PatternsTab, { requestGrowthChart } from "../../src/components/maple/Patt
 import HistoryTab from "../../src/components/maple/HistoryTab";
 import { AppNavProvider, useAppNav } from "../../src/components/maple/AppNav";
 import { Sheet } from "../../src/components/maple/Sheet";
+import { writeExtrasOn } from "../../src/components/maple/extras";
 import { setNightActive } from "../../src/components/maple/nightLook";
 import { addDays, dayBounds, dayKey, daysBetween, parseDayKey, zonedTimeToUtc } from "../../src/lib/maple/time";
 import { FixtureContext } from "./mocks";
@@ -13,7 +14,11 @@ const NOW = query.get("now") ?? "2026-10-29T16:00:00.000Z";
 const TZ = "America/New_York";
 const TODAY = dayKey(new Date(NOW), TZ);
 const LATEST_WEEK_FROM = addDays(TODAY, -((new Date(`${TODAY}T12:00:00Z`).getUTCDay() + 6) % 7));
-const MEMBER = { email: "alex@example.test", display_name: "Alex Example", role: query.has("viewer") ? "viewer" : "owner" };
+const MEMBER = { email: "alex@example.test", display_name: "Alex Example", role: query.has("viewer") ? "viewer" : query.has("photos") ? "photos" : "owner" };
+// By the numbers: the server's lifetime counts ("lifetime=342,410": diapers, feeds), and this phone's fun facts and
+// cheers switched on (a browser under automation starts with them off).
+const LIFETIME = query.has("lifetime") ? (([diapers, feeds]) => ({ diapers, feeds }))(query.get("lifetime").split(",").map(Number)) : undefined;
+if (query.has("extras")) writeExtrasOn(true);
 const now = () => new Date(NOW);
 const entries = [];
 let nextId = 900;
@@ -167,10 +172,10 @@ function App() {
       family: { id: 99, ask: "an owner" },
       baby: { id: 99, name: "River Example", nickname: "River", sex: "female", timezone: TZ, born_at: query.has("noBirthDate") ? null : query.get("born") ?? new Date(dayBounds(addDays(TODAY, -28), TZ)[0].getTime() + 12 * 3600_000).toISOString(), settings: { show_alerts: false } },
       me: MEMBER, members: [MEMBER], entries: query.has("missingRecent") ? [] : records.current.filter((entry) => Date.parse(entry.ended_at ?? entry.started_at) >= Date.parse(NOW) - 72 * 3600_000),
-      growth: [], care: null, now: snapshotNow, rev: `synthetic-${revision}`,
+      growth: [], care: null, now: snapshotNow, rev: `synthetic-${revision}`, ...(LIFETIME ? { lifetime: LIFETIME } : {}),
     },
     summary: { targets: null, age: { days: 28, dayOfLife: 29 }, teamDiapers: 0, active: [], today: { tummySec: 0 } },
-    api, now, readOnly: MEMBER.role === "viewer", online: true, units: query.has("metric") ? "metric" : "us", isNight: () => false,
+    api, now, readOnly: MEMBER.role === "viewer" || MEMBER.role === "photos", online: true, units: query.has("metric") ? "metric" : "us", isNight: () => query.has("clockNight"),
     member: () => MEMBER, memberName: () => MEMBER.display_name, memberLabel: () => MEMBER.display_name,
     toast: () => {}, toasts: [], dismissToast: () => {},
     log: () => { throw new Error("Unexpected log write"); }, update: () => { throw new Error("Unexpected log write"); }, remove: () => { throw new Error("Unexpected log write"); },

@@ -41,6 +41,10 @@ Between feeds under the clock (every gap, the ranges, the cluster's band), the g
 and charts, and the card at 320 pixels by day and at night; `lateCluster=1` checks a cluster across
 midnight on both days; `planDay=1` checks a feeding plan's night bottles of one feed (pumped milk, then
 formula to finish) on one row of Between feeds, and Compare days naming milk at the breast as the log does.
+By the numbers (`lifetime=342,410&extras=1`: the server's lifetime diapers and feeds, and the phone's fun facts and
+cheers on) checks the card's three lines and its place at the end of every view, at 320 pixels, and that it stays
+away with the switch off, under 20 diapers, before or without a birth, at night (the clock or the night look) and
+for a photos-only guest.
 
 Screenshots in `test-results/maple-patterns-ui` contain example records only and
 are ignored by Git. These component checks do not exercise server persistence,

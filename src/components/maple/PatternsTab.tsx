@@ -1,6 +1,7 @@
 "use client";
 
 import AccountMenu from "./AccountMenu";
+import ByTheNumbers from "./ByTheNumbers";
 
 import dynamic from "next/dynamic";
 import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
@@ -374,6 +375,8 @@ export default function PatternsTab({
           </Card>}
         </div>
       </section>
+
+      <ByTheNumbers />
 
       <p className={cx(tone.muted, "px-2 pb-4 text-center text-xs leading-snug")}>{DISCLAIMER}</p>
     </div>

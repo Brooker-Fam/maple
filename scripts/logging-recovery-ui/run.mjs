@@ -395,6 +395,43 @@ const cases = [
       } finally { await f.close(); }
     }
   }],
+  ["A celebration's fun line sits under its date, with fun facts on, and never goes into the kept moment", async () => {
+    for (const extras of [true, false]) {
+      const state = freshState();
+      state.lifetime.firsts.bath = "2026-10-27T14:00:00.000Z";
+      state.entries = [record(123, "bath", {}, "2026-10-27T14:00:00.000Z", { note: "Synthetic splashing" })];
+      const f = await fixture({ state, records: state.entries });
+      try {
+        if (extras) await f.page.addInitScript(() => localStorage.setItem("maple-extras", "on"));
+        await f.page.goto("https://logging-recovery.example.test/#today");
+        const card = f.page.locator("section").filter({ has: f.page.getByRole("heading", { name: "Her first bath", exact: true }) });
+        await card.waitFor();
+        const quip = card.locator("[data-celebration-quip]");
+        if (!extras) {
+          assert.equal(await quip.count(), 0, "With fun facts and cheers off, the card is the fact alone");
+          continue;
+        }
+        assert.equal(await quip.innerText(), "First bath done. Who got wetter, River or you?");
+        // Title, date line, the fun line, then the family's own words.
+        const order = await card.evaluate((el) => [...el.querySelectorAll("h2, p")].map((p) => p.textContent.trim()));
+        assert.equal(order[0], "Her first bath");
+        assert.match(order[1], /Tue, Oct 27/);
+        assert.deepEqual(order.slice(2, 4), ["First bath done. Who got wetter, River or you?", "“Synthetic splashing”"]);
+        if (process.env.LOGGING_SCREENSHOT) {
+          await card.evaluate((el) => el.scrollIntoView({ block: "start" }));
+          await f.page.waitForTimeout(600);
+          await f.page.screenshot({ path: process.env.LOGGING_SCREENSHOT });
+        }
+        await card.getByRole("button", { name: "Keep as a moment", exact: true }).click();
+        const sheet = f.page.getByRole("dialog", { name: "New moment", exact: true });
+        await sheet.waitFor();
+        const fields = await sheet.locator("input:not([type=file]), textarea").evaluateAll((els) => els.map((el) => el.value));
+        assert(fields.includes("Her first bath") && fields.includes("Synthetic splashing"), `The moment keeps the title and their words: ${fields.join(" | ")}`);
+        assert(!fields.some((v) => /wetter/.test(v)), "The fun line is never kept");
+        assert.deepEqual(f.errors, []);
+      } finally { await f.close(); }
+    }
+  }],
 ];
 
 try {
