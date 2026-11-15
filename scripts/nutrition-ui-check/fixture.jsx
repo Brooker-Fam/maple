@@ -101,6 +101,8 @@ function App() {
   const refresh = useCallback(async () => {}, []);
   const maple = {
     state, care: store, api, toast, now: clock, refresh, toasts, units,
+    // useMaple's little extra under a saved food or drink's toast: none here (scripts/extras-ui checks them).
+    extra: () => undefined,
     dismissToast: (id) => setToasts((all) => all.filter((item) => item.id !== id)),
     readOnly: !state.care?.access.write, memberLabel: () => "Sam", memberName: () => "Sam",
     summary: { age: { dayOfLife: 28, days: 27, label: "4 weeks" } },

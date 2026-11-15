@@ -48,6 +48,10 @@ import { useMaple, type TimerCallOptions, type TimerFailure, type ToastAction } 
  * at a time; its chips move the moment the tap recorded ("5 min earlier"),
  * counted from the server's value, never from the phone clock, and its
  * trailing button puts back exactly what the server says was there before.
+ * A toast that reports something finished (Done, Woke up, a finish fixed)
+ * carries the little extra a log's toast does (useMaple's extra); one about a
+ * timer still running never does, so it stays two lines tall under the card,
+ * and neither does a finish while another timer's card runs on above it.
  */
 
 type SidePart = Extract<Part, { kind: "side" }>;
@@ -142,18 +146,21 @@ function pauseWords(e: Entry, me: string | undefined): string {
 }
 
 export function useTimerActions() {
-  const { state, timerCall, timerBusy, toast, now, isNight, memberName, restore, dismissTimerToast, holdTimerToasts } = useMaple();
+  const { state, timerCall, timerBusy, toast, extra, now, isNight, memberName, restore, dismissTimerToast, holdTimerToasts } = useMaple();
   const me = state?.me.email;
   const w = useBabyWords();
   const { open } = useSheets();
   const tz = state?.baby.timezone ?? DEFAULT_TZ;
   const entries = state?.entries;
+  const tries = state?.sleep?.tries;
 
   const running = useCallback((kind: TimerKind) => entries?.find((e) => e.active && e.kind === kind) ?? null, [entries]);
-  // Toast buttons run long after the render that made them: they read the entries as they are now.
+  // Toast buttons run long after the render that made them: they read the entries (and the sleep plan's tries) as they are now.
   const entriesRef = useRef(entries);
+  const triesRef = useRef(tries);
   useEffect(() => {
     entriesRef.current = entries;
+    triesRef.current = tries;
   });
   /** The newest copy of an entry: this phone's state, or `e` when that's newer (a server answer not rendered yet). */
   const live = useCallback((e: Entry) => {
@@ -165,9 +172,12 @@ export function useTimerActions() {
   /** "4:05": toasts name times beside words that already say when. */
   const short = useCallback((t: string | number | Date) => formatTimeNear(t, t, tz), [tz]);
 
-  /** A timer toast: one at a time, 10 s by day and 20 s at night, closed early if someone else changes `entry`. */
+  /**
+   * A timer toast: one at a time, 10 s by day and 20 s at night, closed early if someone else changes `entry`.
+   * `aside`: the little extra under a finish (finishedExtra), never under a timer still running.
+   */
   const timerToast = useCallback(
-    (text: string, entry: Entry | null, opts: { actions?: ToastAction[]; undo?: () => void; undoLabel?: string; icon?: IconName } = {}) =>
+    (text: string, entry: Entry | null, opts: { actions?: ToastAction[]; undo?: () => void; undoLabel?: string; icon?: IconName; aside?: string } = {}) =>
       toast(text, {
         group: "timer",
         duration: isNight() ? 20_000 : 10_000,
@@ -182,6 +192,20 @@ export function useTimerActions() {
       }),
     [isNight, now, toast]
   );
+
+  /**
+   * The little extra for a toast that reports `saved` finished (useMaple's extra), or undefined: none for a timer still
+   * running; none while another timer runs on (its card's live clock stays clear of a taller toast, as under a start:
+   * Done on a feed beside a sleep at 320 px would reach it); and none with `asks` (a bassinet try on the sleep just
+   * stopped: its "How did it go?" comes next, and the answer's toast carries the cheer).
+   */
+  const finishedExtra = useCallback(
+    (saved: Entry, asks = false) =>
+      saved.active || asks || entriesRef.current?.some((x) => x.active && x.id !== saved.id) ? undefined : extra(saved),
+    [extra]
+  );
+  /** A bassinet try running on this sleep (its "How did it go?" follows the wake: useTryAfterWake). */
+  const tryOn = useCallback((e: Entry) => e.kind === "sleep" && !!triesRef.current?.some((t) => !t.ended_at && t.sleep_entry_id === e.id), []);
 
   /**
    * "{N} min" chips over the time each produces, for a toast that asks
@@ -342,9 +366,11 @@ export function useTimerActions() {
       }
       // A stale chip on a feed the other phone had already ended: the fix saved, but say the feed is over.
       if (wasActive && !after.active && after.ended_at && moved?.moment !== "feed_end") text += ` · the feed ended ${short(after.ended_at)}`;
-      timerToast(text, after, { undo: () => void restoreFrom(res), undoLabel: back });
+      // When a finished feed ended, fixed ("Ended earlier…"): a finish, so it gets the Done toast's little extra.
+      const aside = edit.op === "move" && moved?.moment === "feed_end" ? finishedExtra(after) : undefined;
+      timerToast(text, after, { undo: () => void restoreFrom(res), undoLabel: back, aside });
     },
-    [now, restoreFrom, short, timerToast]
+    [finishedExtra, now, restoreFrom, short, timerToast]
   );
 
   /**
@@ -487,10 +513,11 @@ export function useTimerActions() {
       const last = sideParts(res.entry, now()).at(-1);
       const ended = res.entry.ended_at ?? until.toISOString();
       const text = last?.end ? `${last.side === "B" ? "Back and forth" : SIDE_NAME[last.side]} ${short(last.start)} – ${short(last.end)} · ended ${short(ended)}` : `Ended ${short(ended)}`;
-      timerToast(text, res.entry, { undo: () => void restoreFrom(res, endedAgain) });
+      // The feed ends at the Done tap again, with the side added: a finish, with its little extra.
+      timerToast(text, res.entry, { undo: () => void restoreFrom(res, endedAgain), aside: finishedExtra(res.entry) });
       return res;
     },
-    [carriedToast, endedAgain, now, restoreFrom, short, timerCall, timerToast]
+    [carriedToast, endedAgain, finishedExtra, now, restoreFrom, short, timerCall, timerToast]
   );
 
   /**
@@ -534,26 +561,31 @@ export function useTimerActions() {
    * (default now); paused, at the pause. The toast offers the fix that fits:
    * "Ended earlier…" after a running feed, "She went back on…" after one
    * that ended at its pause, which opens Fix times on the finished feed.
+   * Each carries the little extra for what just finished (finishedExtra).
    */
   const stop = useCallback(
     async (e: Entry, at?: Date, opts: TimerCallOptions = {}) => {
       tick();
       // When Done was tapped here: "She went back on…" ends the side it adds then, so that tap isn't lost.
       const doneAt = now().toISOString();
+      // Asked as the tap lands, as the try's own question is (useTryAfterWake).
+      const asks = tryOn(e);
       const res = await timerCall({ action: "stop", id: e.id, at: at?.toISOString(), ...(at ? { expect_updated_at: e.updated_at } : {}) }, opts);
       if (!res || res.noop || res.entry.active) return res?.entry ?? null;
       const saved = res.entry;
       const ended = saved.ended_at ?? new Date().toISOString();
       const timed = saved.kind === "feed" && saved.data.method === "breast" && !!saved.data.segments?.length;
       const undo = () => void reopen(saved);
+      const aside = finishedExtra(saved, asks);
       if (!timed) {
         const d = doneText(saved, now(), w, undefined, entriesRef.current);
         timerToast(at ? `${d.text} · ended ${short(ended)}` : d.text, saved, {
           undo,
           actions: [{ label: "Edit", onClick: () => open({ kind: saved.kind, entry: saved }) }],
+          aside,
         });
       } else if (at) {
-        timerToast(`${doneText(saved, now(), w, undefined, entriesRef.current).text} · ended ${short(ended)}`, saved, { undo });
+        timerToast(`${doneText(saved, now(), w, undefined, entriesRef.current).text} · ended ${short(ended)}`, saved, { undo, aside });
       } else if (saved.kind === "feed" && saved.data.paused_at_stop === true) {
         // Ended at its pause (the server's word for it, even if this phone still showed her on).
         timerToast(doneText(saved, now(), w, `ended ${short(ended)}, ${pauseWords(saved, me)}`, entriesRef.current).text, saved, {
@@ -565,16 +597,18 @@ export function useTimerActions() {
               onClick: () => open({ kind: "feed", entry: saved, preset: fixPreset("current", "backOn", doneAt) }),
             },
           ],
+          aside,
         });
       } else {
         timerToast(doneText(saved, now(), w, undefined, entriesRef.current).text, saved, {
           undo,
           actions: [{ label: "Ended earlier…", onClick: () => open({ kind: "feed", entry: saved, preset: fixPreset("finish") }) }],
+          aside,
         });
       }
       return saved;
     },
-    [me, now, open, reopen, short, timerCall, timerToast, w]
+    [finishedExtra, me, now, open, reopen, short, timerCall, timerToast, tryOn, w]
   );
 
   /**
@@ -808,6 +842,7 @@ export function useTimerActions() {
         s = (await timerCall({ action: "adjust", id: s.id, at: at.toISOString() }))?.entry ?? s;
       }
       const sleep = s;
+      // The sleep timer it starts runs on under this toast: no little extra, as on any start.
       timerToast(`${doneText(stopped, now(), w, undefined, entriesRef.current).text} · sleep timer on`, stopped, {
         undo: async () => {
           // The feed only comes back once the sleep is gone, and the sleep only goes as it was started.

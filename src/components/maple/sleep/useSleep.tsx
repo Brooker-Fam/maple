@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { tick } from "@/components/atlas/haptics";
 import { ApiError } from "@/lib/maple/client-request";
 import { numberTries, planToday, sleepAge, sleepSignals, stageSuggestion, tryDayKey, tryDayNowLabel, tryWhenLabel, type PlanToday, type StageSuggestion } from "@/lib/maple/sleep/engine";
@@ -229,7 +229,7 @@ export function useSleepMaybe(): SleepApi | null {
 
 export function SleepProvider({ children, sheets }: { children: ReactNode; sheets?: (api: SleepApi) => ReactNode }) {
   const m = useMaple();
-  const { state, api, toast, now, readOnly } = m;
+  const { state, api, toast, extra, now, readOnly } = m;
   const v = useVoice();
   const helper = m.sleep;
   const data = state?.sleep ?? EMPTY;
@@ -240,6 +240,11 @@ export function SleepProvider({ children, sheets }: { children: ReactNode; sheet
   const [busy, setBusy] = useState(false);
   const ownEnds = useRef(new Set<number>());
   const endedHere = useCallback((id: number) => ownEnds.current.has(id), []);
+  // The log as it is when a write answers (a try's cheer waits while a timer runs on: finishTry).
+  const entriesRef = useRef(state?.entries);
+  useEffect(() => {
+    entriesRef.current = state?.entries;
+  });
 
   const running = data.tries.find((t) => !t.ended_at) ?? null;
   const shift = data.shifts.find((s) => !s.ended_at) ?? null;
@@ -430,13 +435,18 @@ export function SleepProvider({ children, sheets }: { children: ReactNode; sheet
           // After a crying wake, and after the retry: what the plan says to do now (soothe, retry once, then pause).
           const signals = sleepSignals(r.sleep?.tries ?? data.tries, now(), tz);
           const next = signals.has("retry_done") ? ` ${cryingLine(v, "retry_done")}.` : signals.has("after_crying") ? ` ${cryingLine(v, "after_crying")}.` : "";
-          toast(`${OUTCOME_LABEL[outcome]} after ${downWords(mins)}.${tail}${next}`, { tone: "ok", group: "timer", undo });
+          // A try finished, however it went: a quiet cheer under it (useMaple's extra; "try" lines are cheers only). Not while
+          // a timer runs on under the toast (her sleep, picked up still asleep, or another one), so that card's live clock
+          // stays clear of a taller toast, as with a finish beside another timer (useTimerActions).
+          const runsOn = !!(sleepAfter ?? w.sleep)?.active || !!entriesRef.current?.some((e) => e.active && e.id !== w.try.sleep_entry_id);
+          const aside = runsOn ? undefined : extra(["try"]);
+          toast(`${OUTCOME_LABEL[outcome]} after ${downWords(mins)}.${tail}${next}`, { tone: "ok", group: "timer", undo, ...(aside ? { aside } : {}) });
           return w.try;
         },
         { done: opts.done, conflict: opts.onConflict && tryConflict(t.id, opts.onConflict) }
       );
     },
-    [data.tries, now, toast, tz, v, write]
+    [data.tries, extra, now, toast, tz, v, write]
   );
 
   /** A try's edit: only the fields given, against `t`'s version; with `onConflict`, a 409 comes back there (the try as it is now). */
@@ -495,16 +505,18 @@ export function SleepProvider({ children, sheets }: { children: ReactNode; sheet
           if (!w) return null;
           if (w.status === "duplicate") return { duplicate: w.try };
           const mins = Math.round((opts.end.getTime() - opts.start.getTime()) / 60_000);
+          const aside = extra(["try"]);
           toast(`Try saved: ${OUTCOME_LABEL[opts.outcome].toLowerCase()} after ${downWords(mins)}, from ${formatTime(opts.start, tz)}`, {
             tone: "ok",
             ...(w.status === "created" ? { undo: () => void write({ action: "try.delete", id: w.try.id, expect_updated_at: w.try.updated_at }, () => toast("Undone", { tone: "info" })) } : {}),
+            ...(aside ? { aside } : {}),
           });
           return { saved: w.try };
         },
         { done: opts.done }
       );
     },
-    [toast, tz, write]
+    [extra, toast, tz, write]
   );
 
   const startShift = useCallback(

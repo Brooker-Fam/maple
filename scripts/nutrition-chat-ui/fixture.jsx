@@ -78,6 +78,8 @@ function App() {
     readOnly: false, online: true, units: "us", timerBusy: () => false,
     member: () => MEMBER, memberName: () => MEMBER.display_name, memberLabel: () => MEMBER.display_name,
     toast: (text) => calls.current.push({ kind: "toast", text }), toasts: [], dismissToast: () => {},
+    // useMaple's little extra under a saved drink's toast: none here (scripts/extras-ui checks them).
+    extra: () => undefined,
   };
   const thread = {
     ready: true, threadId: "synthetic-thread", earlier: [], messages: [], more: false, loadingEarlier: false,
