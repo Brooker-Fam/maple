@@ -320,14 +320,17 @@ export default function BabySettings({ section }: { section: "baby" | "doctor" |
                 value={d.gaWeeks}
                 onChange={(e) => setDEdits((x) => ({ ...x, gaWeeks: e.target.value.replace(/[^\d.]/g, "") }))}
               />
-              <InputRow
-                label="Feed every … hours (optional)"
-                note={`Only if ${w.his} pediatrician gave you a number. It replaces the built-in feeding reminders.`}
-                inputMode="decimal"
-                placeholder="e.g. 3"
-                value={d.feedHours}
-                onChange={(e) => setDEdits((x) => ({ ...x, feedHours: e.target.value.replace(/[^\d.]/g, "") }))}
-              />
+              {/* It only times the feed reminders, so it goes with them (On Today → Feed reminders). */}
+              {flag("feed_alerts") && (
+                <InputRow
+                  label="Feed every … hours (optional)"
+                  note={`Only if ${w.his} pediatrician gave you a number. It replaces the built-in feeding reminders.`}
+                  inputMode="decimal"
+                  placeholder="e.g. 3"
+                  value={d.feedHours}
+                  onChange={(e) => setDEdits((x) => ({ ...x, feedHours: e.target.value.replace(/[^\d.]/g, "") }))}
+                />
+              )}
             </>
           )}
         </div>
@@ -343,14 +346,31 @@ export default function BabySettings({ section }: { section: "baby" | "doctor" |
             disabled={savingSettings.has("show_alerts")}
             onChange={(v) => void setSetting("show_alerts", v)}
           />
+          {/* The counts, each on its own: a family that doesn't log every feed or every change turns that one off (insights.ts alertSwitches). */}
           {warnings && (
-            <Toggle
-              label="Vitamin D reminder"
-              hint="A gentle evening nudge if no vitamin D drops are logged that day."
-              checked={flag("vitamin_d_reminder")}
-              disabled={savingSettings.has("vitamin_d_reminder")}
-              onChange={(v) => void setSetting("vitamin_d_reminder", v)}
-            />
+            <>
+              <Toggle
+                label="Feed reminders"
+                hint="Time since the last feed, and how many feeds in 24 hours. Turn off if you don't log every feed."
+                checked={flag("feed_alerts")}
+                disabled={savingSettings.has("feed_alerts")}
+                onChange={(v) => void setSetting("feed_alerts", v)}
+              />
+              <Toggle
+                label="Diaper warnings"
+                hint={`When fewer wet or dirty diapers are logged than usual for ${w.his} age. Turn off if you don't log every change.`}
+                checked={flag("diaper_alerts")}
+                disabled={savingSettings.has("diaper_alerts")}
+                onChange={(v) => void setSetting("diaper_alerts", v)}
+              />
+              <Toggle
+                label="Vitamin D reminder"
+                hint="A gentle evening nudge if no vitamin D drops are logged that day."
+                checked={flag("vitamin_d_reminder")}
+                disabled={savingSettings.has("vitamin_d_reminder")}
+                onChange={(v) => void setSetting("vitamin_d_reminder", v)}
+              />
+            </>
           )}
           <Toggle
             label="Show diaper brigade"

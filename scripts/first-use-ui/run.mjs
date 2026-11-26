@@ -26,6 +26,7 @@ import { doctorReviewCases } from "./doctor-review-cases.mjs";
 import { accessibilityReviewCases } from "./accessibility-review-cases.mjs";
 import { feedingPlanCases } from "./feeding-plan-cases.mjs";
 import { bothUnitsCases } from "./both-units-cases.mjs";
+import { alertCases } from "./alert-cases.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../..");
@@ -129,6 +130,7 @@ const cases = [
   ...bothUnitsCases({ fixture, freshState, record, writes, assert, settle }),
   ...timeCases({ fixture, freshState, record, writes, assert }),
   ...handoffCases({ fixture, freshState, record, writes, assert }),
+  ...alertCases({ fixture, freshState, record, writes, assert, settle }),
   ["Every historical entry kind keeps an older family-local date", async () => {
     const kinds = [["Nursing", "feed"], ["Bottle", "feed"], ["Diaper", "diaper"], ["Sleep", "sleep"], ["Vitamin D", "med"], ["Tummy time", "tummy"], ["Bath", "bath"], ["Pump", "pump"], ["Temperature", "temp"], ["Skin check", "vitals"], ["Growth", "growth"], ["River's medicine", "med"], ["Other readings", "vitals"], ["Note", "note"], ["Moment", "moment"]];
     for (const [label, kind] of kinds) {

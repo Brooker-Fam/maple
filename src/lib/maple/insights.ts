@@ -177,8 +177,9 @@ export type Summary = {
     backToBirthWeight: boolean | null;
   } | null;
   /**
-   * Most urgent first. Already excludes alerts the family marked handled.
-   * Empty unless warnings are switched on (see alertsOn).
+   * Most urgent first. Already excludes alerts the family marked handled
+   * (We called, Not all logged) and the counts they switched off
+   * (alertSwitches). Empty unless warnings are switched on (see alertsOn).
    */
   alerts: Alert[];
   /**
@@ -418,6 +419,31 @@ export function memberName(id: string | null | undefined, members: Member[]): st
  */
 export function alertsOn(baby: Baby): boolean {
   return (baby.settings as { show_alerts?: unknown }).show_alerts === true;
+}
+
+/** An alert's kind without its episode suffix: "no-pee-8h:123" → "no-pee-8h". */
+export const alertKind = (id: string) => id.split(":")[0];
+
+/**
+ * The alerts that come from counting what was logged, so a family that doesn't
+ * log every feed or every change sees them without cause. Each group has its
+ * own switch under Warnings & reminders (alertSwitches), and a diaper one's
+ * card offers Not all logged, which hides that one without a call noted.
+ */
+export const COUNT_ALERTS = {
+  diapers: ["no-pee-24h", "no-pee-8h", "low-wet", "no-stool-24h", "low-stool"],
+  feeds: ["feed-gap", "few-feeds"],
+} as const;
+
+/**
+ * Feed reminders (settings.feed_alerts) and diaper warnings
+ * (settings.diaper_alerts): on unless switched off, and only ever shown while
+ * warnings are on (alertsOn). Everything else (readings, poop color, weight)
+ * stays under Warnings & reminders alone.
+ */
+export function alertSwitches(baby: Baby): { feeds: boolean; diapers: boolean } {
+  const s = baby.settings as { feed_alerts?: unknown; diaper_alerts?: unknown };
+  return { feeds: s.feed_alerts !== false, diapers: s.diaper_alerts !== false };
 }
 
 /**
@@ -778,8 +804,11 @@ export function summarize(opts: {
   }
 
   const acks = acknowledged(baby);
+  // The counts a family switched off (they don't log every feed, or every change) show nowhere: Today, Siri, Claude.
+  const on = alertSwitches(baby);
+  const off = new Set<string>([...(on.feeds ? [] : COUNT_ALERTS.feeds), ...(on.diapers ? [] : COUNT_ALERTS.diapers)]);
   const order = (t: AlertTier) => ALERT_TIERS.indexOf(t);
-  const visible = alerts.filter((a) => !acks[a.id]).sort((a, b) => order(a.tier) - order(b.tier));
+  const visible = alerts.filter((a) => !acks[a.id] && !off.has(alertKind(a.id))).sort((a, b) => order(a.tier) - order(b.tier));
 
   // The diaper brigade (last 7 days). Diapers only: feeds are credited to
   // whoever logged them, not whoever fed, so they'd make a misleading score.

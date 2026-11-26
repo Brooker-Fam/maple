@@ -578,7 +578,8 @@ export function cleanCareSettings(raw: unknown, opts: { self: boolean; name?: st
 
 // ── Maple's log settings (maple_babies.settings) ─────────────────────────
 
-export const LOG_SWITCH_KEYS = ["feeds_bottle", "track_pump", "track_nursing"] as const;
+// With them, the switches under Warnings & reminders for the alerts that count what was logged (insights.ts alertSwitches).
+export const LOG_SWITCH_KEYS = ["feeds_bottle", "track_pump", "track_nursing", "feed_alerts", "diaper_alerts"] as const;
 
 export function checkLogSwitches(patch: Record<string, unknown>): void {
   for (const k of LOG_SWITCH_KEYS) {

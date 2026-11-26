@@ -3,7 +3,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useState, type ReactNode } from "react";
 import { DISCLAIMER, MOM_TIER_LABEL, TIER_LABEL, VITAMIN_D_DEFAULT, emergencySigns, type AlertTier } from "@/lib/maple/guidelines";
-import type { Alert } from "@/lib/maple/insights";
+import { alertKind, COUNT_ALERTS, type Alert } from "@/lib/maple/insights";
 import { dayKey, DEFAULT_TZ } from "@/lib/maple/time";
 import { useVoice } from "./familyWords";
 import { Icon, type IconName } from "./icons";
@@ -16,8 +16,11 @@ import { useMaple } from "./useMaple";
  * Pediatric alerts on Today. Plain and calm, always saying who to call. The
  * urgent tiers (911 / call now / call today) stay until someone taps "We
  * called", which marks it handled for the whole family and notes the call in
- * the log. Softer tiers can be dismissed. There is never an "all clear" card:
- * no alerts renders nothing.
+ * the log. A diaper warning only counts what was logged, so it also offers
+ * "Not all logged": handled for the whole family, nothing noted, and a way to
+ * turn diaper warnings off for a family that doesn't log every change. Softer
+ * tiers can be dismissed. There is never an "all clear" card: no alerts
+ * renders nothing.
  */
 
 const URGENT: AlertTier[] = ["emergency", "now", "today"];
@@ -130,8 +133,8 @@ function readNudges(): Record<string, number> {
   }
 }
 
-/** The alert's kind without any episode suffix: "no-pee-8h:123" → "no-pee-8h". */
-const alertKind = (id: string) => id.split(":")[0];
+/** A diaper warning: counted from the diapers logged, so "Not all logged" answers it (COUNT_ALERTS). */
+const isDiaperCount = (a: Alert) => (COUNT_ALERTS.diapers as readonly string[]).includes(alertKind(a.id));
 
 const telHref = (phone: string) => `tel:${phone.replace(/[^\d+]/g, "")}`;
 
@@ -196,6 +199,14 @@ export default function AlertStack({ tiers, onNavigate, compact = [] }: { tiers:
                 key={a.id}
                 alert={a}
                 onHandled={() => setHandled((h) => new Set(h).add(a.id))}
+                // The save failed: back on the page, with the error's toast.
+                onRestore={() =>
+                  setHandled((h) => {
+                    const next = new Set(h);
+                    next.delete(a.id);
+                    return next;
+                  })
+                }
                 onDismissNudge={() => dismissNudge(a)}
                 onNavigate={onNavigate}
               />
@@ -253,12 +264,15 @@ function FoldedAlerts({ alerts, onOpen }: { alerts: Alert[]; onOpen: () => void 
 function AlertCard({
   alert,
   onHandled,
+  onRestore,
   onDismissNudge,
   onNavigate,
   audience = "baby",
 }: {
   alert: Alert;
   onHandled: () => void;
+  /** Its handled mark didn't save: show it again. */
+  onRestore: () => void;
   onDismissNudge: () => void;
   onNavigate: (t: TabId) => void;
   /**
@@ -281,17 +295,46 @@ function AlertCard({
   const emergency = alert.tier === "emergency";
   const entry = !mom && alert.entryId ? state?.entries.find((e) => e.id === alert.entryId) : undefined;
 
-  const ack = async (note: boolean) => {
+  /**
+   * Handled for the whole family (acks), this episode only: "called" (We called) notes the call in the log; "unlogged"
+   * (Not all logged) notes nothing, since nobody called, and offers to turn diaper warnings off; "seen" is a mention's
+   * Got it.
+   */
+  const ack = async (how: "called" | "unlogged" | "seen") => {
     onHandled();
+    let saved = false;
     try {
       await api("baby", { method: "PATCH", body: JSON.stringify({ settings: { acks: { [alert.id]: now().toISOString() } } }) });
-      if (note) {
+      saved = true;
+      if (how === "called") {
         await log(
           { kind: "note", data: { tag: "other" }, note: `${emergency ? "Called 911" : "Called the pediatrician"} about: ${alert.title}` },
           { silent: true }
         );
         toast("Marked as handled and noted in the log");
+      } else if (how === "unlogged") {
+        toast("Hidden for everyone. Not logging every diaper?", {
+          actions: [{ label: "Turn off diaper warnings", onClick: () => void diaperWarnings(false) }],
+        });
       }
+    } catch (e) {
+      // Not saved: the card comes back with the reason. (Saved, with only its note failing, it stays handled.)
+      if (!saved) onRestore();
+      toast(e instanceof Error ? e.message : "Couldn't save that", { tone: "error" });
+    } finally {
+      void refresh();
+    }
+  };
+
+  /**
+   * Diaper warnings for the whole family (settings.diaper_alerts): off from Not all logged's toast, and back to the
+   * default (on) from that toast's Undo. Settings → On Today has the same switch.
+   */
+  const diaperWarnings = async (on: boolean) => {
+    try {
+      await api("baby", { method: "PATCH", body: JSON.stringify({ settings: { diaper_alerts: on ? null : false } }) });
+      if (on) toast("Diaper warnings are back on");
+      else toast("Diaper warnings are off for everyone. Settings → On Today turns them back on.", { undo: () => void diaperWarnings(true) });
     } catch (e) {
       toast(e instanceof Error ? e.message : "Couldn't save that", { tone: "error" });
     } finally {
@@ -317,9 +360,17 @@ function AlertCard({
   }
   if (urgent && !readOnly) {
     rest.push(
-      <button key="called" type="button" onClick={() => void ack(true)} className={cx(BTN, st.soft)}>
+      <button key="called" type="button" onClick={() => void ack("called")} className={cx(BTN, st.soft)}>
         <Icon name="check" size={18} strokeWidth={2.25} />
         We called
+      </button>
+    );
+  }
+  // A diaper count is only what was logged: a change nobody logged isn't one she missed.
+  if (isDiaperCount(alert) && !readOnly) {
+    rest.push(
+      <button key="unlogged" type="button" onClick={() => void ack("unlogged")} className={cx(BTN, st.soft)}>
+        Not all logged
       </button>
     );
   }
@@ -337,7 +388,7 @@ function AlertCard({
   }
   if (alert.tier === "mention" && !readOnly) {
     rest.push(
-      <button key="ok" type="button" onClick={() => void ack(false)} className={cx(BTN, st.soft)}>
+      <button key="ok" type="button" onClick={() => void ack("seen")} className={cx(BTN, st.soft)}>
         Got it
       </button>
     );

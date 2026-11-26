@@ -78,7 +78,7 @@ import { feedingPlanStatus, ledBottleLine, namedAt, owedPartLine, planBottleFor,
 import { AT_BREAST_WORDS, feedingPlanOf, type PlanFeed } from "./feeding-plan";
 import { registerSleepTools, sleepStatus, tryRef, undoableGoalWrite, undoableSleep, undoAsk } from "./sleep/mcp";
 import { deleteShift, deleteTry, endArmsSleepForFeed, getTry as getSleepTry } from "./sleep/store";
-import { adminActsAs, alertsOn, byBottle, dailyStats, isVitaminD, memberName, soloBottleMl, summarize, type Summary } from "./insights";
+import { adminActsAs, alertKind, alertsOn, byBottle, COUNT_ALERTS, dailyStats, isVitaminD, memberName, soloBottleMl, summarize, type Summary } from "./insights";
 import { pumpSummaryLabel, pumpTalliesJson } from "./pump-summary";
 import { milestoneLabel, milestonesFor, milestoneWordsOf, NEUTRAL_MILESTONE_WORDS, type MilestoneWords } from "./milestones";
 import {
@@ -1048,8 +1048,8 @@ async function entryAlerts(e: Entry, ctx: Ctx): Promise<{ alerts: AlertOut[]; em
 }
 
 /** Summary-level alerts worth repeating after logging this kind. */
-const KIND_ALERT_IDS: Partial<Record<EntryKind, string[]>> = {
-  diaper: ["no-pee-24h", "no-pee-8h", "low-wet", "no-stool-24h", "low-stool"],
+const KIND_ALERT_IDS: Partial<Record<EntryKind, readonly string[]>> = {
+  diaper: COUNT_ALERTS.diapers,
   growth: ["weight-10", "weight-7", "still-losing", "regain-14"],
 };
 
@@ -1245,7 +1245,7 @@ function snapshotAlerts(s: Summary, kinds: Set<EntryKind>): AlertOut[] {
   const ids = new Set<string>();
   for (const k of kinds) for (const id of KIND_ALERT_IDS[k] ?? []) ids.add(id);
   // Episode alerts carry a suffix ("low-wet:4", "weight-10:123"); match the base name.
-  return s.alerts.filter((a) => ids.has(a.id.split(":")[0])).map(alertOut);
+  return s.alerts.filter((a) => ids.has(alertKind(a.id))).map(alertOut);
 }
 
 // ── saving with duplicate checks ────────────────────────────────────────
